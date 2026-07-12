@@ -1,0 +1,12 @@
+# Python dev tools for eki-bin
+# Install via: make setup
+#
+# These are host-side tools only — nothing runs on the boards themselves.
+# mpremote: MicroPython file management and REPL over USB serial (all boards)
+# esptool:  ESP32-family firmware flashing (e.g. XIAO ESP32-C3; not needed for
+#           the Pico, which uses picotool instead — see `make flash-esp32-c3`)
+
+mpremote==1.28.0
+pyyaml>=6.0
+pytest>=7  # host-side logic tests (make test); device fakes live in tests/conftest.py
+esptool>=5.3

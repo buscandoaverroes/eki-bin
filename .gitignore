@@ -1,0 +1,27 @@
+# ── Secrets / credentials — never commit ──────────────────────────
+config.py
+micropython/config.py
+
+# ── Schedules — the real timetable reveals where you live ─────────
+# Keep everything local except the committed example template.
+schedules/*
+!schedules/*.example.yaml
+
+# ── Firmware blobs (local .uf2 only) ──────────────────────────────
+firmware/
+
+# ── Python env / caches ───────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── Env / editors (defensive — nothing here today, keeps it that way) ──
+.env
+.env.*
+.vscode/
+.idea/
+*.swp
+
+# ── macOS ─────────────────────────────────────────────────────────
+.DS_Store

@@ -1,0 +1,36 @@
+# schedules/mystation.example.yaml
+# Committed sample. Copy to schedules/mystation.yaml and replace with your real
+# timetable, then run:  make schedule
+#
+# Times in HH:MM (24-hour). For post-midnight trains, use extended hours:
+#   "24:30" = 00:30 AM   "25:10" = 01:10 AM   (matches Japanese timetable convention)
+#
+# Direction keys (a / b below) are free-form labels — name them however makes
+# sense for your station, e.g. a = Meguro/Shibuya, b = Urawa-Misono.
+
+station: mystation
+
+weekday:
+  a:
+    - "05:37"
+    - "06:01"
+    - "06:30"
+    - "07:00"
+    - "24:03"   # 00:03 — last train, extended-hours notation
+  b:
+    - "05:02"
+    - "05:48"
+    - "06:25"
+    - "07:02"
+    - "24:02"
+
+weekend:
+  a:
+    - "05:37"
+    - "06:20"
+    - "07:08"
+  b:
+    - "05:02"
+    - "05:51"
+    - "06:46"
+    - "07:30"
