@@ -27,6 +27,8 @@ See [docs/concept.md](docs/concept.md) for the full design rationale.
   `config.py` knobs, no firmware edits to tune
 - Host **test suite** (`make test`) guards the logic; runs before every upload
 
+See [docs/reflections/v1-reflections.md](docs/reflections/v1-reflections.md) for a brief update on how the project is going so far.
+
 **Next:** v1.1 — move everything inside the bottle, Qi-powered (see
 [docs/roadmap.md](docs/roadmap.md)). **V2** rewrites the firmware in Rust (Embassy)
 with a DS3231 RTC and NFC station cards. Running log: [dev-status.md](dev-status.md).
