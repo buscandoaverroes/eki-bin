@@ -101,6 +101,17 @@ is hidden by the medium.
   live UX pain point ("I won't make this one, what's the one after?"), not just
   the wasted-pixels observation below it originally was. See
   `docs/contracts/display-contract.md` § Multiple trains.
+- **Power-budget-aware brightness cap.** Field finding (§6-adjacent, logged in
+  `docs/hardware.md` 2026-07-13): at 120 LEDs, `BRIGHTNESS=1.0` froze the Qi path
+  and tripped MacBook USB overcurrent; `0.15` is the safe ceiling. Total draw
+  scales with `NUM_LEDS`, but `BRIGHTNESS` is a flat per-device knob today — so a
+  bigger strip is a silent footgun. Idea: derive an *effective* brightness ceiling
+  from a configured current budget and `NUM_LEDS` (roughly `budget_mA /
+  (NUM_LEDS * mA_per_led_at_full)`), clamping `BRIGHTNESS` down automatically. Also
+  note the *practical* draw is far below worst-case — ambient contracts rarely
+  light all N at full white — so a budget based on realistic frames, not all-white,
+  is the useful version. Empirical constants (mA/LED, safe budget per power source)
+  needed before implementing; don't guess them.
 
 ---
 

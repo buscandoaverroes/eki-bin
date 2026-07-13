@@ -36,7 +36,7 @@ connects to what, per board), see `pinouts/`._
 Moved to `pinouts/` — one file per board, kept in sync with the actual wiring
 and `config.py` values. See [pinouts/pico2w.md](../pinouts/pico2w.md) (V1,
 verified) and [pinouts/xiao_esp32c3.md](../pinouts/xiao_esp32c3.md) (v1.2,
-proposed).
+verified).
 
 ---
 
@@ -53,3 +53,64 @@ V2 plan: this PCB or similar becomes the permanent LED ring mount inside the jar
 
 Reserved V2 GPIO assignments (I2C sensors, NFC, e-ink, LDR): see the table in
 [pinouts/pico2w.md](../pinouts/pico2w.md).
+
+---
+
+## Bring-up log — Qi power + WS2812B-4020 tape (2026-07-13)
+
+New parts this session:
+- **Seeed XIAO ESP32-C3** — the v1.1/v1.2 MCU (USB-C). Pinout: `pinouts/xiao_esp32c3.md`.
+- **WS2812B-4020 tape** (Akiba-LED, 120 LED/m, non-waterproof, 8mm, side-fire) —
+  candidate replacement for the 8-LED stick.
+- **Qi wireless-charging receiver (WCR)** — bare board, unbranded, 5V/1A in →
+  5V/800mA out (USB-C). The v1.1 wireless power path.
+
+Two isolated tests, then combined — all passed.
+
+**1. WCR power delivery (no LEDs yet).** Bare receiver on a Belkin Qi pad,
+output → XIAO only. Immediate power-on; the pad's "device detected" indicator lit
+just like a phone — i.e. **no foreign-object-detection (FOD) rejection** of the
+bare board (a real pre-test risk, now retired). Unaffected with a glass kitchen
+plate between pad and receiver (simulating the jar wall).
+
+**2. LED tape continuity + firmware** (USB-C direct to MacBook). Uncut tape off
+the factory pigtail; `led_test.py` with `NUM_LEDS` 8 → 120. Full 120-LED colour
+cycle + chase ran clean on first try. `DATA_PIN = 2` (XIAO D0/GPIO2) correct as
+documented — only `NUM_LEDS` changed.
+- *Connector finding:* the factory 3-pin input pigtail exposes 5V/GND usefully,
+  but the DIN wire's housing has recessed "innie" contacts an alligator clip
+  can't grip. **Fix:** press a male Dupont jumper pin into the hole until it
+  seats against the internal contact (a graspable "outie"). Avoids the worse
+  risk of clip teeth splaying across two adjacent pins — worst case 5V→DIN while
+  powered, which the chip's reverse-connection protection does *not* cover (that
+  only handles a fully reversed connector).
+- **Do not cut the tape** until a soldering iron is in hand — a fresh mid-tape
+  cut exposes bare 4×2mm SMD pads (no housing), too small/fragile for repeated
+  clip attachment. Keep testing off the factory pigtail (jumper-pin trick for
+  DIN) until ready to solder.
+
+**3. Combined: WCR → XIAO → full 120-LED tape.** Same wiring, power swapped from
+MacBook USB to the WCR. Full pattern ran clean both on-pad-direct and
+through-glass. No visible brightness sag, flicker, or brownout-reset at 120 LEDs
+on any of the three sources (MacBook USB, WCR-direct, WCR-through-glass).
+
+**Full-brightness stress test (2026-07-13 follow-up).** Ran `BRIGHTNESS = 1.0`,
+full-white-ish 120-LED frame, across the three sources:
+- **MacBook USB:** ran, but "like looking at the sun," then macOS threw *"USB
+  accessory disabled — unplug the accessory using too much power to re-enable
+  USB devices."* i.e. it tripped the host port's overcurrent cutoff. USB barely
+  coped.
+- **Qi (WCR):** insufficient — a few LEDs lit, then froze/stopped (rail collapse
+  under the inrush). Confirms the 800 mA ceiling can't source a bright 120-LED
+  frame, as the ~4.8 A worst-case math predicted.
+- **Takeaway:** `BRIGHTNESS = 0.15` is already visually "full" for this tape
+  (initially mistaken for max) and is the safe, stable ceiling on **both** USB
+  and Qi. The real question was never "can it do full white" (it can't) but
+  **"what's the stable Qi ceiling"** — and it's ≈0.15 or lower. For 120 LEDs,
+  even lower is worth trying. A brightness cap that scales down with LED count
+  would turn this from a footgun into a guardrail (parked — `docs/insights.md` §4).
+
+> **Milestone:** everything (XIAO + 120-LED tape + Qi receiver) then placed into a
+> wide-mouth glass pitcher and run off the pad — the full "MCU + lights inside,
+> powered wirelessly through glass, no visible wire" concept, self-contained, for
+> the first time. The core v1.1 hardware thesis, proven.
