@@ -114,3 +114,50 @@ full-white-ish 120-LED frame, across the three sources:
 > wide-mouth glass pitcher and run off the pad — the full "MCU + lights inside,
 > powered wirelessly through glass, no visible wire" concept, self-contained, for
 > the first time. The core v1.1 hardware thesis, proven.
+
+---
+
+## NFC — ST25DV dynamic tag (v1.x "givable" phase)
+
+**Purpose:** app-free provisioning — tap the jar with an iPhone (via iOS
+Shortcuts' built-in NFC actions, *no* third-party app) to load a station
+schedule, edit settings, and sync time. Rationale (no-app givability) in
+`docs/roadmap.md`.
+
+**Part:** SparkFun Qwiic Dynamic NFC/RFID Tag — **ST25DV** chip. A *dynamic*
+dual-interface tag: I²C to the MCU **and** RF to the phone, sharing one EEPROM —
+so the phone writes settings over NFC and the firmware reads them over I²C (and
+vice-versa). ISO-15693 / **NFC-Forum Type-5**. ⚠ *Not* Type-2 like the NTAG213
+station-card idea — most consumer NFC tooling (and Shortcuts examples) target
+Type-2, so Type-5 round-tripping via Shortcuts must be **bench-confirmed, not
+assumed** (this is the first thing to validate).
+
+**Reference links:**
+- Board (Switch Science): <https://ssci.to/8881>
+- Arduino library — port register-level I²C from this: <https://github.com/sparkfun/SparkFun_ST25DV64KC_Arduino_Library>
+- API reference (ESP32-tested): <https://docs.sparkfun.com/SparkFun_ST25DV64KC_Arduino_Library/api_SFE_ST25DV64KC/>
+- Hookup guide: <https://learn.sparkfun.com/tutorials/qwiic-dynamic-nfcrfid-tag-hookup-guide>
+- Datasheet **DS13519** — covers the whole ST25DV04KC/16KC/64KC family despite the `04KC` filename: <https://cdn.sparkfun.com/assets/f/5/4/e/d/st25dv04kc-2450072.pdf>
+- ST "NFC Tap" app (iOS) — for bare-tag bench validation: <https://apps.apple.com/us/app/nfc-tap/id1278913597>
+
+**MicroPython driver status:** none off-the-shelf. Port register-level I²C access
+from the SparkFun Arduino library + DS13519. Minimum viable scope: read/write the
+*user EEPROM area* over I²C at factory defaults (unprotected, single memory area)
+— skip password protection and configurable memory areas for a personal device.
+Out of scope this phase: GPO-interrupt instant-apply, ST25DV Fast Transfer Mode
+mailbox.
+
+**Wiring (I²C):** the XIAO ESP32-C3 has **no** Qwiic connector, so hand-wire the
+Qwiic board's 4 lines (SDA / SCL / 3V3 / GND) to the XIAO — e.g. a Qwiic-to-male
+cable into the breadboard. XIAO I²C pins: **D4 = SDA (GPIO6)**, **D5 = SCL
+(GPIO7)** — see `pinouts/xiao_esp32c3.md`. (Same bus that will carry a DS3231 RTC
+/ sensors in V2.)
+
+**Physical / RF mounting:** put the tag **near the cork/exterior, not behind
+anything metal.** A solid conductive lid substantially attenuates the 13.56 MHz
+field (eddy currents); glass and cork are both RF-transparent, so a cork-mounted
+tag reads fine — another reason cork is the chosen first closure.
+
+> The firmware **settings hot-reload** design (payload schema, dirty-flag +
+> checksum, per-tick I²C polling) and the **iOS Shortcuts** flow are firmware/UX,
+> not hardware — those live with the NFC exploration, not in this doc.
