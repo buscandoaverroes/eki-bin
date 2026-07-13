@@ -102,6 +102,18 @@ run-file: _check-mpremote
 	@test -f "$(FILE)" || (echo "✗ not found: $(FILE)" && exit 1)
 	$(MPREMOTE) run "$(FILE)"
 
+# Copy any script to the device AS main.py so it auto-runs on the next boot /
+# power-up — needed for standalone (USB-less) tests like a Qi-powered brightness
+# run, where `run-file` can't help because there's no live mpremote session.
+#   make upload-file FILE=micropython/led_test.py
+# Overwrites the device's main.py; re-run `make upload` to restore real firmware.
+.PHONY: upload-file
+upload-file: _check-mpremote
+	@test -n "$(FILE)" || (echo "✗ usage: make upload-file FILE=<path/to/script.py>" && exit 1)
+	@test -f "$(FILE)" || (echo "✗ not found: $(FILE)" && exit 1)
+	$(MPREMOTE) cp "$(FILE)" :main.py
+	@echo "✓ Copied $(FILE) → :main.py — auto-runs on next boot / power-up (e.g. on the Qi pad)"
+
 # Hardware bring-up: cycle colours + chase across the LED strip.
 .PHONY: led-test
 led-test: _check-mpremote
