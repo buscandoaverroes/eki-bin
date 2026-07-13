@@ -236,3 +236,27 @@ primitives (so whatever looks good there renders with the exact math a real
 contract would use) and lets you paint arbitrary LED ranges with independent
 colour/animation for quick side-by-side comparison, without WiFi/schedule/the
 full loop. General-purpose now, not just for this one decision.
+
+---
+
+## 7. iOS's generic NDEF API breaks on Type-5 tags (NFC bench, 2026-07)
+
+The whole "give it to a friend, no app" plan hinged on iOS Shortcuts writing the
+ST25DV tag. It doesn't work — and the *reason* is a reusable trap worth keeping:
+
+- **The tag is fine.** Raw ISO-15693 block read/write (CC file, NDEF TLV, a full
+  hand-encoded NDEF Text record) all verified byte-perfect over RF. Not a hardware
+  or encoding problem.
+- **The generic high-level API is the problem.** Apple's `NFCNDEFReaderSession` —
+  which backs iOS Shortcuts, ST's "NFC Tap" NDEF tab, and third-party rewriter
+  apps — times out / fails to detect NDEF specifically on **ISO-15693 / NFC-Forum
+  Type-5** tags. Documented multi-year iOS pattern. The low-level
+  `NFCTagReaderSession` + `NFCISO15693Tag` path works every time.
+- **Lesson:** "does NFC work?" is the wrong question — *which API layer* is
+  everything. Most consumer NFC tooling targets Type-2 (NTAG-style) tags; Type-5
+  is a different world, and the convenient high-level tools silently don't cover
+  it. Also: Shortcuts has **no NDEF content read/write action at all** (only a
+  UID-keyed trigger), so it was never a real writer regardless.
+- **Consequence:** a minimal first-party app became unavoidable — not a failure of
+  the no-app principle, just the reality of this tag class on iOS. Decision +
+  tag data contract: `docs/nfc-provisioning.md`.

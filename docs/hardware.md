@@ -119,18 +119,20 @@ full-white-ish 120-LED frame, across the three sources:
 
 ## NFC — ST25DV dynamic tag (v1.x "givable" phase)
 
-**Purpose:** app-free provisioning — tap the jar with an iPhone (via iOS
-Shortcuts' built-in NFC actions, *no* third-party app) to load a station
-schedule, edit settings, and sync time. Rationale (no-app givability) in
-`docs/roadmap.md`.
+**Purpose:** provisioning — tap the jar with an iPhone to load a station
+schedule, edit settings, and sync time; firmware reads it over I²C. **Update
+(2026-07):** the original "iOS Shortcuts, no custom app" plan is **dead** — bench
+testing showed iOS's generic NDEF API breaks on this ISO-15693/Type-5 tag. The
+plan is now a minimal first-party iOS app on the low-level ISO-15693 API. Full
+findings, decision, and the tag data contract: **`docs/nfc-provisioning.md`**.
 
 **Part:** SparkFun Qwiic Dynamic NFC/RFID Tag — **ST25DV** chip. A *dynamic*
 dual-interface tag: I²C to the MCU **and** RF to the phone, sharing one EEPROM —
 so the phone writes settings over NFC and the firmware reads them over I²C (and
 vice-versa). ISO-15693 / **NFC-Forum Type-5**. ⚠ *Not* Type-2 like the NTAG213
-station-card idea — most consumer NFC tooling (and Shortcuts examples) target
-Type-2, so Type-5 round-tripping via Shortcuts must be **bench-confirmed, not
-assumed** (this is the first thing to validate).
+station-card idea. This Type-5-ness is exactly what broke the generic-NDEF path
+(see `docs/nfc-provisioning.md` §2) — raw ISO-15693 block access works fine, the
+high-level NDEF API doesn't.
 
 **Reference links:**
 - Board (Switch Science): <https://ssci.to/8881>
@@ -158,6 +160,6 @@ anything metal.** A solid conductive lid substantially attenuates the 13.56 MHz
 field (eddy currents); glass and cork are both RF-transparent, so a cork-mounted
 tag reads fine — another reason cork is the chosen first closure.
 
-> The firmware **settings hot-reload** design (payload schema, dirty-flag +
-> checksum, per-tick I²C polling) and the **iOS Shortcuts** flow are firmware/UX,
-> not hardware — those live with the NFC exploration, not in this doc.
+> The firmware **settings hot-reload** design and the **iOS app** (the phone-side
+> writer) are firmware/UX, not hardware — they live in `docs/nfc-provisioning.md`,
+> along with the tag data contract both sides share.
