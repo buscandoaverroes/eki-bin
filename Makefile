@@ -93,7 +93,16 @@ upload: test _check-mpremote
 run: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/main.py
 
-# Hardware bring-up: cycle colours + chase across the 8-LED stick.
+# Run ANY script once via mpremote without a full flash — for ad-hoc bring-up
+# (e.g. a NUM_LEDS-tweaked led_test.py) so you don't have to drop into Thonny.
+#   make run-file FILE=micropython/led_test.py
+.PHONY: run-file
+run-file: _check-mpremote
+	@test -n "$(FILE)" || (echo "✗ usage: make run-file FILE=<path/to/script.py>" && exit 1)
+	@test -f "$(FILE)" || (echo "✗ not found: $(FILE)" && exit 1)
+	$(MPREMOTE) run "$(FILE)"
+
+# Hardware bring-up: cycle colours + chase across the LED strip.
 .PHONY: led-test
 led-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/led_test.py

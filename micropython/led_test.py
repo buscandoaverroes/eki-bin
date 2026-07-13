@@ -1,17 +1,18 @@
-# micropython/led_test.py — eki-bin V1 hardware bring-up
-# Hello-world for the AE-WS2812B-STICK8 (8 × WS2812B) on Raspberry Pi Pico 2W.
+# micropython/led_test.py — eki-bin hardware bring-up
+# Hello-world for a WS2812B strip. Standalone and NOT config-driven: edit
+# DATA_PIN / NUM_LEDS below by hand to match the board + strip you're testing.
+# (One-off bring-up script, deliberately separate from main.py's config pipeline.)
 #
-# Wiring (see docs/hardware.md):
-#   Pico VBUS (pin 40) → stick VCC (5V)
-#   Pico GND  (pin 38) → stick GND
-#   Pico GP6  (pin  9) → stick DIN
+# Wiring (see docs/hardware.md and pinouts/<board>.md):
+#   Pico 2W:  VBUS(pin40)→VCC(5V)   GND(pin38)→GND   GP6(pin9)→DIN   → DATA_PIN=6
+#   XIAO C3:  5V→VCC(5V)            GND→GND           D0/GPIO2→DIN    → DATA_PIN=2
 #
-# Run it without flashing:   make led-test     (mpremote run micropython/led_test.py)
+# Run without flashing:   make led-test                 (runs this file)
+#          any file:      make run-file FILE=<path>      (e.g. a NUM_LEDS=120 copy)
 #
-# [→ Rust/V2] In Embassy this becomes a PIO program: the RP2350's programmable
-#             I/O blocks generate the tight 800kHz WS2812B waveform in hardware,
-#             so the CPU isn't busy bit-banging. `neopixel` here is the
-#             MicroPython frozen-module stand-in for that.
+# [→ Rust/V2] In Embassy this becomes a PIO/RMT program generating the tight
+#             800kHz WS2812B waveform in hardware, so the CPU isn't bit-banging.
+#             `neopixel` here is the MicroPython frozen-module stand-in for that.
 
 import time
 
@@ -19,8 +20,8 @@ from machine import Pin
 from neopixel import NeoPixel
 
 # ── Configuration ────────────────────────────────────────────────
-DATA_PIN = 2  # GP6 — shared data line for V1 and V2 (see hardware.md)
-NUM_LEDS = 8  # AE-WS2812B-STICK8 has 8 LEDs
+DATA_PIN = 2  # WS2812B data line — SET PER BOARD (Pico 2W=6, XIAO C3=2); see header
+NUM_LEDS = 8  # SET PER STRIP (AE-WS2812B-STICK8=8, WS2812B-4020 tape=120, …)
 BRIGHTNESS = 0.15  # 0.0–1.0. Keep it low: 8 LEDs at full white ≈ 480mA off VBUS,
 # and it's blinding from a hand's distance. 0.15 is ample for
 # a bring-up — bump it later once you trust the wiring.
