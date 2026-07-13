@@ -198,7 +198,14 @@ where a (possibly annular) Qi coil would sit anyway.
 Giving the jar to a friend: they'd need to (a) load a station schedule, (b) sync
 time once — both **without an app.**
 
-**Resolution direction (worth prototyping next)**:
+> **⚠ Superseded (2026-07).** The "no custom app, iOS Shortcuts" resolution below
+> was **ruled out on the bench**: iOS's generic NDEF API breaks on the ISO-15693 /
+> Type-5 ST25DV tag, and Shortcuts has no NDEF content read/write action anyway.
+> Current plan is a **minimal first-party iOS app** on the low-level ISO-15693 API.
+> See **`docs/nfc-provisioning.md`** for findings + decision. The reasoning below is
+> kept as the record of what was tried and why it didn't pan out.
+
+**Resolution direction (tried — did not pan out, see banner above)**:
 - **iOS Shortcuts has a built-in "Set NFC Tag" action** — writes plain text/URL
   NDEF natively, no third-party app. Plausibly covers:
   1. **Station data transfer** — high confidence, standard use.
@@ -214,9 +221,11 @@ time once — both **without an app.**
   preloaded gift card); recipient never writes a tag. Given <1 min/yr drift, time
   correction may not need solving within a gift's lifespan.
 
-**Next concrete step**: get an LPCD-capable reader (CLRC663 plus or ST25R391x),
-confirm low idle current in practice, and test whether an iPhone Shortcut can
-*write into it* (tag-emulation) — the crux of the no-app plan.
+**Next concrete step** (~~no-app Shortcuts crux~~ — resolved, see banner): the
+provisioning path is settled → build the minimal iOS app (`docs/nfc-provisioning.md`).
+The LPCD-reader / battery-standalone research (CLRC663 plus, ST25R391x) remains a
+*separate, later* variant — it was about a passively-powered reader for the
+fully-encapsulated build, distinct from the ST25DV dynamic tag used now.
 
 ---
 
@@ -266,10 +275,11 @@ confirm low idle current in practice, and test whether an iPhone Shortcut can
 ## Open Questions / Next Experiments (priority order)
 
 1. ~~**v1.2 board-portability checkpoint**~~ — ✅ **passed 2026-07-05.**
-2. **v1.1 build**: swap breadboard USB power for the Qi module, everything
-   inside the bottle. *(Now next — waiting on the Qi coil to arrive.)*
-3. **NFC chip test**: get an LPCD-capable reader; confirm low idle current; test
-   whether an iPhone Shortcut can *write into it* (tag-emulation). Crux of the
-   no-app givability plan.
+2. ~~**v1.1 Qi power path**~~ — ✅ **confirmed 2026-07-13**: XIAO + 120-LED tape +
+   Qi receiver ran self-contained in a glass pitcher off the pad. One caveat
+   (full-brightness power headroom — 0.15 ceiling) logged in `docs/hardware.md`.
+3. **NFC provisioning**: bench pass done — no-app/Shortcuts route ruled out,
+   decision is a minimal first-party iOS app on the low-level ISO-15693 API.
+   Next: build the app + the ST25DV I²C driver. See `docs/nfc-provisioning.md`.
 4. Prototype the stepper-hand clock branch — independent, can run in parallel.
 5. Custom PCB for the cork-mounted sensor cluster — later, once Qi/NFC validated.

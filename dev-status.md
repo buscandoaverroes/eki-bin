@@ -249,6 +249,9 @@ differentiation axis:
 | Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
 | WCR power at full brightness | ✅ characterized (2026-07-13) | `BRIGHTNESS=1.0` full-white froze the Qi path (rail collapse) and tripped MacBook USB overcurrent. `0.15` is the stable ceiling on both — already visually "full" for the 120-LED tape. Real ceiling is ≈0.15 or lower; see `docs/hardware.md` |
 | LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
+| NFC provisioning approach | ✅ decided (2026-07) | No-app/Shortcuts route ruled out on the bench (iOS generic-NDEF API breaks on ISO-15693/Type-5). Building a minimal first-party iOS app on low-level ISO-15693. See `docs/nfc-provisioning.md` |
+| iOS NFC app: separate repo? | 🔲 open | Leaning yes (separate Swift/Xcode toolchain). Tag data contract stays in this repo as the shared interface. `docs/nfc-provisioning.md` §7 |
+| Tag payload: NDEF vs private format | 🔲 open (leaning private) | Private length+CRC+JSON, no NFC-NDEF compliance needed (no 3rd-party reader in the picture). `docs/nfc-provisioning.md` §4, §7 |
 | MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
 | E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |
 | Station card storage | 🔲 open | Dish / card holder / pinned to noticeboard |
