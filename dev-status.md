@@ -247,7 +247,7 @@ differentiation axis:
 | LED direction / HAL abstraction | 🔲 open | Logical arc origin + reverse; full `led_drivers/` HAL deferred to ring arrival (`docs/insights.md` §4) |
 | Multi-train modality | 🔲 open | Spare LEDs show 2nd-closest train; data already in `LeaveSignal.ttls` |
 | Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
-| WCR power at full brightness | 🔲 new open | Only tested at `BRIGHTNESS=0.15`. 800 mA WCR ceiling vs. full-white 120-LED draw (~40 mA/LED) not yet stress-tested — needs a higher-brightness follow-up |
+| WCR power at full brightness | ✅ characterized (2026-07-13) | `BRIGHTNESS=1.0` full-white froze the Qi path (rail collapse) and tripped MacBook USB overcurrent. `0.15` is the stable ceiling on both — already visually "full" for the 120-LED tape. Real ceiling is ≈0.15 or lower; see `docs/hardware.md` |
 | LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
 | MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
 | E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |

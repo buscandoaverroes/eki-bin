@@ -94,11 +94,21 @@ MacBook USB to the WCR. Full pattern ran clean both on-pad-direct and
 through-glass. No visible brightness sag, flicker, or brownout-reset at 120 LEDs
 on any of the three sources (MacBook USB, WCR-direct, WCR-through-glass).
 
-**⚠ Not yet stress-tested:** all three ran at `BRIGHTNESS = 0.15`. The 800 mA WCR
-ceiling has **not** been tested against a bright/full-white 120-LED frame
-(WS2812B-4020 ≈ 40 mA/LED worst case → ~4.8 A theoretical max, far over 800 mA).
-Real in-jar brightness needs a higher-`BRIGHTNESS` follow-up before calling the
-WCR sufficient — tracked as an open item in `dev-status.md`.
+**Full-brightness stress test (2026-07-13 follow-up).** Ran `BRIGHTNESS = 1.0`,
+full-white-ish 120-LED frame, across the three sources:
+- **MacBook USB:** ran, but "like looking at the sun," then macOS threw *"USB
+  accessory disabled — unplug the accessory using too much power to re-enable
+  USB devices."* i.e. it tripped the host port's overcurrent cutoff. USB barely
+  coped.
+- **Qi (WCR):** insufficient — a few LEDs lit, then froze/stopped (rail collapse
+  under the inrush). Confirms the 800 mA ceiling can't source a bright 120-LED
+  frame, as the ~4.8 A worst-case math predicted.
+- **Takeaway:** `BRIGHTNESS = 0.15` is already visually "full" for this tape
+  (initially mistaken for max) and is the safe, stable ceiling on **both** USB
+  and Qi. The real question was never "can it do full white" (it can't) but
+  **"what's the stable Qi ceiling"** — and it's ≈0.15 or lower. For 120 LEDs,
+  even lower is worth trying. A brightness cap that scales down with LED count
+  would turn this from a footgun into a guardrail (parked — `docs/insights.md` §4).
 
 > **Milestone:** everything (XIAO + 120-LED tape + Qi receiver) then placed into a
 > wide-mouth glass pitcher and run off the pad — the full "MCU + lights inside,
