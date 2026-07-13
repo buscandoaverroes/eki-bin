@@ -3,7 +3,15 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: V1 firmware **feature-complete** → v1.2 ✅ **board checkpoint passed** → v1.1 (Qi)
+## Current phase: v1.1 Qi power **confirmed, self-contained in a bottle** → NFC next
+
+> **Milestone (2026-07-13):** the whole unit — XIAO ESP32-C3 + 120-LED WS2812B-4020
+> tape + unbranded Qi receiver — placed in a wide-mouth glass pitcher and run off a
+> Qi pad *through the glass*, `led_test.py` driving all 120 LEDs. First time the
+> full "MCU + lights inside, powered wirelessly, no visible wire" concept ran
+> self-contained. The core v1.1 hardware thesis is proven. Bring-up details +
+> the one open caveat (full-brightness power headroom untested) in
+> `docs/hardware.md`. **Next: NFC** for app-free settings/station provisioning.
 
 V1 is a stable freeze point: full `time → LeaveSignal → DisplayContract → LEDs`
 pipeline, five display contracts, the animation/smoothing stack (gamma + dither +
@@ -238,6 +246,9 @@ differentiation axis:
 | Cork vs screw cap | 🔲 open | Cork aesthetic; screw cap practical for access during dev |
 | LED direction / HAL abstraction | 🔲 open | Logical arc origin + reverse; full `led_drivers/` HAL deferred to ring arrival (`docs/insights.md` §4) |
 | Multi-train modality | 🔲 open | Spare LEDs show 2nd-closest train; data already in `LeaveSignal.ttls` |
+| Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
+| WCR power at full brightness | 🔲 new open | Only tested at `BRIGHTNESS=0.15`. 800 mA WCR ceiling vs. full-white 120-LED draw (~40 mA/LED) not yet stress-tested — needs a higher-brightness follow-up |
+| LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
 | MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
 | E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |
 | Station card storage | 🔲 open | Dish / card holder / pinned to noticeboard |
