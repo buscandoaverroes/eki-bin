@@ -265,6 +265,16 @@ falls out of clean config-driven design.
        `MARKER_BRIGHTNESS` (settled dot mult, default `1.0`) and
        `MARKER_FADE_FLOOR` (dot's own fade-envelope floor, default `0.3`) —
        `FLOOR_BRIGHTNESS` now *only* affects genuinely idle LEDs.
+
+       **Third-pass finding, real jar (not clear bench):** the brown bottle
+       shifts perceived colour noticeably (white anchor → soft orange-white,
+       green marker → yellow-green, gray floor → yellow — "not bad," logged
+       in `docs/hardware.md`) and its added darkness means brightness can go
+       *up* from the clear-air bench numbers (`BRIGHTNESS` toward `0.5`,
+       `ANCHOR_BRIGHTNESS` toward `2.0`). Also: **face-up beats
+       downward-facing** for this bottle — reverses the original mounting
+       plan. Added `MARKER_SATURATION` (genuinely muted marker colour, not
+       just dimmer — `docs/contracts/approach-contract.md`).
 5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
        at actual final brightness (not full brightness — see the `0.15` Qi
        ceiling in `docs/hardware.md`)
@@ -275,6 +285,19 @@ falls out of clean config-driven design.
 8. [ ] Final validation on friend's actual network before handoff
 9. [ ] *(Not this pass)* Physical fit test: Qi coil in bottle vs. wired
        fallback — mechanical, independent of firmware work above
+
+### Startup sequence ("boot ceremony") — planned, design doc only
+
+Full design: `docs/contracts/startup-sequence.md`. Resolves the open fork in
+`docs/insights.md` §5 (does a boot animation break the clock illusion?) —
+decided **yes, bounded and one-time**: loading-circle spin during WiFi/NTP →
+"hanabi" burst on success → crossfade into the live contract, or a
+persistent red breathe on failure. Not started — real engineering risk is
+restructuring `connect_wifi()`'s blocking poll loop to interleave animation
+frames, not the animation math itself (all reuses existing primitives). Three
+open questions before coding, listed in the doc (skippable/config-gated?
+hanabi shape contract-agnostic or anchor-relative? failure recovery — reset
+required, or auto-retry?).
 
 ### Deferred to later sessions
 
