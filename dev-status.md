@@ -3,7 +3,13 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.1 Qi power **confirmed, self-contained in a bottle** → NFC next
+## Current phase: v1.4 — ApproachContract gift build (branch `feature/positional-display`)
+
+> **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
+> (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
+> below. Immediate work is unrelated to provisioning: a new positional/approach
+> display paradigm (`docs/contracts/approach-contract.md`) for a friend gift
+> build. Concept doc has the *what/why*; this section has the *when/how*.
 
 > **Milestone (2026-07-13):** the whole unit — XIAO ESP32-C3 + 120-LED WS2812B-4020
 > tape + unbranded Qi receiver — placed in a wide-mouth glass pitcher and run off a
@@ -11,7 +17,7 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 > full "MCU + lights inside, powered wirelessly, no visible wire" concept ran
 > self-contained. The core v1.1 hardware thesis is proven. Bring-up details +
 > the one open caveat (full-brightness power headroom untested) in
-> `docs/hardware.md`. **Next: NFC** for app-free settings/station provisioning.
+> `docs/hardware.md`.
 
 V1 is a stable freeze point: full `time → LeaveSignal → DisplayContract → LEDs`
 pipeline, five display contracts, the animation/smoothing stack (gamma + dither +
@@ -195,6 +201,71 @@ differentiation axis:
 
 ---
 
+## V1.4 — ApproachContract + crossfade (friend gift build)
+
+Concept/design reference: `docs/contracts/approach-contract.md`. This section
+is the dev plan only — sequencing, hardware, config, and test order for this
+specific build session(s).
+
+**Scope note:** this is a new build for a friend gift, on a new XIAO, alongside
+the new positional/approach paradigm intended to eventually replace arc-based
+contracts for the "which train, how close" job. **Not in scope this pass:**
+line-color palettes, IMU, NFC/any provisioning, Matter/Embedded Swift rewrite,
+e-ink — later phases, don't over-engineer hooks for them beyond what naturally
+falls out of clean config-driven design.
+
+### Hardware (physical work, not firmware)
+
+- [ ] New XIAO ESP32-C3, fresh flash
+- [ ] WS2812B tape cut to **21 LEDs** (confirmed 1-LED-per-segment cut points —
+      no rounding needed)
+- [ ] Mount LEDs **downward-facing** first (max refraction off counter/base) —
+      a mounting decision only; no `ARC_ORIGIN`/`_physical()` flip needed in
+      code unless testing says otherwise
+- [ ] Direct solder to XIAO (no connector) — ~300–470Ω series resistor near
+      LED #1, ~1000µF bulk cap across 5V/GND at strip start (no dev-board
+      buffering on a direct-solder setup)
+- [ ] Alligator-clip test **before** committing to solder, fully outside the
+      bottle
+- [ ] Power via USB-C throughout; Qi-into-bottle fit is a separate mechanical
+      test, decoupled from firmware, **not this pass** (step 9 below)
+
+### Firmware build order
+
+1. [ ] Alligator-clip strip to XIAO, outside bottle, home WiFi/dev `config.py`
+2. [ ] Sanity-check LED indexing on the new 21-LED length (adapt existing
+       `led-test` pattern if needed)
+3. [ ] Bring up `ApproachContract` phase-1 config (`ANCHOR_INDEX=0`,
+       `ARM_A_LEN=20`, `ARM_B_LEN=0`) — validate position mapping against known
+       `ttls` values
+4. [ ] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` — subjective, expect several
+       rounds
+5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
+       at actual final brightness (not full brightness — see the `0.15` Qi
+       ceiling in `docs/hardware.md`)
+6. [ ] Solder properly once satisfied (no more alligator clips)
+7. [ ] New `config_friend1.py` (friend's WiFi creds + hardcoded single
+       line/station) — keep separate from dev `config.py` rather than editing
+       it, so home dev config stays intact when swapping creds for handoff
+8. [ ] Final validation on friend's actual network before handoff
+9. [ ] *(Not this pass)* Physical fit test: Qi coil in bottle vs. wired
+       fallback — mechanical, independent of firmware work above
+
+### Deferred to later sessions
+
+- [ ] Phase 2: bidirectional layout (`ANCHOR_INDEX=10`, both arms active),
+      dual-train interaction tuning — same code path, config-only change per
+      `docs/contracts/approach-contract.md`
+- [ ] Line-color palette / metro-line static color scheme
+- [ ] IMU tap/shake interaction layer (see Open decisions — planned as a
+      *runtime* interaction layer, not a provisioning mechanism)
+- [ ] NFC / any provisioning mechanism (see Open decisions — under
+      reconsideration, not blocking this build)
+- [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
+      block any of the above
+
+---
+
 ## V1.5 — Round PCB LED ring (still MicroPython)
 
 - [ ] Solder OSTW3535C1A SMD chips onto AE-27mm-TH round PCB in ring formation
@@ -249,9 +320,10 @@ differentiation axis:
 | Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
 | WCR power at full brightness | ✅ characterized (2026-07-13) | `BRIGHTNESS=1.0` full-white froze the Qi path (rail collapse) and tripped MacBook USB overcurrent. `0.15` is the stable ceiling on both — already visually "full" for the 120-LED tape. Real ceiling is ≈0.15 or lower; see `docs/hardware.md` |
 | LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
-| NFC provisioning approach | ✅ decided (2026-07) | No-app/Shortcuts route ruled out on the bench (iOS generic-NDEF API breaks on ISO-15693/Type-5). Building a minimal first-party iOS app on low-level ISO-15693. See `docs/nfc-provisioning.md` |
-| iOS NFC app: separate repo? | 🔲 open | Leaning yes (separate Swift/Xcode toolchain). Tag data contract stays in this repo as the shared interface. `docs/nfc-provisioning.md` §7 |
-| Tag payload: NDEF vs private format | 🔲 open (leaning private) | Private length+CRC+JSON, no NFC-NDEF compliance needed (no 3rd-party reader in the picture). `docs/nfc-provisioning.md` §4, §7 |
+| NFC provisioning approach | ⏸ on hold (2026-07-23) | The custom-iOS-app plan (`docs/nfc-provisioning.md`) hit two stacked toolchain walls: the dev Mac (2019 Intel MacBook Air) is structurally capped below the macOS/Xcode version needed for iOS-26 builds, and iOS NFC reading needs the paid $99/yr Apple Developer Program regardless. Reconsidering the whole provisioning *mechanism*, not just working around the walls — candidates include ESP32 SoftAP + browser form (no app, cross-platform) and passive NTAG213 (Type-2, not Type-5 — iOS Shortcuts *does* work on Type-2) station cards, closer to the original concept. Longer-term direction leans toward an Embedded Swift/Matter rewrite (own track, own timeline — see below), which would remove the custom-app requirement entirely: settings live in Matter attributes edited from the Home app, no Xcode/App Store gate. Not blocking the v1.4 gift build. |
+| iOS NFC app: separate repo? | ⏸ moot while approach is on hold | Was leaning yes if the custom-app plan resumes. `docs/nfc-provisioning.md` §7 |
+| Tag payload: NDEF vs private format | ⏸ moot while approach is on hold | Was leaning private (length+CRC+JSON). `docs/nfc-provisioning.md` §4, §7 |
+| V2 rewrite target: Rust/Embassy vs. Embedded Swift/Matter | 🔲 open, new (2026-07-23) | Two independent V2 candidates now on the table, arrived at from different directions. Embedded Swift/Matter would also solve provisioning (Home app UI, no custom app, no entitlement gate) but the toolchain is experimental (not source-stable, real setup friction reported) and means re-deriving the whole display pipeline (contracts, gamma/dither, config) from scratch. Not deciding yet — V1.4/V1.5 firmware work doesn't depend on this. |
 | MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
 | E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |
 | Station card storage | 🔲 open | Dish / card holder / pinned to noticeboard |
