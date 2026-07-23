@@ -117,9 +117,29 @@ was refactored to split off `_write_frame(frame)` — the shared gamma/dither/
 positions, not arc lengths) and still go through the same render seam every
 other contract uses.
 
-- Old position ramps toward `FLOOR_BRIGHTNESS`/`FLOOR_COLOR` while the new
-  position ramps up to full, both driven by the same `progress` value on
-  inverse curves — one linear interpolation, two directions.
+- Old position ramps toward `MARKER_FADE_FLOOR` while the new position ramps up
+  to `MARKER_BRIGHTNESS`, both driven by the same `progress` value on inverse
+  curves — one linear interpolation, two directions. Colour still lerps toward
+  `FLOOR_COLOR` (so a disappearing marker visually "sinks into" the idle
+  look), but the **brightness** endpoints are `MARKER_FADE_FLOOR`/
+  `MARKER_BRIGHTNESS` — a fully separate axis from `FLOOR_BRIGHTNESS`.
+  **This wasn't the original design** — the first cut reused
+  `FLOOR_BRIGHTNESS` as the crossfade's dim endpoint too, and real-hardware
+  tuning found that coupling actively fighting itself: retuning the ambient
+  floor level for the right idle look also dragged the marker's fade dynamic
+  range along with it, with no way to adjust one without the other. Splitting
+  them was the fix — `FLOOR_BRIGHTNESS` now *only* governs genuinely idle
+  LEDs (the `_write_frame` STATIC baseline); the marker's own fade never
+  reads it.
+  - One side effect worth knowing: because the colour lerp (gray `FLOOR_COLOR`
+    → whatever hue `LINE_COLOR` is) runs independently of the brightness
+    ramp, a single R/G/B channel isn't guaranteed to rise/fall monotonically
+    mid-fade if that channel happens to be brighter in `FLOOR_COLOR` than in
+    `LINE_COLOR` (e.g. forest green's R and B are dimmer than a neutral gray
+    floor's) — *total* brightness still ramps monotonically, just not
+    necessarily every channel in isolation. In practice this is a small,
+    brief overshoot on one or two channels near the end of the fade, not a
+    visible colour flash — flag it if it ever reads as one on hardware.
 - `progress` is driven off the **absolute `ticks_ms()` clock**, matching the
   seamless-breathing envelope pattern already established in
   `display-contract.md` (no per-interval snap-back).
@@ -159,8 +179,12 @@ ANCHOR_COLOR = (255, 200, 120)  # warm white/amber, distinct from LINE_COLOR + F
 ANCHOR_BRIGHTNESS = 1.6         # >1.0 = brighter than a normal "full" position (STATIC, linear)
 POSITION_MINUTES_PER_LED = 1
 LINE_COLOR = (34, 139, 34)      # forest green — fixed, NOT urgency-banded (see below)
-FLOOR_BRIGHTNESS = 0.15         # LINEAR multiplier (STATIC path) — throwable to 0
+FLOOR_BRIGHTNESS = 0.15         # LINEAR multiplier (STATIC path) — idle LEDs ONLY,
+#                                  throwable to 0. NOT read by the marker's crossfade.
 FLOOR_COLOR = (80, 80, 80)      # dim neutral, NOT a dimmed LINE_COLOR
+MARKER_BRIGHTNESS = 1.0         # settled marker's own mult — independent of FLOOR_BRIGHTNESS
+MARKER_FADE_FLOOR = 0.3         # dim end of the marker's OWN crossfade — independent
+#                                  of FLOOR_BRIGHTNESS, see "Crossfade" below
 TRANSITION_MS = 4000            # crossfade duration, ms; 0 = instant jump
 ```
 

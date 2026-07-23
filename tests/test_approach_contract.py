@@ -160,7 +160,12 @@ def test_crossfade_new_position_ramps_up_over_transition(load_main):
     contract.render(m.LeaveSignal([10.0]), 4000)       # settled
     late = m.np.buf[m._physical(10)]
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert early[0] < mid[0] < late[0] == full[0]
+    # Total brightness (sum of channels), not a single channel: the colour is
+    # ALSO lerping FLOOR_COLOR -> LINE_COLOR across the same span, and since
+    # FLOOR_COLOR's R/B happen to be brighter than LINE_COLOR's, a single
+    # channel isn't guaranteed to rise monotonically even though the pixel as
+    # a whole is getting brighter (see MARKER_FADE_FLOOR's doc comment).
+    assert sum(early) < sum(mid) < sum(late) == sum(full)
 
 
 def test_crossfade_old_position_ramps_down_toward_floor(load_main):
@@ -179,7 +184,11 @@ def test_crossfade_old_position_ramps_down_toward_floor(load_main):
     old_mid = m.np.buf[m._physical(10)]
     contract.render(m.LeaveSignal([6.0]), 8000)        # settled
     old_end = m.np.buf[m._physical(10)]
-    assert old_at_start[0] > old_mid[0] > old_end[0]
+    # Total brightness — see the comment in the ramps-up test above.
+    assert sum(old_at_start) > sum(old_mid) > sum(old_end)
+    # Once fully settled, index 10 is drawn with NOTHING (fading_index cleared)
+    # — it's genuinely idle again, so it falls back to the plain floor baseline
+    # (FLOOR_BRIGHTNESS/FLOOR_COLOR), not MARKER_FADE_FLOOR.
     floor_level = tuple(int(c * m.BRIGHTNESS * m.FLOOR_BRIGHTNESS) for c in m.FLOOR_COLOR)
     assert old_end == floor_level
 
@@ -199,7 +208,7 @@ def test_crossfade_progress_uses_absolute_clock_not_relative(load_main):
     contract.render(m.LeaveSignal([10.0]), 52_000)  # +2000ms → halfway
     mid = m.np.buf[m._physical(10)]
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert 0 < mid[0] < full[0]
+    assert 0 < sum(mid) < sum(full)  # total brightness — see comment above
 
 
 def test_repeated_render_same_target_does_not_restart_transition(load_main):
@@ -226,6 +235,50 @@ def test_anchor_wins_when_train_lands_on_anchor_index(load_main):
     # invariant, and that the anchor colour is what's there regardless.
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([0.0]), 0)
     assert m.np.buf[m._physical(0)] == _anchor_level(m)
+
+
+def test_marker_brightness_independent_of_floor_brightness(load_main):
+    # The bug this guards: FLOOR_BRIGHTNESS used to double as the crossfade's
+    # dim endpoint too, so retuning the ambient floor level also silently
+    # changed the marker's fade dynamic range. MARKER_FADE_FLOOR/
+    # MARKER_BRIGHTNESS must be independently tunable — changing
+    # FLOOR_BRIGHTNESS alone must not move the settled marker's brightness.
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0, FLOOR_BRIGHTNESS=0.05,
+    )
+    m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0]), 0)
+    dim_floor = m.np.buf[m._physical(5)]
+
+    m2 = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0, FLOOR_BRIGHTNESS=0.90,
+    )
+    m2.ACTIVE_CONTRACT.render(m2.LeaveSignal([5.0]), 0)
+    bright_floor = m2.np.buf[m2._physical(5)]
+
+    assert dim_floor == bright_floor  # marker unaffected by the floor change
+
+
+def test_marker_fade_floor_independent_of_floor_brightness(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
+        BRIGHTNESS=1.0, GAMMA=1.0, MARKER_FADE_FLOOR=0.5, FLOOR_BRIGHTNESS=0.01,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([10.0]), 0)  # transition just started, progress=0
+    at_start = sum(m.np.buf[m._physical(10)])
+    # At progress=0 the marker's brightness mult is exactly MARKER_FADE_FLOOR,
+    # nowhere near the near-off FLOOR_BRIGHTNESS=0.01 — confirms the two
+    # constants are reading from separate knobs, not the same one.
+    assert at_start > 0
+    floor_only = sum(
+        int(c * m.BRIGHTNESS * m.FLOOR_BRIGHTNESS) for c in m.FLOOR_COLOR
+    )
+    assert at_start > floor_only * 5  # comfortably above the near-off floor level
 
 
 # ── registry ───────────────────────────────────────────────────────

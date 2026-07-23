@@ -100,9 +100,23 @@ LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
 FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.15)  # 0 = idle LEDs fully off.
 #   Rendered via the STATIC path (see _write_frame) — a direct linear multiplier
 #   of BRIGHTNESS, no gamma. Needs to clear ~1 output code per FLOOR_COLOR
-#   channel or the floor truncates invisibly to black.
+#   channel or the floor truncates invisibly to black. ONLY affects genuinely
+#   idle LEDs — deliberately NOT reused by the marker's crossfade (see
+#   MARKER_BRIGHTNESS/MARKER_FADE_FLOOR below): tuning the ambient floor level
+#   used to also drag the crossfade's dynamic range along with it, since both
+#   read this same constant — first real-hardware retuning found that coupling
+#   actively fighting itself, so the two are now fully independent knobs.
 FLOOR_COLOR = getattr(config, "FLOOR_COLOR", (80, 80, 80))  # dim neutral — NOT a
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Floor / idle state)
+MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 1.0)  # settled marker's
+#   own mult (STATIC path, linear) — independent of both FLOOR_BRIGHTNESS and
+#   the global BRIGHTNESS ceiling (which it's still multiplied by, same as
+#   every other mult in the system; "independent" means "its own separate
+#   knob", not "bypasses BRIGHTNESS entirely" like ANCHOR_BRIGHTNESS also is).
+MARKER_FADE_FLOOR = getattr(config, "MARKER_FADE_FLOOR", 0.3)  # dim end of the
+#   crossfade envelope (ANIMATED path) — how dim an appearing/disappearing
+#   marker gets at the extremes of its OWN fade, unrelated to how dim a truly
+#   idle LED (FLOOR_BRIGHTNESS) renders.
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
 
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
@@ -733,6 +747,9 @@ class ApproachContract(DisplayContract):
     position) renders at FLOOR_BRIGHTNESS/FLOOR_COLOR — deliberately a
     different colour, not a dimmed LINE_COLOR, so an empty slot can't be
     mistaken for "a very distant train" (see the concept doc's Floor section).
+    The marker's own crossfade brightness (MARKER_BRIGHTNESS/MARKER_FADE_FLOOR)
+    is a fully separate axis from FLOOR_BRIGHTNESS — tuning the idle floor no
+    longer drags the marker's fade dynamics along with it.
     """
 
     frame_ms = FRAME_MS
@@ -785,10 +802,17 @@ class ApproachContract(DisplayContract):
         # benefits from dithering, only risks flickering from it.
         frame = [(FLOOR_COLOR, FLOOR_BRIGHTNESS, "static")] * NUM_LEDS
 
+        # The crossfade's own dim/bright endpoints — MARKER_FADE_FLOOR/
+        # MARKER_BRIGHTNESS, NOT FLOOR_BRIGHTNESS. A marker fading in/out
+        # blends toward FLOOR_COLOR (still "sinking into the idle look"
+        # visually) but its BRIGHTNESS range is its own, independently
+        # tunable axis — see MARKER_BRIGHTNESS/MARKER_FADE_FLOOR above.
+        marker_span = MARKER_BRIGHTNESS - MARKER_FADE_FLOOR
+
         if animating and self._fading_index is not None:
             frame[self._fading_index] = (
                 lerp_color(self._fading_color, FLOOR_COLOR, progress),
-                FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_out,
+                MARKER_FADE_FLOOR + marker_span * fade_out,
             )  # ANIMATED: genuinely ramping down this frame
         else:
             self._fading_index = None  # settled — stop tracking, no longer drawn
@@ -797,13 +821,13 @@ class ApproachContract(DisplayContract):
             if animating:
                 frame[self._active_index] = (
                     lerp_color(FLOOR_COLOR, self._active_color, progress),
-                    FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_in,
+                    MARKER_FADE_FLOOR + marker_span * fade_in,
                 )  # ANIMATED: genuinely ramping up this frame
             else:
                 # Settled: identical every frame until the position next
                 # changes — render STATIC (see _write_frame) so it doesn't
                 # dither-flicker while just sitting there.
-                frame[self._active_index] = (self._active_color, 1.0, "static")
+                frame[self._active_index] = (self._active_color, MARKER_BRIGHTNESS, "static")
 
         # Anchor is painted last so it always wins, even the instant a train
         # lands on ANCHOR_INDEX itself — it never participates in train logic.

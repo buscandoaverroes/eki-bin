@@ -256,6 +256,15 @@ falls out of clean config-driven design.
        normal "full" position, not just differently coloured — colour alone
        wasn't a strong enough cue on the real strip. See
        `docs/contracts/approach-contract.md` § Floor / idle state.
+
+       **Second-pass finding:** retuning `FLOOR_BRIGHTNESS` down (still too
+       bright at `0.10`) revealed the crossfading dot's brightness was
+       coupled to it too — a single shared scalar was governing both
+       "how dim is idle" and "what's the dot's fade floor," so tuning one
+       moved the other. Split into fully independent knobs:
+       `MARKER_BRIGHTNESS` (settled dot mult, default `1.0`) and
+       `MARKER_FADE_FLOOR` (dot's own fade-envelope floor, default `0.3`) —
+       `FLOOR_BRIGHTNESS` now *only* affects genuinely idle LEDs.
 5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
        at actual final brightness (not full brightness — see the `0.15` Qi
        ceiling in `docs/hardware.md`)

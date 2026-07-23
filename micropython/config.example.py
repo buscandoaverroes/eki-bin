@@ -75,8 +75,12 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
 # LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded
 # FLOOR_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
-#                            avoids low-brightness flicker); 0 = fully off
+#                            avoids low-brightness flicker); idle LEDs ONLY —
+#                            0 = fully off. NOT read by the marker's crossfade.
 # FLOOR_COLOR = (80, 80, 80)      # idle-LED colour, NOT a dimmed LINE_COLOR
+# MARKER_BRIGHTNESS = 1.0  # settled marker's own mult — independent of FLOOR_BRIGHTNESS
+# MARKER_FADE_FLOOR = 0.3  # dim end of the marker's OWN crossfade — independent
+#                            of FLOOR_BRIGHTNESS (see approach-contract.md)
 # TRANSITION_MS = 4000     # crossfade duration between position updates, ms
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
