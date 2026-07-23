@@ -142,6 +142,38 @@ starting point. `config_friend1.py` uses the corrected `0.21` starting value;
 still expect live retuning once mounted in the actual jar (diffusion changes
 perception).
 
+**LED orientation (2026-07-23 follow-up):** originally planned downward-facing
+(max refraction off the counter/base — see `dev-status.md` § V1.4). Tested
+both ways in the actual **brown glass bottle**; **face-up reads better** —
+the opposite of the original plan. Noted here since it's a plan reversal, not
+just a confirmation.
+
+**Brown bottle colour filtering (2026-07-23):** the bottle glass itself
+noticeably shifts perceived colour — confirmed in the actual jar, not just on
+open bench:
+
+| Rendered colour | Reads as, through the brown glass |
+|---|---|
+| White (`ANCHOR_COLOR`) | Soft orange-white |
+| Forest green (`LINE_COLOR`) | Yellow-green |
+| Dim neutral gray (`FLOOR_COLOR`) | Yellow |
+
+Read as a pleasant effect, not a defect — "that's actually not bad." Two
+follow-on findings from the same session:
+
+- **The added darkness from the brown glass means brightness can go up.**
+  A clear/bench readout of "too bright" doesn't hold once diffused through
+  brown glass — `BRIGHTNESS` moved from the bench-tuned `0.15` up toward
+  `0.5`, `ANCHOR_BRIGHTNESS` from `1.6` toward `2.0`, in the actual jar. All
+  bench brightness numbers above are a clear-air starting point, not the
+  in-jar final values — confirms diffusion/perception in the real jar is the
+  final tuning authority, same lesson `docs/insights.md` §3/§5 already drew
+  from the V1 jar-diffusion assessment.
+- **Parked idea:** 2–3 "bin filter" colour presets that pre-shift the
+  rendered RGB to compensate for (or lean into) this bottle's amber cast —
+  not built, just noted as worth a future look if colour fidelity through
+  glass becomes a priority again (e.g. for a different, less-tinted bottle).
+
 ---
 
 ## NFC — ST25DV dynamic tag (v1.x "givable" phase)

@@ -220,9 +220,9 @@ falls out of clean config-driven design.
 - [x] WS2812B tape cut to **21 LEDs** (confirmed 1-LED-per-segment cut points —
       no rounding needed); `make led-test` confirms all 21 light. Brightness
       bench findings (0.15–0.2 = full, 0.005 = ideal floor) in `docs/hardware.md`
-- [ ] Mount LEDs **downward-facing** first (max refraction off counter/base) —
-      a mounting decision only; no `ARC_ORIGIN`/`_physical()` flip needed in
-      code unless testing says otherwise
+- [x] Mount LEDs **face-up**, not downward-facing as originally planned —
+      tested both, face-up refracts/diffuses better through this bottle. Pure
+      mounting decision, no `ARC_ORIGIN`/`_physical()` flip needed in code
 - [ ] Direct solder to XIAO (no connector) — ~300–470Ω series resistor near
       LED #1, ~1000µF bulk cap across 5V/GND at strip start (no dev-board
       buffering on a direct-solder setup)

@@ -112,6 +112,12 @@ is hidden by the medium.
   light all N at full white — so a budget based on realistic frames, not all-white,
   is the useful version. Empirical constants (mA/LED, safe budget per power source)
   needed before implementing; don't guess them.
+- **Bottle-colour "bin filter" presets.** The brown gift-jar bottle noticeably
+  shifts perceived LED colour (white → soft orange-white, forest green →
+  yellow-green, dim gray → yellow — see `docs/hardware.md`'s 2026-07-23
+  bring-up log). 2–3 pre-shift colour presets ("bins") could compensate for
+  (or lean into) a given bottle's cast. Not built — parked until colour
+  fidelity through glass matters again, e.g. a different/less-tinted bottle.
 
 ---
 
@@ -168,6 +174,15 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
   clock doesn't perform a startup sequence — it just *is*. Is it OK to hold the
   paradigm "in suspense" during connection, or should boot be invisible/instant?
   Park this; it's a genuine design fork, not just an implementation detail.
+- **Resolved toward "yes, have a ceremony" (2026-07-23):** a concrete v1.4
+  boot-sequence design was proposed — power-on indicator → WiFi/NTP "loading
+  circle" spin → success burst → crossfade into the live contract, with a
+  persistent all-red breathe on failure. Framed as answering the open tension
+  above, not sidestepping it: the ceremony is bounded (power-on → clock-on),
+  never recurs during normal operation, and a real clock *does* have an
+  analogous moment (setting it after a power cut) — it's the "always visible
+  countdown timer" framing that would've broken the clock illusion, not a
+  one-time boot cue. See `dev-status.md` § V1.4 for the implementation status.
 
 ### Form factor / hardware size
 - Pico 2W was the right call for dev ergonomics. But it **won't fit most bottle

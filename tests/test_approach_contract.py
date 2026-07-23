@@ -262,6 +262,35 @@ def test_marker_brightness_independent_of_floor_brightness(load_main):
     assert dim_floor == bright_floor  # marker unaffected by the floor change
 
 
+def test_marker_brightness_actually_changes_the_settled_marker(load_main):
+    # Directly verifies MARKER_BRIGHTNESS moves the ONE lit train LED (settled,
+    # TRANSITION_MS=0 so no animation is in play) — not the 19 floor LEDs,
+    # which never read MARKER_BRIGHTNESS at all (that's FLOOR_BRIGHTNESS's job,
+    # a fully separate LED). A common mix-up: expecting MARKER_BRIGHTNESS to
+    # dim the whole strip rather than just the single moving dot.
+    dim = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=0.1,
+    )
+    dim.ACTIVE_CONTRACT.render(dim.LeaveSignal([5.0]), 0)
+
+    bright = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0,
+    )
+    bright.ACTIVE_CONTRACT.render(bright.LeaveSignal([5.0]), 0)
+
+    # The marker LED (index 5) is dimmer...
+    assert sum(dim.np.buf[dim._physical(5)]) < sum(bright.np.buf[bright._physical(5)])
+    # ...but every floor LED is completely unaffected by the change.
+    for i in range(1, 21):
+        if i == 5:
+            continue
+        assert dim.np.buf[dim._physical(i)] == bright.np.buf[bright._physical(i)]
+
+
 def test_marker_fade_floor_independent_of_floor_brightness(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
