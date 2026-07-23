@@ -82,14 +82,16 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                            BRIGHTNESS directly — no separate brightness knob.
 # LINE_SATURATION = 1.0    # 1.0=unchanged; lower = a genuinely MUTED
 #                            (desaturated) LINE_COLOR, not just a dimmer one
-# LINE_FADE_FLOOR = 0.3    # dim end of the train's OWN crossfade — independent
-#                            of MARKER_BRIGHTNESS (see approach-contract.md)
 # MARKER_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker) for the idle
-#                            "tick" LEDs — 0 = fully off. NOT read by the
-#                            train's crossfade.
+#                            "tick" LEDs — 0 = fully off. A train is never
+#                            dimmer than BRIGHTNESS itself.
 # MARKER_COLOR = (80, 80, 80)     # idle tick-LED colour, NOT a dimmed LINE_COLOR
-# TRANSITION_MS = 4000     # crossfade duration between position updates, ms
+# TRANSITION_MS = 4000     # chase-transition duration, ms; 0 = instant switch.
+#                            A moving highlight sweeps LED-by-LED between old
+#                            and new positions, always at full brightness —
+#                            never a dim intermediate value (avoids low-
+#                            brightness dithering flicker on this hardware).
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24

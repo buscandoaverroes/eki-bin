@@ -134,58 +134,64 @@ already hit with `EchoContract`'s dimmed secondary layer.
 
 Dithering only pays for itself when a value is genuinely *changing*
 frame-to-frame (it has something to average against). A marker tick never
-changes — so it, the anchor, and a train position that's finished crossfading
-all render through `_write_frame`'s **STATIC** path instead: `level =
-BRIGHTNESS × mult` directly, no `gamma()`, no dithering, plain truncation.
-Only a pixel mid-crossfade (genuinely animating this frame) uses the
-**ANIMATED** path (`gamma()` + dithering). Because `MARKER_BRIGHTNESS` is now
-a *linear* multiplier rather than gamma-shaped, it needs to be picked so
-`MARKER_COLOR × BRIGHTNESS × MARKER_BRIGHTNESS` clears at least ~1 output code
-per channel — too low and it truncates invisibly to black instead of flickering.
+changes — so it, the anchor, and a train (see the Chase transition below —
+a train is now ALWAYS full-brightness or absent, never dim) all render
+through `_write_frame`'s **STATIC** path: `level = BRIGHTNESS × mult`
+directly, no `gamma()`, no dithering, plain truncation. Because
+`MARKER_BRIGHTNESS` is a *linear* multiplier rather than gamma-shaped, it
+needs to be picked so `MARKER_COLOR × BRIGHTNESS × MARKER_BRIGHTNESS` clears
+at least ~1 output code per channel — too low and it truncates invisibly to
+black instead of flickering.
 
-## Crossfade between position updates
+## Chase transition between position updates
 
 Position updates happen once per `LOOP_INTERVAL_SECS` tick (a train moves one
-LED, or several, per update) — a hard cut between LED positions would read as a
-"jump," not an approach. Implemented as instance state on `ApproachContract`
-(the last-rendered index + when it changed), not a bespoke one-off: `_paint_layers`
-was refactored to split off `_write_frame(frame)` — the shared gamma/dither/
-`np.write()` tail — so `ApproachContract` can build a frame directly (per-LED
-positions, not arc lengths) and still go through the same render seam every
-other contract uses.
+LED, or several, per update) — a hard cut between LED positions would read as
+a "jump," not an approach. A moving highlight sweeps LED-by-LED from the old
+position to the new one, one LED lit at a time — **always at full
+brightness**, never dim. `_advance_arm(frame, arm, target, color, phase_ms)`
+is the one place this lives; `render()` (phase 1) and `render_dual()`
+(phase 2) both call it, once per arm.
 
-- Old position ramps toward `LINE_FADE_FLOOR` while the new position ramps up
-  to `1.0` (full `BRIGHTNESS`, the same "settled" level a train always renders
-  at), both driven by the same `progress` value on inverse curves — one linear
-  interpolation, two directions. Colour still lerps toward `MARKER_COLOR` (so
-  a disappearing train visually "sinks into" the idle look), but the
-  **brightness** endpoints are `LINE_FADE_FLOOR`/`1.0` — a fully separate axis
-  from `MARKER_BRIGHTNESS`.
-  **This wasn't the original design** — an earlier draft reused one shared
-  constant as both the idle-tick level AND the crossfade's dim endpoint, and
-  real-hardware tuning found that coupling actively fighting itself: retuning
-  the ambient tick level for the right idle look also dragged the train's
-  fade dynamic range along with it, with no way to adjust one without the
-  other. Splitting them was the fix — `MARKER_BRIGHTNESS` now *only* governs
-  genuinely idle ticks (the `_write_frame` STATIC baseline); the train's own
-  fade never reads it.
-  - One side effect worth knowing: because the colour lerp (gray `MARKER_COLOR`
-    → whatever hue `LINE_COLOR` is) runs independently of the brightness
-    ramp, a single R/G/B channel isn't guaranteed to rise/fall monotonically
-    mid-fade if that channel happens to be brighter in `MARKER_COLOR` than in
-    `LINE_COLOR` (e.g. forest green's R and B are dimmer than a neutral gray
-    marker's) — *total* brightness still ramps monotonically, just not
-    necessarily every channel in isolation. In practice this is a small,
-    brief overshoot on one or two channels near the end of the fade, not a
-    visible colour flash — flag it if it ever reads as one on hardware.
+**This replaced an earlier brightness/colour-blend crossfade** (fade the old
+position down, the new position up, blending colour toward `MARKER_COLOR`
+along the way). That design necessarily passed through low-brightness
+intermediate values — and at low enough absolute brightness, temporal
+dithering breaks down on this hardware (the *exact* failure mode the Marker
+ticks section above already hit, and `docs/insights.md` §6 before that).
+Real-hardware testing confirmed it: the transition's low point visibly
+flickered — the same "withering" dithering artifact, now happening on a
+genuinely animated pixel instead of a supposedly-static one, so it couldn't
+be fixed the same way (rendering it STATIC would freeze the fade instead of
+smoothing it). The fix wasn't a better fade curve; it was not fading
+brightness at all. **CHASE never asks for anything between "off" and
+"full"** — every touched LED is always a fully-populated 8-bit code, so
+dithering is never *needed* during a transition, not just tuned to be less
+visible.
+
+- **One-LED hops (the common case — a train usually moves one LED per
+  minute-tick) are a single sharp switch at the transition's midpoint:** the
+  old position stays lit at full brightness for the first half of
+  `TRANSITION_MS`, then the new position takes over for the second half. No
+  overlap, no fade — binary, on the beat.
+- **Multi-LED hops sweep through every intermediate LED in turn**, each
+  getting an equal time-slice of `TRANSITION_MS`. A hop of `distance` LEDs
+  gets `distance + 1` positions (including both endpoints), stepped via
+  `step = min(distance, int(progress * (distance + 1)))` — this is what
+  makes it read as *motion* rather than a colour change, and reuses the same
+  chase-sequence idea `led_test.py`'s bring-up `chase()` already proved on
+  this exact hardware.
+- **Appearing from nothing or vanishing to nothing snaps instead of
+  sweeping.** A train's first-ever tick has no prior LED to sweep *from*; a
+  train that's no longer catchable has no target to sweep *to*. Both cases
+  render immediately (`arm.sweep_from = None`) — there's no meaningful
+  "motion" to represent when one endpoint doesn't exist.
 - `progress` is driven off the **absolute `ticks_ms()` clock**, matching the
   seamless-breathing envelope pattern already established in
   `display-contract.md` (no per-interval snap-back).
-- Runs the existing perceptual `gamma()` curve over the fade, not a linear
-  ramp — this is what makes the motion read as organic rather than mechanical,
-  same rationale as `gamma()`'s existing role smoothing dim-end banding.
-- No timing pressure (updates are once-per-minute-tick), so `TRANSITION_MS` can
-  run several seconds — prioritize smoothness over speed.
+- `TRANSITION_MS = 0` collapses every hop to a single-frame switch
+  (`step` lands on the final position immediately) — useful for testing, or
+  if the chase motion itself turns out not to be wanted.
 
 ---
 
@@ -197,10 +203,9 @@ than inventing new render logic:
 
 | Existing primitive | Reused for |
 |---|---|
-| `_write_frame()` (split off `_paint_layers`) | Compositing anchor + train position + marker ticks in one frame, one `np.write()` |
-| `gamma()` | Perceptual shaping of the crossfade brightness ramp — ANIMATED path only, see Marker ticks section above |
-| `lerp_color()` | Colour half of the crossfade (train color ↔ `MARKER_COLOR`) |
-| absolute `ticks_ms()` phase pattern | Crossfade `progress`, same seamlessness guarantee as breathing envelopes |
+| `_write_frame()` (split off `_paint_layers`) | Compositing anchor + train position + marker ticks in one frame, one `np.write()`. Every ApproachContract entry uses the STATIC path — full brightness or off, never gamma/dither |
+| `led_test.py`'s `chase()` idea | The sequential-LED-sweep pattern, already validated on this exact hardware during bring-up |
+| absolute `ticks_ms()` phase pattern | Chase `progress`, same seamlessness guarantee as breathing envelopes |
 | `_physical()` HAL seam | Untouched — `ApproachContract` only changes *what* index a train maps to, not how a logical index maps to a physical LED |
 
 ## Config additions
@@ -219,12 +224,11 @@ POSITION_MINUTES_PER_LED = 1
 LINE_COLOR = (34, 139, 34)      # forest green — fixed, NOT urgency-banded (see below)
 LINE_SATURATION = 1.0           # 1.0=unchanged; lower = a genuinely MUTED
 #                                  (desaturated) LINE_COLOR — see below
-LINE_FADE_FLOOR = 0.3           # dim end of the train's OWN crossfade — independent
-#                                  of MARKER_BRIGHTNESS, see "Crossfade" above
 MARKER_BRIGHTNESS = 0.15        # LINEAR multiplier (STATIC path) — idle ticks ONLY,
-#                                  throwable to 0. NOT read by the train's crossfade.
+#                                  throwable to 0. NOT read by the chase transition —
+#                                  a train is always full brightness or absent.
 MARKER_COLOR = (80, 80, 80)     # dim neutral, NOT a dimmed LINE_COLOR
-TRANSITION_MS = 4000            # crossfade duration, ms; 0 = instant jump
+TRANSITION_MS = 4000            # chase duration, ms; 0 = instant single-frame switch
 ```
 
 **`LINE_COLOR`, not urgency-banded `PALETTE`:** every other contract colours the
@@ -268,15 +272,14 @@ iteration 2, deferred below).
    single-direction, phase 1, completely unchanged. Set it to a second
    direction key and `main()`'s loop builds a second `LeaveSignal` (arm A
    still reads `DISPLAY_DIRECTION`, unchanged).
-2. **Two independent crossfade state machines.** `_ArmState` (a small
-   instance holding `active_index`/`active_color`/`fading_index`/
-   `fading_color`/`transition_start`) replaced what used to be flat
-   attributes directly on `ApproachContract`. `ApproachContract` now always
-   holds two — `self._arm_a`, `self._arm_b` — so each direction's train
-   crossfades on its own clock. `_advance_arm(frame, arm, target, color,
-   phase_ms)` is the one place the crossfade math lives; both `render()`
-   (phase 1) and `render_dual()` (phase 2) call it, once per arm, so the
-   logic exists exactly once regardless of how many arms are active.
+2. **Two independent chase state machines.** `_ArmState` (a small instance
+   holding `index`/`color`/`sweep_from`/`transition_start`) replaced what
+   used to be flat attributes directly on `ApproachContract`.
+   `ApproachContract` now always holds two — `self._arm_a`, `self._arm_b` —
+   so each direction's train chases on its own clock. `_advance_arm(frame,
+   arm, target, color, phase_ms)` is the one place the chase logic lives;
+   both `render()` (phase 1) and `render_dual()` (phase 2) call it, once per
+   arm, so it exists exactly once regardless of how many arms are active.
 3. **Two entry points, not one method with an optional argument.**
    `render(signal, phase_ms)` — phase 1, byte-identical to before.
    `render_dual(signal_a, signal_b, phase_ms)` — phase 2. Kept as two

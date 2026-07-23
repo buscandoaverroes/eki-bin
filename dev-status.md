@@ -293,9 +293,11 @@ falls out of clean config-driven design.
        identical to brightness under the render pipeline's linear math, so a
        real muted look needed the new `desaturate()` primitive instead —
        `docs/contracts/approach-contract.md`).
-5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
-       at actual final brightness (not full brightness — see the `0.15` Qi
-       ceiling in `docs/hardware.md`)
+5. [x] Iterate the transition feel — found the brightness-blend crossfade
+       flickering ("withering") at its low point on real hardware; replaced
+       with the CHASE transition (see below) — gamma/brightness-blend no
+       longer part of this contract's transition at all. `TRANSITION_MS`
+       duration itself still open to live taste-tuning
 6. [ ] Solder properly once satisfied (no more alligator clips)
 7. [ ] New `config_friend1.py` (friend's WiFi creds + hardcoded single
        line/station) — keep separate from dev `config.py` rather than editing
@@ -343,9 +345,45 @@ structural addition, not just numbers. Built:
       independent crossfade timing (one arm's transition doesn't perturb the
       other's), only-primary-per-arm scope, anchor priority/no-collision,
       dispatch logic. 88 tests total, all passing
-- [ ] **Not yet validated on real hardware** — host tests only so far
+- [x] **Validated on real hardware** — bidirectional confirmed working
 - [ ] Deferred to iteration 2: N trains per arm (config-driven nesting, not
       just one)
+
+### CHASE transition — replaced the brightness-blend crossfade ✅ implemented
+
+Real-hardware bring-up on bidirectional found the transition's low point
+"withering" — the same low-brightness dithering flicker the marker ticks and
+`EchoContract`'s secondary layer had already hit, now on a genuinely
+*animated* pixel (so it couldn't be fixed by rendering it STATIC — that
+would freeze the fade, not smooth it). Discussed four+ alternative
+transition paradigms that avoid dipping into low brightness at all (colour
+change, hard-cut overlap, "bounce" overshoot, chase/sweep) and built
+**chase**: a moving highlight sweeps LED-by-LED from the old position to the
+new one, always at full brightness — never a dim intermediate value, so
+dithering is never *needed* during a transition, not just tuned to be less
+visible.
+
+- [x] `_ArmState` reworked: `active_index`/`active_color`/`fading_index`/
+      `fading_color` → `index`/`color`/`sweep_from`
+- [x] `_advance_arm()` rewritten: one-LED hops (the common case) are a single
+      sharp switch at the transition's midpoint; multi-LED hops sweep
+      through every intermediate LED, each getting an equal time-slice —
+      reuses the sequential-sweep idea `led_test.py`'s bring-up `chase()`
+      already proved on this hardware. Appearing-from-nothing/vanishing-to-
+      nothing snap instead of sweeping (no second endpoint to animate
+      toward)
+- [x] `LINE_FADE_FLOOR` config **removed entirely** — dead knob once no
+      pixel is ever dim during a transition
+- [x] `gamma()`/`lerp_color()` no longer used by `ApproachContract` at all
+      (still used elsewhere — `BreathingContract` etc. — untouched)
+- [x] Tests rewritten for the new behaviour (sharp midpoint switch,
+      multi-LED sweep sequencing, snap-on-appear/vanish, and a direct
+      invariant test: every rendered pixel is always exactly full brightness
+      or the marker baseline, never anything in between). 90 tests total,
+      all passing
+- [ ] Live on-hardware tuning of `TRANSITION_MS` for the chase feel (bounce/
+      overlap variants explicitly not built this pass — chase alone, per the
+      2026-07-23 discussion)
 
 ### Deferred to later sessions
 

@@ -107,17 +107,10 @@ LINE_SATURATION = getattr(config, "LINE_SATURATION", 1.0)  # 1.0=unchanged;
 #   — see desaturate()'s docstring for why those are different transforms.
 #   Applied once at class-definition time (ApproachContract.line_color).
 # Where the train currently is renders at BRIGHTNESS directly (mult=1.0,
-# STATIC path, once settled) — no separate "train brightness" knob. Three
-# independent brightness surfaces total: ANCHOR_BRIGHTNESS (the "0"),
-# MARKER_BRIGHTNESS (the idle ticks, below), and BRIGHTNESS itself (the
-# train). Simpler than an earlier draft that also gave the train its own
-# scalar on top of BRIGHTNESS — that was one knob too many.
-LINE_FADE_FLOOR = getattr(config, "LINE_FADE_FLOOR", 0.3)  # dim end of the
-#   train's OWN crossfade envelope (ANIMATED path only) — how dim an
-#   appearing/disappearing train gets at the extremes of its fade. Unrelated
-#   to how dim a truly idle tick (MARKER_BRIGHTNESS) renders — the two used
-#   to share one constant, which meant tuning the idle look also dragged the
-#   crossfade's dynamic range along with it; they're independent on purpose.
+# STATIC path, always — see the CHASE transition below, which never dims a
+# train at all). Two independent brightness surfaces total:
+# ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS (the idle ticks, below) —
+# BRIGHTNESS itself is the train's, with no separate scalar on top.
 MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.15)  # LINEAR multiplier
 #   of BRIGHTNESS for the idle "tick" LEDs — every position that ISN'T the
 #   anchor or the train right now (the gaps on the thermometer). Rendered via
@@ -765,33 +758,59 @@ class EchoContract(DisplayContract):
 
 
 class _ArmState:
-    """Crossfade state for ONE arm's train marker. Phase 1 needed exactly one
-    of these (implicitly, as ApproachContract's own attributes); phase 2
-    (bidirectional) keeps two — one per arm — so each direction's train
-    crossfades independently, on its own clock, without interfering with the
-    other arm's."""
+    """CHASE-transition state for ONE arm's train marker. Phase 1 needed
+    exactly one of these (implicitly, as ApproachContract's own attributes);
+    phase 2 (bidirectional) keeps two — one per arm — so each direction's
+    train animates independently, on its own clock, without interfering with
+    the other arm's."""
 
     def __init__(self):
-        self.active_index = None  # current/incoming train position, or None
-        self.active_color = None
-        self.fading_index = None  # previous position, ramping toward idle
-        self.fading_color = None
-        self.transition_start = None  # phase_ms the current transition began
+        self.index = None  # current/incoming train position, or None
+        self.color = None
+        self.sweep_from = None  # index a sweep is currently animating FROM,
+        #   or None if settled (or nothing to sweep between — see below)
+        self.transition_start = None  # phase_ms the current sweep began
 
 
 def _advance_arm(frame, arm, target, color, phase_ms):
-    """Advance one arm's crossfade state given this tick's target index (or
+    """Advance one arm's CHASE transition given this tick's target index (or
     None), and paint its contribution into `frame` (mutated in place, NOT
-    returned). The one place the crossfade math lives — render() (single arm)
-    and render_dual() (two arms) both call this, once per arm, so phase 2
-    doesn't duplicate phase 1's logic."""
-    if target != arm.active_index:
-        if arm.active_index is not None:
-            arm.fading_index = arm.active_index
-            arm.fading_color = arm.active_color
-        arm.active_index = target
-        arm.active_color = color
+    returned). The one place the transition logic lives — render() (single
+    arm) and render_dual() (two arms) both call this, once per arm, so
+    phase 2 doesn't duplicate phase 1's logic.
+
+    A moving highlight sweeps LED-by-LED from the old position to the new
+    one, one LED lit at a time, always at FULL brightness (mult=1.0,
+    STATIC). This deliberately replaced an earlier brightness/colour-blend
+    crossfade: that design necessarily passed through low-brightness
+    intermediate values, and at low enough absolute brightness temporal
+    dithering breaks down on this hardware (visible flicker — the exact
+    failure mode docs/insights.md §6 and the marker-tick fix both already
+    hit). CHASE never asks for anything between "off" and "full" — every
+    touched LED is always a fully-populated 8-bit code, so dithering is
+    never needed at all during a transition, not just tuned to be less
+    visible. See docs/contracts/approach-contract.md § Chase transition."""
+    if target != arm.index:
+        # A sweep only makes sense between two KNOWN positions. Appearing
+        # from nothing (a train's first tick) or vanishing to nothing (no
+        # longer catchable) has no LED to sweep from/to — snap instead, no
+        # animation possible or needed.
+        if target is not None and arm.index is not None:
+            arm.sweep_from = arm.index
+        else:
+            arm.sweep_from = None
+        arm.index = target
+        arm.color = color
         arm.transition_start = phase_ms
+
+    if arm.index is None:
+        return  # nothing to show for this arm right now
+
+    if arm.sweep_from is None:
+        # Settled (or just snapped in/out with nothing to sweep between) —
+        # identical every frame until the position next changes.
+        frame[arm.index] = (arm.color, 1.0, "static")
+        return
 
     progress = 1.0
     if TRANSITION_MS > 0 and arm.transition_start is not None:
@@ -799,46 +818,19 @@ def _advance_arm(frame, arm, target, color, phase_ms):
         #   ticks_ms(), same "no snap-back across intervals" pattern the
         #   breathing envelopes use — see render_for_interval().
         progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
-    animating = progress < 1.0  # mid-crossfade — see _write_frame's
-    #   ANIMATED vs STATIC split: only a pixel that's actually changing
-    #   frame-to-frame benefits from gamma+dither; a settled one should
-    #   render STATIC or risk the same low-brightness dither-flicker the
-    #   marker ticks have (docs/contracts/approach-contract.md § Marker ticks).
 
-    # gamma-shape the brightness ramp (not the colour lerp — colour blending
-    # doesn't suffer the same dim-end banding brightness does), same
-    # perceptual-smoothness rationale gamma() already documents. Only
-    # matters while animating; unused once settled (see below).
-    fade_in = gamma(progress)
-    fade_out = gamma(1.0 - progress)
+    # Divide the sweep into `distance` equal LED-to-LED steps (distance=1 for
+    # the common one-LED-per-tick hop → a single sharp switch at the
+    # halfway point; larger jumps sweep through every LED in between, each
+    # getting an equal time-slice). `min(distance, ...)` clamps the final
+    # step to land exactly on `arm.index` at progress=1.0.
+    distance = abs(arm.index - arm.sweep_from)
+    sign = 1 if arm.index > arm.sweep_from else -1
+    step = min(distance, int(progress * (distance + 1)))
+    frame[arm.sweep_from + sign * step] = (arm.color, 1.0, "static")
 
-    # The train's own crossfade dim/bright endpoints — LINE_FADE_FLOOR up to
-    # 1.0 (full BRIGHTNESS, the same "settled" level below), NOT
-    # MARKER_BRIGHTNESS. A train fading in/out blends toward MARKER_COLOR
-    # (still "sinking into the idle look" visually) but its BRIGHTNESS range
-    # is its own, independently tunable axis.
-    line_span = 1.0 - LINE_FADE_FLOOR
-
-    if animating and arm.fading_index is not None:
-        frame[arm.fading_index] = (
-            lerp_color(arm.fading_color, MARKER_COLOR, progress),
-            LINE_FADE_FLOOR + line_span * fade_out,
-        )  # ANIMATED: genuinely ramping down this frame
-    else:
-        arm.fading_index = None  # settled — stop tracking, no longer drawn
-
-    if arm.active_index is not None:
-        if animating:
-            frame[arm.active_index] = (
-                lerp_color(MARKER_COLOR, arm.active_color, progress),
-                LINE_FADE_FLOOR + line_span * fade_in,
-            )  # ANIMATED: genuinely ramping up this frame
-        else:
-            # Settled: identical every frame until the position next
-            # changes — render STATIC (see _write_frame) so it doesn't
-            # dither-flicker while just sitting there. mult=1.0, i.e.
-            # exactly BRIGHTNESS — no separate "train brightness" knob.
-            frame[arm.active_index] = (arm.active_color, 1.0, "static")
+    if progress >= 1.0:
+        arm.sweep_from = None  # sweep finished — future frames render settled
 
 
 class ApproachContract(DisplayContract):
@@ -850,21 +842,18 @@ class ApproachContract(DisplayContract):
     Phase 1: ARM_B_LEN=0, single direction — call render(signal, phase_ms),
     exactly as before. Phase 2 (bidirectional, DISPLAY_DIRECTION_B configured):
     call render_dual(signal_a, signal_b, phase_ms) instead — one primary train
-    per arm, each with its own independent crossfade (_ArmState). main()'s
-    loop picks the entry point; ApproachContract itself doesn't know which
-    mode it's in beyond which method got called.
+    per arm, each with its own independent CHASE transition (_ArmState).
+    main()'s loop picks the entry point; ApproachContract itself doesn't know
+    which mode it's in beyond which method got called.
 
-    Three independent brightness surfaces, matching how this actually reads
-    to a viewer: ANCHOR_BRIGHTNESS (the "0"), MARKER_BRIGHTNESS/MARKER_COLOR
+    Two independent brightness surfaces, matching how this actually reads to
+    a viewer: ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS/MARKER_COLOR
     (the idle "tick" LEDs — every position that isn't the anchor or a train
-    right now), and BRIGHTNESS itself (where a train is — no separate knob,
-    it's just the global ceiling, mult=1.0, once settled). MARKER_COLOR is
-    deliberately a different colour from LINE_COLOR, not a dimmed version of
-    it, so an idle tick can't be mistaken for "a very distant train" (see the
-    concept doc's Marker ticks section). The train's OWN crossfade dim-point
-    (LINE_FADE_FLOOR) is a fully separate axis from MARKER_BRIGHTNESS —
-    tuning the idle ticks no longer drags the train's fade dynamics along
-    with it.
+    right now). A train is never dimmer than BRIGHTNESS itself — no separate
+    knob, and (since the CHASE transition below) no dim intermediate state
+    either. MARKER_COLOR is deliberately a different colour from LINE_COLOR,
+    not a dimmed version of it, so an idle tick can't be mistaken for "a
+    very distant train" (see the concept doc's Marker ticks section).
     """
 
     frame_ms = FRAME_MS

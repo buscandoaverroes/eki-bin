@@ -1,7 +1,7 @@
 """ApproachContract phase 2 — bidirectional (render_dual, two arms).
 
 Iteration 1 scope: one primary train per arm (two total), each with its own
-independent crossfade. N-trains-per-arm is deferred (iteration 2). See
+independent CHASE transition. N-trains-per-arm is deferred (iteration 2). See
 docs/contracts/approach-contract.md § Bidirectional.
 """
 
@@ -29,13 +29,13 @@ def test_render_dual_lands_one_train_per_arm(load_main):
     assert m.np.buf[m._physical(7)] == full   # arm b: anchor(10) - offset 3
 
 
-def test_render_dual_arms_are_independent_crossfades(load_main):
+def test_render_dual_arms_have_independent_transitions(load_main):
     m = load_main(**_dual_config(TRANSITION_MS=4000, GAMMA=1.0))
     contract = m.ACTIVE_CONTRACT
     # arm a starts moving; arm b has nothing yet
     contract.render_dual(m.LeaveSignal([5.0]), m.LeaveSignal([]), 0)
     assert contract._arm_a.transition_start == 0
-    assert contract._arm_b.active_index is None
+    assert contract._arm_b.index is None
     # now arm b gets a train while arm a is mid-fade — arm a's progress must
     # not be disturbed by arm b's fresh transition starting at the same tick
     contract.render_dual(m.LeaveSignal([5.0]), m.LeaveSignal([3.0]), 2000)

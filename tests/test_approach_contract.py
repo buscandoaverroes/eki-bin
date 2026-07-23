@@ -138,91 +138,138 @@ def test_hidden_signal_shows_anchor_and_markers_only(load_main):
     assert m.np.buf[m._physical(0)] == _anchor_level(m)
 
 
-# ── crossfade ─────────────────────────────────────────────────────
+# ── chase transition ─────────────────────────────────────────────
+# Replaced an earlier brightness/colour-blend crossfade — that design
+# necessarily passed through low-brightness values, where temporal dithering
+# breaks down on this hardware (see docs/insights.md §6, and the marker-tick
+# fix earlier this session). CHASE sweeps a highlight LED-by-LED between old
+# and new positions, always at full brightness — never a dim intermediate
+# value, so dithering is never needed during a transition at all.
 
 
-def test_transition_ms_zero_snaps_instantly(load_main):
+def test_chase_first_appearance_snaps_immediately(load_main):
+    # No prior position to sweep FROM — appears at full brightness right
+    # away, regardless of TRANSITION_MS (nothing to animate between).
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False, BRIGHTNESS=1.0,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([10.0]), 0)
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+    assert contract._arm_a.index == 10
+    assert contract._arm_a.sweep_from is None  # nothing to sweep from
+    assert m.np.buf[m._physical(10)] == full
+
+
+def test_chase_disappearance_snaps_off_immediately(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False, BRIGHTNESS=1.0,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([10.0]), 0)
+    contract.render(m.LeaveSignal([]), 100)  # train no longer catchable
+    assert contract._arm_a.index is None
+    assert contract._arm_a.sweep_from is None
+    assert m.LINE_COLOR not in m.np.buf
+
+
+def test_chase_one_led_hop_switches_sharply_at_midpoint(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False, BRIGHTNESS=1.0,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([10.0]), 0)   # settle at index 10
+    contract.render(m.LeaveSignal([9.0]), 0)    # target hops to 9 (1 LED)
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+
+    contract.render(m.LeaveSignal([9.0]), 1999)  # just before halfway
+    assert m.np.buf[m._physical(10)] == full
+    assert m.np.buf[m._physical(9)] != full
+
+    contract.render(m.LeaveSignal([9.0]), 2000)  # exactly halfway — sharp switch
+    assert m.np.buf[m._physical(9)] == full
+    assert m.np.buf[m._physical(10)] != full
+
+
+def test_chase_multi_led_hop_sweeps_through_each_intermediate_led(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=3000, DITHER=False, BRIGHTNESS=1.0,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([13.0]), 0)   # settle at index 13
+    contract.render(m.LeaveSignal([10.0]), 0)   # target hops to 10 (distance 3)
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+
+    def lit_index():
+        return next(i for i in (13, 12, 11, 10) if m.np.buf[m._physical(i)] == full)
+
+    assert lit_index() == 13
+    contract.render(m.LeaveSignal([10.0]), 750)    # 1/4 through
+    assert lit_index() == 12
+    contract.render(m.LeaveSignal([10.0]), 1500)   # 1/2 through
+    assert lit_index() == 11
+    contract.render(m.LeaveSignal([10.0]), 3000)   # settled
+    assert lit_index() == 10
+
+
+def test_chase_never_produces_an_intermediate_brightness_value(load_main):
+    # The whole point of CHASE: every non-anchor LED is always EXACTLY full
+    # brightness or the marker baseline — never anything dithering-prone in
+    # between, at any point during a transition.
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=0.1,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([15.0]), 0)
+    contract.render(m.LeaveSignal([5.0]), 0)  # a big hop, many intermediate LEDs
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+    marker = tuple(int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR)
+    for phase in range(0, 4001, 100):
+        contract.render(m.LeaveSignal([5.0]), phase)
+        for i in range(1, 21):  # excludes the anchor at index 0
+            assert m.np.buf[m._physical(i)] in (full, marker)
+
+
+def test_chase_transition_ms_zero_switches_in_one_frame(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False, BRIGHTNESS=1.0,
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
+    contract.render(m.LeaveSignal([9.0]), 0)  # same tick, target hops
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert contract._arm_a.active_index == 10
-    assert m.np.buf[m._physical(10)] == full  # already full — no fade-in frame
+    assert m.np.buf[m._physical(9)] == full
+    assert m.np.buf[m._physical(10)] != full
 
 
-def test_crossfade_new_position_ramps_up_over_transition(load_main):
-    m = load_main(
-        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0,
-    )
-    contract = m.ACTIVE_CONTRACT
-    contract.render(m.LeaveSignal([10.0]), 0)          # transition starts at t=0
-    early = m.np.buf[m._physical(10)]
-    contract.render(m.LeaveSignal([10.0]), 2000)       # halfway
-    mid = m.np.buf[m._physical(10)]
-    contract.render(m.LeaveSignal([10.0]), 4000)       # settled
-    late = m.np.buf[m._physical(10)]
-    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    # Total brightness (sum of channels), not a single channel: the colour is
-    # ALSO lerping MARKER_COLOR -> LINE_COLOR across the same span, and since
-    # MARKER_COLOR's R/B happen to be brighter than LINE_COLOR's, a single
-    # channel isn't guaranteed to rise monotonically even though the pixel as
-    # a whole is getting brighter (see LINE_FADE_FLOOR's doc comment).
-    assert sum(early) < sum(mid) < sum(late) == sum(full)
-
-
-def test_crossfade_old_position_ramps_down_toward_marker(load_main):
-    m = load_main(
-        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0, MARKER_BRIGHTNESS=0.05,
-    )
-    contract = m.ACTIVE_CONTRACT
-    contract.render(m.LeaveSignal([10.0]), 0)
-    contract.render(m.LeaveSignal([10.0]), 4000)       # settle at index 10
-    # now the train advances closer — position changes 10 → 6, a new transition
-    contract.render(m.LeaveSignal([6.0]), 4000)
-    old_at_start = m.np.buf[m._physical(10)]
-    contract.render(m.LeaveSignal([6.0]), 6000)        # halfway through 2nd transition
-    old_mid = m.np.buf[m._physical(10)]
-    contract.render(m.LeaveSignal([6.0]), 8000)        # settled
-    old_end = m.np.buf[m._physical(10)]
-    # Total brightness — see the comment in the ramps-up test above.
-    assert sum(old_at_start) > sum(old_mid) > sum(old_end)
-    # Once fully settled, index 10 is drawn with NOTHING (fading_index cleared)
-    # — it's genuinely idle again, so it falls back to the plain marker
-    # baseline (MARKER_BRIGHTNESS/MARKER_COLOR), not LINE_FADE_FLOOR.
-    marker_level = tuple(int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR)
-    assert old_end == marker_level
-
-
-def test_crossfade_progress_uses_absolute_clock_not_relative(load_main):
+def test_chase_progress_uses_absolute_clock_not_relative(load_main):
     # Matches the seamless-breathing pattern: phase_ms is absolute ticks_ms(),
-    # so a transition started at t=50_000 must still measure elapsed time from
-    # its own start, not from 0.
+    # so a sweep started at t=50_000 must still measure elapsed time from its
+    # own start, not from 0.
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False, BRIGHTNESS=1.0,
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 50_000)
+    contract.render(m.LeaveSignal([9.0]), 50_000)
     assert contract._arm_a.transition_start == 50_000
-    contract.render(m.LeaveSignal([10.0]), 52_000)  # +2000ms → halfway
-    mid = m.np.buf[m._physical(10)]
+    contract.render(m.LeaveSignal([9.0]), 52_000)  # +2000ms → halfway
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert 0 < sum(mid) < sum(full)  # total brightness — see comment above
+    assert m.np.buf[m._physical(9)] == full
 
 
 def test_repeated_render_same_target_does_not_restart_transition(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False, BRIGHTNESS=1.0,
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
@@ -230,6 +277,7 @@ def test_repeated_render_same_target_does_not_restart_transition(load_main):
     contract.render(m.LeaveSignal([10.0]), 5000)  # same target again, later tick
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
     assert m.np.buf[m._physical(10)] == full  # still full, no re-fade
+    assert contract._arm_a.sweep_from is None
 
 
 def test_anchor_wins_when_train_lands_on_anchor_index(load_main):
@@ -303,25 +351,6 @@ def test_marker_brightness_actually_changes_the_marker_ticks(load_main):
         if i == 5:  # the train, unaffected — checked in the test above
             continue
         assert sum(dim.np.buf[dim._physical(i)]) < sum(bright.np.buf[bright._physical(i)])
-
-
-def test_line_fade_floor_independent_of_marker_brightness(load_main):
-    m = load_main(
-        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0, LINE_FADE_FLOOR=0.5, MARKER_BRIGHTNESS=0.01,
-    )
-    contract = m.ACTIVE_CONTRACT
-    contract.render(m.LeaveSignal([10.0]), 0)  # transition just started, progress=0
-    at_start = sum(m.np.buf[m._physical(10)])
-    # At progress=0 the train's brightness mult is exactly LINE_FADE_FLOOR,
-    # nowhere near the near-off MARKER_BRIGHTNESS=0.01 — confirms the two
-    # constants are reading from separate knobs, not the same one.
-    assert at_start > 0
-    marker_only = sum(
-        int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR
-    )
-    assert at_start > marker_only * 5  # comfortably above the near-off marker level
 
 
 # ── colour (LINE_SATURATION) ─────────────────────────────────────────
