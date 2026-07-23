@@ -41,9 +41,9 @@ it with `getattr(config, "NAME", default)`, so
 | `BREATHE_FLOOR` | float | no | `0.2` | Dim end of the breath (`0.0–1.0`); raise if `GAMMA` dims the trough too far |
 | `DITHER` | bool | no | `True` | Temporal dithering in `_paint` — averages sub-integer brightness across frames to smooth low-end banding. `False` = plain `int()` truncation |
 | `FRAME_MS` | int | no | `16` | Animation frame duration, ms — **animated contracts only** (static contracts keep `frame_ms=None` and ignore it). Lower = smoother animation + dither, more CPU |
-| `N_TRAINS` | int | no | `1` | How many upcoming departures to render as nested arcs (`1` = original single-arc behaviour). `sandtimer`/`breathing*` only — `color` ignores it, no arc geometry to layer onto |
+| `N_TRAINS` | int | no | `1` | How many upcoming departures to render simultaneously (`1` = original single-train behaviour). `sandtimer`/`breathing*`: nested arcs, dimmed via `BACKGROUND_BRIGHTNESS`. `approach`: one marker per arm slot, hue-shifted via `SECONDARY_HUE_SHIFT_DEG` (never dimmed — see `docs/contracts/approach-contract.md` § N trains per arm). `color` ignores it, no arc geometry to layer onto |
 | `BACKGROUND_BRIGHTNESS` | float | no | `0.35` | Relative brightness of the 2nd train's band (0..1); the 3rd gets this squared, etc. — geometric falloff, one knob regardless of `N_TRAINS`. Used by `sandtimer`/`breathing*`; `echo` ignores it (see below) |
-| `SECONDARY_HUE_SHIFT_DEG` | int | no | `20` | **`echo` only.** Hue rotation (degrees) per train index beyond the primary — differentiates by colour instead of brightness |
+| `SECONDARY_HUE_SHIFT_DEG` | int | no | `20` | **`echo` and `approach` (with `N_TRAINS>1`).** Hue rotation (degrees) per train index beyond the primary — differentiates by colour instead of brightness |
 | `SECONDARY_BREATHE_PERIOD_MS` | int | no | `3000` | **`echo` only.** Breath cycle length for trains beyond the primary |
 | `SECONDARY_BREATHE_FLOOR` | float | no | `0.7` | **`echo` only.** Deliberately high — a subtle differentiation pulse, not `BreathingContract`'s dramatic urgency breath. Separate knob so tuning one doesn't fight the other |
 | `ANCHOR_INDEX` | int | no | `0` | **`approach` only.** LED index of the station/anchor position. See `docs/contracts/approach-contract.md` |

@@ -34,17 +34,17 @@ def test_render_dual_arms_have_independent_transitions(load_main):
     contract = m.ACTIVE_CONTRACT
     # arm a starts moving; arm b has nothing yet
     contract.render_dual(m.LeaveSignal([5.0]), m.LeaveSignal([]), 0)
-    assert contract._arm_a.transition_start == 0
-    assert contract._arm_b.index is None
+    assert contract._arm_a[0].transition_start == 0
+    assert contract._arm_b[0].index is None
     # now arm b gets a train while arm a is mid-fade — arm a's progress must
     # not be disturbed by arm b's fresh transition starting at the same tick
     contract.render_dual(m.LeaveSignal([5.0]), m.LeaveSignal([3.0]), 2000)
-    assert contract._arm_a.transition_start == 0       # untouched
-    assert contract._arm_b.transition_start == 2000    # fresh
+    assert contract._arm_a[0].transition_start == 0       # untouched
+    assert contract._arm_b[0].transition_start == 2000    # fresh
 
 
-def test_render_dual_only_primary_per_arm_used(load_main):
-    # Iteration 1 scope: N_TRAINS-per-arm nesting is NOT built — only ttls[0].
+def test_render_dual_only_primary_per_arm_used_at_default_n_trains(load_main):
+    # N_TRAINS=1 default — only ttls[0] per arm.
     m = load_main(**_dual_config())
     contract = m.ACTIVE_CONTRACT
     contract.render_dual(m.LeaveSignal([5.0, 8.0]), m.LeaveSignal([3.0, 6.0]), 0)
@@ -54,6 +54,17 @@ def test_render_dual_only_primary_per_arm_used(load_main):
     # the secondary ttls (8.0, 6.0) left no mark anywhere
     assert m.np.buf[m._physical(18)] != full
     assert m.np.buf[m._physical(4)] != full
+
+
+def test_render_dual_n_trains_per_arm(load_main):
+    # Iteration 2: N_TRAINS>1 works per-arm too, independently on each side.
+    m = load_main(**_dual_config(N_TRAINS=2))
+    contract = m.ACTIVE_CONTRACT
+    contract.render_dual(m.LeaveSignal([5.0, 8.0]), m.LeaveSignal([3.0, 6.0]), 0)
+    assert m.np.buf[m._physical(15)] != (0, 0, 0)  # arm a primary
+    assert m.np.buf[m._physical(18)] != (0, 0, 0)  # arm a secondary
+    assert m.np.buf[m._physical(7)] != (0, 0, 0)   # arm b primary
+    assert m.np.buf[m._physical(4)] != (0, 0, 0)   # arm b secondary
 
 
 def test_render_dual_both_arms_hidden_shows_only_anchor(load_main):

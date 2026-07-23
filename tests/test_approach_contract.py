@@ -117,8 +117,8 @@ def test_train_beyond_arm_len_is_dropped_anchor_and_markers_remain(load_main):
     assert m.LINE_COLOR not in m.np.buf
 
 
-def test_only_primary_ttl_used_secondary_ignored(load_main):
-    # Phase 1 scope: no N_TRAINS nesting for ApproachContract — only ttls[0].
+def test_only_primary_ttl_used_at_default_n_trains(load_main):
+    # N_TRAINS=1 default (unchanged) — only ttls[0] is ever shown.
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False, BRIGHTNESS=1.0,
@@ -126,6 +126,76 @@ def test_only_primary_ttl_used_secondary_ignored(load_main):
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0, 12.0]), 0)
     assert m.np.buf[m._physical(5)] == tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
     assert m.np.buf[m._physical(12)] != tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+
+
+# ── N_TRAINS (iteration 2: N trains per arm) ────────────────────────
+
+
+def test_n_trains_shows_multiple_simultaneous_markers(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, N_TRAINS=3,
+    )
+    m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0, 8.0, 12.0]), 0)
+    assert m.np.buf[m._physical(5)] != (0, 0, 0)
+    assert m.np.buf[m._physical(8)] != (0, 0, 0)
+    assert m.np.buf[m._physical(12)] != (0, 0, 0)
+    # a 4th train beyond N_TRAINS leaves no mark
+    m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0, 8.0, 12.0, 16.0]), 0)
+    marker = tuple(int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR)
+    assert m.np.buf[m._physical(16)] == marker
+
+
+def test_n_trains_primary_stays_unshifted_secondaries_hue_shifted(load_main):
+    # Dimming a secondary layer is the exact failure mode docs/insights.md §6
+    # ruled out (breaks at low absolute brightness on real hardware) — every
+    # CHASE-rendered train is full brightness regardless of rank, so
+    # differentiation must come from colour (hue), not brightness.
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, N_TRAINS=2, SECONDARY_HUE_SHIFT_DEG=20,
+    )
+    m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0, 8.0]), 0)
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+    shifted = tuple(
+        int(c * m.BRIGHTNESS) for c in m.hue_rotate(m.LINE_COLOR, 20)
+    )
+    assert m.np.buf[m._physical(5)] == full      # primary: unshifted
+    assert m.np.buf[m._physical(8)] == shifted    # secondary: hue-shifted
+    # both are FULL brightness — no dimming of the secondary at all
+    assert sum(m.np.buf[m._physical(8)]) > 0
+    assert m.np.buf[m._physical(8)] != m.np.buf[m._physical(5)]  # visibly distinct
+
+
+def test_n_trains_primary_wins_on_index_collision(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, N_TRAINS=2,
+    )
+    # 5.0 and 4.5 both ceil to offset 5 (see _position_offset) — same LED
+    m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0, 4.5]), 0)
+    full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
+    assert m.np.buf[m._physical(5)] == full  # primary's unshifted colour wins
+
+
+def test_n_trains_each_slot_chases_independently(load_main):
+    m = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
+        BRIGHTNESS=1.0, N_TRAINS=2,
+    )
+    contract = m.ACTIVE_CONTRACT
+    contract.render(m.LeaveSignal([5.0, 10.0]), 0)
+    assert contract._arm_a[0].index == 5
+    assert contract._arm_a[1].index == 10
+    # only the secondary train hops — its slot animates, the primary's
+    # slot must be completely unaffected (still settled at index 5)
+    contract.render(m.LeaveSignal([5.0, 9.0]), 0)
+    assert contract._arm_a[0].sweep_from is None   # primary: no new sweep
+    assert contract._arm_a[1].sweep_from == 10     # secondary: mid-sweep
 
 
 def test_hidden_signal_shows_anchor_and_markers_only(load_main):
@@ -157,8 +227,8 @@ def test_chase_first_appearance_snaps_immediately(load_main):
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert contract._arm_a.index == 10
-    assert contract._arm_a.sweep_from is None  # nothing to sweep from
+    assert contract._arm_a[0].index == 10
+    assert contract._arm_a[0].sweep_from is None  # nothing to sweep from
     assert m.np.buf[m._physical(10)] == full
 
 
@@ -170,8 +240,8 @@ def test_chase_disappearance_snaps_off_immediately(load_main):
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
     contract.render(m.LeaveSignal([]), 100)  # train no longer catchable
-    assert contract._arm_a.index is None
-    assert contract._arm_a.sweep_from is None
+    assert contract._arm_a[0].index is None
+    assert contract._arm_a[0].sweep_from is None
     assert m.LINE_COLOR not in m.np.buf
 
 
@@ -260,7 +330,7 @@ def test_chase_progress_uses_absolute_clock_not_relative(load_main):
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 50_000)
     contract.render(m.LeaveSignal([9.0]), 50_000)
-    assert contract._arm_a.transition_start == 50_000
+    assert contract._arm_a[0].transition_start == 50_000
     contract.render(m.LeaveSignal([9.0]), 52_000)  # +2000ms → halfway
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
     assert m.np.buf[m._physical(9)] == full
@@ -277,7 +347,7 @@ def test_repeated_render_same_target_does_not_restart_transition(load_main):
     contract.render(m.LeaveSignal([10.0]), 5000)  # same target again, later tick
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
     assert m.np.buf[m._physical(10)] == full  # still full, no re-fade
-    assert contract._arm_a.sweep_from is None
+    assert contract._arm_a[0].sweep_from is None
 
 
 def test_anchor_wins_when_train_lands_on_anchor_index(load_main):

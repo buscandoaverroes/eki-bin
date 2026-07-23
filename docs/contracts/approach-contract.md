@@ -260,9 +260,11 @@ recomputed every frame, since it's a fixed transform of a fixed colour.
 
 ## Bidirectional (phase 2)
 
-**Iteration 1 scope:** one primary train per arm — two trains showing
-simultaneously, one per direction. Not N-trains-per-arm nesting (that's
-iteration 2, deferred below).
+**Iteration 1 scope (this section):** one primary train per arm — two trains
+showing simultaneously, one per direction. `N_TRAINS`-per-arm nesting (more
+than one train per arm, on top of this) is iteration 2 — see "N trains per
+arm" below; it composes with everything in this section unchanged, each arm
+just gets a list of slots instead of a single one.
 
 **What's genuinely new, not just config:**
 
@@ -302,9 +304,60 @@ last regardless of how many arms are active, so it always wins.
 
 ---
 
+## N trains per arm (iteration 2)
+
+Reuses `N_TRAINS` — the same knob the arc contracts (`SandTimerContract`,
+`BreathingContract`) already use for nested-arc rendering — rather than a
+new dedicated knob. Same concept, extended to this paradigm: how many
+upcoming departures render simultaneously, soonest-first. Default `1` keeps
+iteration-1 behaviour (one train per arm) exactly as before.
+
+**Each arm now holds a LIST of `N_TRAINS` `_TrainState`s**, not one — every
+simultaneous marker gets its own independent CHASE transition, on its own
+clock, exactly like arm A and arm B already didn't interfere with each
+other in the bidirectional case. `_advance_arm(frame, slots, signal,
+arm_len, direction, base_color, phase_ms)` maps `signal.ttls[:N_TRAINS]`
+onto the slots (soonest-first → slot 0, 1, 2, …) and advances/paints each
+via `_advance_train` — the exact function every single-train case already
+used, called once per slot instead of once per arm.
+
+**Differentiating multiple simultaneous markers: hue, never dimming.**
+Every other contract that nests trains (`SandTimerContract`,
+`BreathingContract`) dims secondary layers via `BACKGROUND_BRIGHTNESS` — but
+`docs/insights.md` §6 already found that breaks at low absolute brightness
+on this hardware, which is the exact reason `EchoContract` differentiates by
+hue instead, and the exact reason the CHASE transition above exists (every
+train is *always* full brightness — dimming a slot here would silently undo
+that). So `ApproachContract` follows `EchoContract`'s precedent: slot 0 (the
+primary) renders `LINE_COLOR` unshifted; every slot beyond it is hue-rotated
+via `_layer_hue_shift(i)` (`SECONDARY_HUE_SHIFT_DEG` per index — the same
+knob, same formula `EchoContract` already uses). All markers stay full
+brightness regardless of rank.
+
+**Index collisions between slots resolve the same way `_paint_layers`
+already does:** slots are advanced/painted in *reverse* order (last slot
+first) so slot 0 is painted last and wins any overlap — the closest train
+always takes visual priority over a further-out one landing on the same LED.
+
+**Accepted simplification: no cross-tick train identity.** Stage 1
+(`LeaveSignal`) is deliberately ephemeral — rebuilt from scratch every tick,
+no persistent identity for "this specific train" (see
+`docs/contracts/display-contract.md`'s Stage 1 design). "Slot 0" means
+"whichever train is currently closest," not a specific physical train. If
+the current primary departs and the former rank-1 train becomes rank-0,
+slot 0's CHASE animates from the old primary's position to wherever that
+train already was, rather than continuing rank-1's own animation in place.
+This only matters in the moment a train departs and ranks shift — real
+per-train identity tracking (e.g. keying trains by scheduled departure time
+across ticks) would be a bigger structural change than "N trains, set in
+config" scoped for this iteration. Revisit if it reads as jarring on
+hardware.
+
+---
+
 ## Explicitly deferred (not this contract's job yet)
 
-- Iteration 2: N trains per arm (config-driven), not just one
+- Cross-tick train identity for N_TRAINS (see the simplification noted above)
 - Line-color palettes / metro-line static color scheme
 - IMU tap/shake interaction layer
 - NFC / provisioning of any kind

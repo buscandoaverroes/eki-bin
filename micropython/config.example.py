@@ -92,6 +92,9 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                            and new positions, always at full brightness —
 #                            never a dim intermediate value (avoids low-
 #                            brightness dithering flicker on this hardware).
+# N trains per arm (iteration 2) reuses N_TRAINS/SECONDARY_HUE_SHIFT_DEG
+# above — trains beyond the primary are hue-shifted, never dimmed (same
+# reasoning as "echo" above, and everything CHASE already does).
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24

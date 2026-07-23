@@ -757,12 +757,12 @@ class EchoContract(DisplayContract):
         _paint_layers(layers)
 
 
-class _ArmState:
-    """CHASE-transition state for ONE arm's train marker. Phase 1 needed
-    exactly one of these (implicitly, as ApproachContract's own attributes);
-    phase 2 (bidirectional) keeps two — one per arm — so each direction's
-    train animates independently, on its own clock, without interfering with
-    the other arm's."""
+class _TrainState:
+    """CHASE-transition state for ONE train marker. Phase 1/2 (single train
+    per arm) needed exactly one of these per arm; N_TRAINS>1 (iteration 2)
+    keeps a LIST of these per arm — one per rank (closest, 2nd-closest, …) —
+    so every simultaneous marker animates independently, on its own clock,
+    without interfering with any other slot's."""
 
     def __init__(self):
         self.index = None  # current/incoming train position, or None
@@ -772,12 +772,13 @@ class _ArmState:
         self.transition_start = None  # phase_ms the current sweep began
 
 
-def _advance_arm(frame, arm, target, color, phase_ms):
-    """Advance one arm's CHASE transition given this tick's target index (or
-    None), and paint its contribution into `frame` (mutated in place, NOT
-    returned). The one place the transition logic lives — render() (single
-    arm) and render_dual() (two arms) both call this, once per arm, so
-    phase 2 doesn't duplicate phase 1's logic.
+def _advance_train(frame, train, target, color, phase_ms):
+    """Advance one train's CHASE transition given this tick's target index
+    (or None), and paint its contribution into `frame` (mutated in place,
+    NOT returned). The one place the transition logic lives — every call
+    site (single train, N_TRAINS>1, bidirectional) goes through this, once
+    per train slot, so the logic exists exactly once regardless of how many
+    are active.
 
     A moving highlight sweeps LED-by-LED from the old position to the new
     one, one LED lit at a time, always at FULL brightness (mult=1.0,
@@ -790,31 +791,31 @@ def _advance_arm(frame, arm, target, color, phase_ms):
     touched LED is always a fully-populated 8-bit code, so dithering is
     never needed at all during a transition, not just tuned to be less
     visible. See docs/contracts/approach-contract.md § Chase transition."""
-    if target != arm.index:
+    if target != train.index:
         # A sweep only makes sense between two KNOWN positions. Appearing
         # from nothing (a train's first tick) or vanishing to nothing (no
         # longer catchable) has no LED to sweep from/to — snap instead, no
         # animation possible or needed.
-        if target is not None and arm.index is not None:
-            arm.sweep_from = arm.index
+        if target is not None and train.index is not None:
+            train.sweep_from = train.index
         else:
-            arm.sweep_from = None
-        arm.index = target
-        arm.color = color
-        arm.transition_start = phase_ms
+            train.sweep_from = None
+        train.index = target
+        train.color = color
+        train.transition_start = phase_ms
 
-    if arm.index is None:
-        return  # nothing to show for this arm right now
+    if train.index is None:
+        return  # nothing to show for this slot right now
 
-    if arm.sweep_from is None:
+    if train.sweep_from is None:
         # Settled (or just snapped in/out with nothing to sweep between) —
         # identical every frame until the position next changes.
-        frame[arm.index] = (arm.color, 1.0, "static")
+        frame[train.index] = (train.color, 1.0, "static")
         return
 
     progress = 1.0
-    if TRANSITION_MS > 0 and arm.transition_start is not None:
-        elapsed = phase_ms - arm.transition_start  # phase_ms: absolute
+    if TRANSITION_MS > 0 and train.transition_start is not None:
+        elapsed = phase_ms - train.transition_start  # phase_ms: absolute
         #   ticks_ms(), same "no snap-back across intervals" pattern the
         #   breathing envelopes use — see render_for_interval().
         progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
@@ -823,14 +824,53 @@ def _advance_arm(frame, arm, target, color, phase_ms):
     # the common one-LED-per-tick hop → a single sharp switch at the
     # halfway point; larger jumps sweep through every LED in between, each
     # getting an equal time-slice). `min(distance, ...)` clamps the final
-    # step to land exactly on `arm.index` at progress=1.0.
-    distance = abs(arm.index - arm.sweep_from)
-    sign = 1 if arm.index > arm.sweep_from else -1
+    # step to land exactly on `train.index` at progress=1.0.
+    distance = abs(train.index - train.sweep_from)
+    sign = 1 if train.index > train.sweep_from else -1
     step = min(distance, int(progress * (distance + 1)))
-    frame[arm.sweep_from + sign * step] = (arm.color, 1.0, "static")
+    frame[train.sweep_from + sign * step] = (train.color, 1.0, "static")
 
     if progress >= 1.0:
-        arm.sweep_from = None  # sweep finished — future frames render settled
+        train.sweep_from = None  # sweep finished — future frames render settled
+
+
+def _advance_arm(frame, slots, signal, arm_len, direction, base_color, phase_ms):
+    """Advance every train slot for ONE arm (up to len(slots) == N_TRAINS,
+    soonest-first, same rank convention as _paint_layers' N_TRAINS handling
+    elsewhere) and paint each into `frame`.
+
+    Slot 0 (the primary/closest train) renders `base_color` unshifted; every
+    slot beyond it is hue-rotated (_layer_hue_shift — the same per-index
+    scaling EchoContract already uses) so multiple simultaneous markers stay
+    visually distinguishable WITHOUT dimming. Dimming a secondary layer is
+    exactly the failure mode docs/insights.md §6 already ruled out (breaks
+    at low absolute brightness on this hardware) — hue doesn't have that
+    problem, and every CHASE-rendered train is full brightness anyway (see
+    _advance_train), so dimming a slot would also silently undo that.
+
+    Slots are advanced/painted in REVERSE order (last slot first) so slot 0
+    is painted LAST and wins any index collision — same convention
+    _paint_layers uses for arc-based contracts.
+
+    Note on identity: Stage 1 (LeaveSignal) is deliberately ephemeral and
+    tracks no train identity across ticks — "slot 0" means "whichever train
+    is currently closest," not a specific physical train. If the current
+    primary departs and the former rank-1 train becomes rank-0, slot 0's
+    CHASE will animate from the old primary's position to wherever that
+    train already was, rather than continuing rank-1's own animation. This
+    is an accepted simplification consistent with Stage 1's existing
+    "ephemeral, rebuilt every tick, no identity" design — true per-train
+    identity tracking would be a bigger structural change than "N trains,
+    set in config" scoped for this iteration."""
+    ttls = signal.ttls if signal.urgency is not HIDDEN else []
+    n = len(slots)
+    targets = [None] * n
+    for i, ttl in enumerate(ttls[:n]):
+        targets[i] = _arm_target(ttl, arm_len, direction)
+
+    for i in range(n - 1, -1, -1):
+        color = base_color if i == 0 else hue_rotate(base_color, _layer_hue_shift(i))
+        _advance_train(frame, slots[i], targets[i], color, phase_ms)
 
 
 class ApproachContract(DisplayContract):
@@ -841,10 +881,14 @@ class ApproachContract(DisplayContract):
 
     Phase 1: ARM_B_LEN=0, single direction — call render(signal, phase_ms),
     exactly as before. Phase 2 (bidirectional, DISPLAY_DIRECTION_B configured):
-    call render_dual(signal_a, signal_b, phase_ms) instead — one primary train
-    per arm, each with its own independent CHASE transition (_ArmState).
-    main()'s loop picks the entry point; ApproachContract itself doesn't know
-    which mode it's in beyond which method got called.
+    call render_dual(signal_a, signal_b, phase_ms) instead — one arm's worth
+    of trains per direction. main()'s loop picks the entry point;
+    ApproachContract itself doesn't know which mode it's in beyond which
+    method got called.
+
+    N_TRAINS (iteration 2, reusing the same knob the arc contracts use)
+    controls how many simultaneous markers each arm shows, soonest-first —
+    default 1, phase 1/2's original single-train-per-arm behaviour unchanged.
 
     Two independent brightness surfaces, matching how this actually reads to
     a viewer: ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS/MARKER_COLOR
@@ -864,21 +908,17 @@ class ApproachContract(DisplayContract):
         # Instance state, not class state: tracks the *last actually rendered*
         # position across calls, so a change in position can be detected and
         # crossfaded — unlike every other contract here, this one is not a
-        # pure function of (signal, phase_ms) alone. Two arms always exist;
-        # phase 1 (render()) simply never touches _arm_b.
-        self._arm_a = _ArmState()
-        self._arm_b = _ArmState()
+        # pure function of (signal, phase_ms) alone. Two arms' worth of slots
+        # always exist; phase 1 (render()) simply never touches _arm_b.
+        self._arm_a = [_TrainState() for _ in range(N_TRAINS)]
+        self._arm_b = [_TrainState() for _ in range(N_TRAINS)]
 
     def render(self, signal, phase_ms):
-        """Phase 1 — single direction. Unchanged since it was written; kept
-        as its own method (not render_dual with a None second signal) so a
-        phase-1 config's behaviour can never be perturbed by phase-2 code."""
-        target = None
-        if signal.urgency is not HIDDEN and signal.primary is not None:
-            target = _arm_target(signal.primary, ARM_A_LEN, "a")
-
+        """Phase 1 — single direction. Kept as its own method (not
+        render_dual with a None second signal) so a phase-1 config's
+        behaviour can never be perturbed by phase-2 code."""
         frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
-        _advance_arm(frame, self._arm_a, target, self.line_color, phase_ms)
+        _advance_arm(frame, self._arm_a, signal, ARM_A_LEN, "a", self.line_color, phase_ms)
 
         # Anchor is painted last so it always wins, even the instant a train
         # lands on ANCHOR_INDEX itself — it never participates in train logic.
@@ -887,22 +927,15 @@ class ApproachContract(DisplayContract):
         _write_frame(frame)
 
     def render_dual(self, signal_a, signal_b, phase_ms):
-        """Phase 2 — bidirectional: one primary train per arm, two
-        independent crossfades composited into the same frame. Arm "a" and
-        arm "b" occupy disjoint index ranges (ANCHOR_INDEX+offset vs
-        ANCHOR_INDEX-offset — see _arm_target), so there's no overlap to
-        resolve between them; only the anchor itself can coincide, and it's
-        painted last regardless."""
-        target_a = None
-        if signal_a.urgency is not HIDDEN and signal_a.primary is not None:
-            target_a = _arm_target(signal_a.primary, ARM_A_LEN, "a")
-        target_b = None
-        if signal_b.urgency is not HIDDEN and signal_b.primary is not None:
-            target_b = _arm_target(signal_b.primary, ARM_B_LEN, "b")
-
+        """Phase 2 — bidirectional: one arm's worth of trains per direction,
+        each with its own independent CHASE transition, composited into the
+        same frame. Arm "a" and arm "b" occupy disjoint index ranges
+        (ANCHOR_INDEX+offset vs ANCHOR_INDEX-offset — see _arm_target), so
+        there's no overlap to resolve between them; only the anchor itself
+        can coincide, and it's painted last regardless."""
         frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
-        _advance_arm(frame, self._arm_a, target_a, self.line_color, phase_ms)
-        _advance_arm(frame, self._arm_b, target_b, self.line_color, phase_ms)
+        _advance_arm(frame, self._arm_a, signal_a, ARM_A_LEN, "a", self.line_color, phase_ms)
+        _advance_arm(frame, self._arm_b, signal_b, ARM_B_LEN, "b", self.line_color, phase_ms)
         frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
         _write_frame(frame)
 

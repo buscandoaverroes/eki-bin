@@ -346,8 +346,7 @@ structural addition, not just numbers. Built:
       other's), only-primary-per-arm scope, anchor priority/no-collision,
       dispatch logic. 88 tests total, all passing
 - [x] **Validated on real hardware** — bidirectional confirmed working
-- [ ] Deferred to iteration 2: N trains per arm (config-driven nesting, not
-      just one)
+- [x] Iteration 2: N trains per arm — see below
 
 ### CHASE transition — replaced the brightness-blend crossfade ✅ implemented
 
@@ -384,6 +383,42 @@ visible.
 - [ ] Live on-hardware tuning of `TRANSITION_MS` for the chase feel (bounce/
       overlap variants explicitly not built this pass — chase alone, per the
       2026-07-23 discussion)
+
+### N trains per arm (iteration 2) ✅ implemented
+
+Reused `N_TRAINS` (the same knob `sandtimer`/`breathing*` already use) rather
+than a new dedicated knob — each arm now holds a LIST of `N_TRAINS`
+`_TrainState`s (renamed from `_ArmState`, one instance per train slot rather
+than per arm) instead of one, so every simultaneous marker gets its own
+independent CHASE transition. Default `1` keeps every prior behaviour
+byte-identical.
+
+- [x] `_TrainState` (renamed `_ArmState`) + `_advance_train` (renamed
+      `_advance_arm`, unchanged logic, now operates on one slot rather than
+      implicitly "the" arm)
+- [x] New `_advance_arm(frame, slots, signal, arm_len, direction,
+      base_color, phase_ms)` maps `signal.ttls[:N_TRAINS]` onto slots
+      soonest-first and advances/paints each
+- [x] Secondary trains differentiate by **hue** (`_layer_hue_shift`,
+      `SECONDARY_HUE_SHIFT_DEG` — same knob/formula `EchoContract` already
+      uses), never brightness — dimming a slot would silently undo the whole
+      point of the CHASE transition (every train always full brightness).
+      Direct continuation of the `docs/insights.md` §6 lesson
+- [x] Index collisions between slots resolve like `_paint_layers` already
+      does: slots painted in reverse order, slot 0 (primary) painted last,
+      wins any overlap
+- [x] Composes with bidirectional unchanged — both arms independently get
+      their own `N_TRAINS` slots
+- [x] Documented as an accepted simplification: no cross-tick train
+      identity (Stage 1 is ephemeral by design) — "slot 0" means "whichever
+      train is currently closest," so a rank shift when the primary departs
+      can look like slot 0 jumping to the former slot 1's position. Revisit
+      only if it reads as jarring on real hardware
+- [x] 5 new tests (single-direction: multiple simultaneous markers, primary
+      unshifted/secondaries hue-shifted at full brightness, collision
+      tie-break, independent per-slot chase state) + 1 dual-arm test. 95
+      tests total, all passing
+- [ ] **Not yet validated on real hardware** — host tests only so far
 
 ### Deferred to later sessions
 
