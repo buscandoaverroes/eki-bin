@@ -86,13 +86,21 @@ ARM_B_LEN = getattr(config, "ARM_B_LEN", 0)
 ANCHOR_COLOR = getattr(config, "ANCHOR_COLOR", (255, 200, 120))  # warm white/amber —
 #   distinct from both LINE_COLOR and FLOOR_COLOR so the station marker never
 #   reads as "a very close train" or "an empty slot".
+ANCHOR_BRIGHTNESS = getattr(config, "ANCHOR_BRIGHTNESS", 1.6)  # relative to a normal
+#   "full" position (mult=1.0) — >1.0 makes the anchor genuinely brighter than
+#   the BRIGHTNESS ceiling everything else tops out at, not just relying on
+#   colour alone to read as "the fixed one". Rendered via the STATIC path (see
+#   _write_frame), so this scales BRIGHTNESS LINEARLY — no gamma reshaping.
 POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
 # The train's own colour is fixed, NOT urgency-banded like PALETTE: in this
 # paradigm distance-to-anchor already encodes urgency continuously, so colour
 # is freed up to mean "this line" instead of re-encoding the same signal a
 # second way (same reasoning FLOOR_COLOR-not-dimmed already uses below).
 LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
-FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.05)  # 0 = idle LEDs fully off
+FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.15)  # 0 = idle LEDs fully off.
+#   Rendered via the STATIC path (see _write_frame) — a direct linear multiplier
+#   of BRIGHTNESS, no gamma. Needs to clear ~1 output code per FLOOR_COLOR
+#   channel or the floor truncates invisibly to black.
 FLOOR_COLOR = getattr(config, "FLOOR_COLOR", (80, 80, 80))  # dim neutral — NOT a
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Floor / idle state)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
@@ -277,6 +285,20 @@ def _quantize(value, res, ch):
     return q
 
 
+def _clamp255(value):
+    """Clip a float channel value into the valid 0..255 output range, then
+    truncate to int. `_quantize` does its own clamping for the dithered path;
+    this covers the two plain-truncation paths (DITHER off, and the STATIC
+    path in _write_frame) — both matter now that `mult` isn't guaranteed to
+    stay within 0..1 (e.g. ANCHOR_BRIGHTNESS > 1.0 to render brighter than a
+    normal "full" position)."""
+    if value < 0:
+        return 0
+    if value > 255:
+        return 255
+    return int(value)
+
+
 def _layer_mult(index):
     """Relative brightness (0..1) for the `index`-th train layer. index 0 (the
     primary) is always full-relative (1.0); each layer beyond it is dimmer by
@@ -296,27 +318,58 @@ def _layer_hue_shift(index):
 
 
 def _write_frame(frame):
-    """Composite a resolved frame — one (color, mult) or None per LOGICAL index —
-    onto the physical strip in ONE np.write(). This is the shared tail every
-    render path converges on: gamma-corrects `mult`, dithers, and honours the
-    `_physical()` HAL seam. `_paint_layers` builds `frame` from arc-shaped
-    layers; a contract with different geometry (e.g. ApproachContract's single
-    positions, not arcs) can build `frame` directly and call this instead —
-    the compositing *math* (gamma, dither, one write) doesn't care how the
-    frame was assembled, only `_paint_layers` needs to know about arcs."""
+    """Composite a resolved frame onto the physical strip in ONE np.write().
+    This is the shared tail every render path converges on, and honours the
+    `_physical()` HAL seam either way. `_paint_layers` builds `frame` from
+    arc-shaped layers; a contract with different geometry (e.g.
+    ApproachContract's single positions, not arcs) can build `frame` directly
+    and call this instead.
+
+    Each entry in `frame` is one of:
+      None                    — LED off
+      (color, mult)           — ANIMATED: gamma-corrects `mult`, then dithers
+                                 (if DITHER) — for a pixel whose value is
+                                 genuinely changing frame-to-frame (a mid-
+                                 crossfade position, a breathing arc). Dithering
+                                 approximates a fractional brightness by
+                                 averaging across frames — it has something to
+                                 average *because the target is moving*.
+      (color, mult, "static") — STATIC: `level = BRIGHTNESS * mult` directly
+                                 (no gamma, no dither) for a pixel whose target
+                                 does NOT change between frames (an idle/floor
+                                 LED, the always-on anchor, a train position
+                                 that's finished crossfading and is just
+                                 sitting there). Dithering a CONSTANT value
+                                 has nothing to average against — it just
+                                 toggles the same one-or-two codes forever,
+                                 which at low absolute brightness (few output
+                                 codes to work with) reads as visible flicker,
+                                 and because each of R/G/B is deliberately
+                                 phase-staggered per-LED (see `_residual` below
+                                 — decorrelation so LEDs don't flicker in
+                                 lockstep), that flicker shows up as
+                                 asynchronous per-channel noise: a "sparkling
+                                 rgb" idle LED instead of a smooth dim glow.
+                                 Same root cause docs/insights.md §6 already
+                                 hit with EchoContract's dimmed secondary layer
+                                 — see docs/contracts/approach-contract.md."""
     for logical in range(NUM_LEDS):
         phys = _physical(logical)
         entry = frame[logical]
         if entry is None:
             np[phys] = (0, 0, 0)
             continue
-        color, mult = entry
+        color, mult = entry[0], entry[1]
+        if len(entry) > 2 and entry[2] == "static":
+            level = BRIGHTNESS * mult
+            np[phys] = tuple(_clamp255(color[ch] * level) for ch in range(3))
+            continue
         level = BRIGHTNESS * gamma(mult)
         if DITHER:
             res = _residual[phys]
             np[phys] = tuple(_quantize(color[ch] * level, res, ch) for ch in range(3))
         else:
-            np[phys] = tuple(int(color[ch] * level) for ch in range(3))
+            np[phys] = tuple(_clamp255(color[ch] * level) for ch in range(3))
     np.write()
 
 
@@ -715,31 +768,47 @@ class ApproachContract(DisplayContract):
             #   ticks_ms(), same "no snap-back across intervals" pattern the
             #   breathing envelopes use — see render_for_interval().
             progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
+        animating = progress < 1.0  # mid-crossfade — see _write_frame's
+        #   ANIMATED vs STATIC split: only a pixel that's actually changing
+        #   frame-to-frame benefits from gamma+dither; a settled one should
+        #   render STATIC or risk the same low-brightness dither-flicker the
+        #   floor has (docs/contracts/approach-contract.md § Floor).
+
         # gamma-shape the brightness ramp (not the colour lerp — colour blending
         # doesn't suffer the same dim-end banding brightness does), same
-        # perceptual-smoothness rationale gamma() already documents.
+        # perceptual-smoothness rationale gamma() already documents. Only
+        # matters while animating; unused once settled (see below).
         fade_in = gamma(progress)
         fade_out = gamma(1.0 - progress)
 
-        frame = [(FLOOR_COLOR, FLOOR_BRIGHTNESS)] * NUM_LEDS
+        # Floor is always STATIC — it never changes frame-to-frame, so it never
+        # benefits from dithering, only risks flickering from it.
+        frame = [(FLOOR_COLOR, FLOOR_BRIGHTNESS, "static")] * NUM_LEDS
 
-        if progress < 1.0 and self._fading_index is not None:
+        if animating and self._fading_index is not None:
             frame[self._fading_index] = (
                 lerp_color(self._fading_color, FLOOR_COLOR, progress),
                 FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_out,
-            )
+            )  # ANIMATED: genuinely ramping down this frame
         else:
-            self._fading_index = None  # transition settled — stop tracking it
+            self._fading_index = None  # settled — stop tracking, no longer drawn
 
         if self._active_index is not None:
-            frame[self._active_index] = (
-                lerp_color(FLOOR_COLOR, self._active_color, progress),
-                FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_in,
-            )
+            if animating:
+                frame[self._active_index] = (
+                    lerp_color(FLOOR_COLOR, self._active_color, progress),
+                    FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_in,
+                )  # ANIMATED: genuinely ramping up this frame
+            else:
+                # Settled: identical every frame until the position next
+                # changes — render STATIC (see _write_frame) so it doesn't
+                # dither-flicker while just sitting there.
+                frame[self._active_index] = (self._active_color, 1.0, "static")
 
         # Anchor is painted last so it always wins, even the instant a train
         # lands on ANCHOR_INDEX itself — it never participates in train logic.
-        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, 1.0)
+        # Always STATIC: it's a fixed brightness forever, never animated.
+        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
         _write_frame(frame)
 
 

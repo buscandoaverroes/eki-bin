@@ -242,9 +242,20 @@ falls out of clean config-driven design.
        `tests/test_approach_contract.py`. `micropython/config_friend1.py`
        created with starting tuning values. **Still needed:** validate on the
        actual device (host tests only so far)
-4. [ ] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` on real hardware — started
-       (`config_friend1.py` computes `FLOOR_BRIGHTNESS≈0.21` from the bench
-       floor reading, see `docs/hardware.md`), needs live confirmation
+4. [x] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` on real hardware — first pass
+       found the floor **flickering with visible multicolour "sparkle"**, not
+       a smooth glow: the same low-brightness dithering artifact
+       `docs/insights.md` §6 already documented for `EchoContract`, now
+       showing up on a constant/idle pixel instead of an animated one. Fixed
+       by adding a STATIC render path (`_write_frame`, `main.py`) — no gamma,
+       no dither — for pixels that don't change frame-to-frame (floor, anchor,
+       a settled train position); only genuinely mid-crossfade pixels use the
+       gamma+dither ANIMATED path. `FLOOR_BRIGHTNESS` is now a direct linear
+       multiplier (not gamma-shaped), corrected default `0.15`. Also added
+       `ANCHOR_BRIGHTNESS` (default `1.6`) so the anchor reads brighter than a
+       normal "full" position, not just differently coloured — colour alone
+       wasn't a strong enough cue on the real strip. See
+       `docs/contracts/approach-contract.md` § Floor / idle state.
 5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
        at actual final brightness (not full brightness — see the `0.15` Qi
        ceiling in `docs/hardware.md`)

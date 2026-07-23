@@ -1,10 +1,10 @@
 # Contract: `ApproachContract` (positional / approach display)
 
-**Status:** design note — not yet implemented. Phase 1 build in progress on
-`feature/positional-display`; see `dev-status.md` for the active dev plan and
-test sequence. This doc is the durable concept reference (the *what and why*),
-kept separate from the dev plan (the *when and how*) per the existing
-`display-contract.md` / `dev-status.md` split.
+**Status:** implemented on `feature/positional-display`, real-hardware bring-up
+in progress on the 21-LED gift-jar strip. See `dev-status.md` for the active
+dev plan and test sequence. This doc is the durable concept reference (the
+*what and why*), kept separate from the dev plan (the *when and how*) per the
+existing `display-contract.md` / `dev-status.md` split.
 
 **Fits into:** the existing `time → LeaveSignal → DisplayContract → LEDs`
 pipeline in `docs/contracts/display-contract.md`. `ApproachContract` is a new
@@ -50,8 +50,14 @@ by config, not two separate contracts:
   existing multi-train (`N_TRAINS`) and board-portability (`LED_PIN`) work
   established elsewhere in this codebase.
 
-The anchor LED itself renders `ANCHOR_COLOR` at full brightness, always — it
-never participates in train logic and is never overwritten by a train position.
+The anchor LED itself renders `ANCHOR_COLOR` at `ANCHOR_BRIGHTNESS` — always —
+it never participates in train logic and is never overwritten by a train
+position. `ANCHOR_BRIGHTNESS` is a multiplier *relative to* a normal "full"
+position (`1.0`); real-hardware bring-up found colour alone wasn't a strong
+enough visual cue for "this one is fixed" — `ANCHOR_BRIGHTNESS > 1.0` (default
+`1.6`) makes it genuinely brighter than the ceiling everything else tops out
+at, not just differently coloured. See the STATIC render path below for how
+that's rendered without gamma reshaping.
 
 ## Position mapping
 
@@ -76,6 +82,29 @@ as "a fainter, more-distant train" rather than "an empty slot" — the whole poi
 of positional encoding is that position *is* the distance signal, so brightness
 must not also imply distance or the two axes fight each other. `FLOOR_BRIGHTNESS`
 is throwable to `0` for fully-off idle slots, independent of this color choice.
+
+**The floor is rendered STATIC, not through gamma+dither.** First real-hardware
+bring-up on the 21-LED gift strip found the floor "sparkling" — visible
+multicolour flicker, not a smooth dim glow. Root cause: at a low enough
+absolute brightness, each `FLOOR_COLOR` channel lands under one output code,
+so temporal dithering (which approximates a fractional value by toggling
+between adjacent codes and averaging over time) has to toggle *every frame* —
+and because each LED's R/G/B channels are deliberately phase-staggered from
+each other (`_residual`'s decorrelation, so LEDs don't flicker in lockstep),
+that toggling shows up as async per-channel colour noise instead of a blended
+glow. Same root cause `docs/insights.md` §6 already hit with `EchoContract`'s
+dimmed secondary layer.
+
+Dithering only pays for itself when a value is genuinely *changing*
+frame-to-frame (it has something to average against). The floor never
+changes — so it, the anchor, and a train position that's finished crossfading
+all render through `_write_frame`'s **STATIC** path instead: `level =
+BRIGHTNESS × mult` directly, no `gamma()`, no dithering, plain truncation.
+Only a pixel mid-crossfade (genuinely animating this frame) uses the
+**ANIMATED** path (`gamma()` + dithering). Because `FLOOR_BRIGHTNESS` is now a
+*linear* multiplier rather than gamma-shaped, it needs to be picked so
+`FLOOR_COLOR × BRIGHTNESS × FLOOR_BRIGHTNESS` clears at least ~1 output code
+per channel — too low and it truncates invisibly to black instead of flickering.
 
 ## Crossfade between position updates
 
@@ -111,7 +140,7 @@ than inventing new render logic:
 | Existing primitive | Reused for |
 |---|---|
 | `_write_frame()` (split off `_paint_layers`) | Compositing anchor + train positions + floor LEDs in one frame, one `np.write()` |
-| `gamma()` | Perceptual shaping of the crossfade brightness ramp |
+| `gamma()` | Perceptual shaping of the crossfade brightness ramp — ANIMATED path only, see Floor section above |
 | `lerp_color()` | Colour half of the crossfade (train color ↔ `FLOOR_COLOR`) |
 | absolute `ticks_ms()` phase pattern | Crossfade `progress`, same seamlessness guarantee as breathing envelopes |
 | `_physical()` HAL seam | Untouched — `ApproachContract` only changes *what* index a train maps to, not how a logical index maps to a physical LED |
@@ -127,9 +156,10 @@ ANCHOR_INDEX = 0
 ARM_A_LEN = 20
 ARM_B_LEN = 0
 ANCHOR_COLOR = (255, 200, 120)  # warm white/amber, distinct from LINE_COLOR + FLOOR_COLOR
+ANCHOR_BRIGHTNESS = 1.6         # >1.0 = brighter than a normal "full" position (STATIC, linear)
 POSITION_MINUTES_PER_LED = 1
 LINE_COLOR = (34, 139, 34)      # forest green — fixed, NOT urgency-banded (see below)
-FLOOR_BRIGHTNESS = 0.05         # throwable to 0
+FLOOR_BRIGHTNESS = 0.15         # LINEAR multiplier (STATIC path) — throwable to 0
 FLOOR_COLOR = (80, 80, 80)      # dim neutral, NOT a dimmed LINE_COLOR
 TRANSITION_MS = 4000            # crossfade duration, ms; 0 = instant jump
 ```

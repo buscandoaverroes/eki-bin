@@ -71,9 +71,11 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # ARM_A_LEN = 20          # LEDs available outward from the anchor, direction A
 # ARM_B_LEN = 0           # direction B; 0 = single-direction (phase 1) layout
 # ANCHOR_COLOR = (255, 200, 120)  # always-on anchor colour
+# ANCHOR_BRIGHTNESS = 1.6  # >1.0 = brighter than a normal "full" position
 # POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
 # LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded
-# FLOOR_BRIGHTNESS = 0.05  # idle-LED brightness; 0 = fully off
+# FLOOR_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
+#                            avoids low-brightness flicker); 0 = fully off
 # FLOOR_COLOR = (80, 80, 80)      # idle-LED colour, NOT a dimmed LINE_COLOR
 # TRANSITION_MS = 4000     # crossfade duration between position updates, ms
 

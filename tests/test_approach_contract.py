@@ -11,6 +11,13 @@ def _lit(np):
     return [i for i, px in enumerate(np.buf) if px != (0, 0, 0)]
 
 
+def _anchor_level(m):
+    # ANCHOR_BRIGHTNESS scales linearly (STATIC path, no gamma) and clamps to
+    # 255 — not the same as raw ANCHOR_COLOR once ANCHOR_BRIGHTNESS != 1.0.
+    level = m.BRIGHTNESS * m.ANCHOR_BRIGHTNESS
+    return tuple(min(255, int(c * level)) for c in m.ANCHOR_COLOR)
+
+
 # ── geometry helpers ─────────────────────────────────────────────
 
 
@@ -98,7 +105,7 @@ def test_train_beyond_arm_len_is_dropped_anchor_and_floor_remain(load_main):
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False, BRIGHTNESS=1.0,
     )
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([20.0]), 0)  # offset 20 > arm_len 5
-    assert m.np.buf[m._physical(0)] == m.ANCHOR_COLOR  # anchor still lit
+    assert m.np.buf[m._physical(0)] == _anchor_level(m)  # anchor still lit
     # no LED shows the line colour — the dropped train left no mark
     assert m.LINE_COLOR not in m.np.buf
 
@@ -121,7 +128,7 @@ def test_hidden_signal_shows_anchor_and_floor_only(load_main):
     )
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([]), 0)  # empty ttls → HIDDEN
     assert m.LINE_COLOR not in m.np.buf
-    assert m.np.buf[m._physical(0)] == m.ANCHOR_COLOR
+    assert m.np.buf[m._physical(0)] == _anchor_level(m)
 
 
 # ── crossfade ─────────────────────────────────────────────────────
@@ -218,7 +225,7 @@ def test_anchor_wins_when_train_lands_on_anchor_index(load_main):
     # literally target ANCHOR_INDEX itself under default config — confirm that
     # invariant, and that the anchor colour is what's there regardless.
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([0.0]), 0)
-    assert m.np.buf[m._physical(0)] == m.ANCHOR_COLOR
+    assert m.np.buf[m._physical(0)] == _anchor_level(m)
 
 
 # ── registry ───────────────────────────────────────────────────────

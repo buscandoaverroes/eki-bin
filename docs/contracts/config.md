@@ -49,9 +49,10 @@ it with `getattr(config, "NAME", default)`, so
 | `ARM_A_LEN` | int | no | `NUM_LEDS - 1` | **`approach` only.** LEDs available outward from the anchor, direction A |
 | `ARM_B_LEN` | int | no | `0` | **`approach` only.** LEDs available outward from the anchor, direction B (`0` = single-direction phase 1 layout) |
 | `ANCHOR_COLOR` | tuple | no | `(255, 200, 120)` | **`approach` only.** Always-on anchor colour — distinct from `LINE_COLOR` and `FLOOR_COLOR` |
+| `ANCHOR_BRIGHTNESS` | float | no | `1.6` | **`approach` only.** Anchor brightness relative to a normal "full" position (`1.0`); `>1.0` makes it genuinely brighter, not just differently coloured. Rendered via the STATIC path (linear, no gamma) |
 | `POSITION_MINUTES_PER_LED` | int | no | `1` | **`approach` only.** Minutes-to-leave each LED of offset from the anchor represents |
 | `LINE_COLOR` | tuple | no | `(34, 139, 34)` (forest green) | **`approach` only.** Fixed train colour — deliberately *not* urgency-banded, since position already encodes urgency continuously in this paradigm |
-| `FLOOR_BRIGHTNESS` | float | no | `0.05` | **`approach` only.** Brightness of idle (non-anchor, non-train) LEDs; `0` = fully off |
+| `FLOOR_BRIGHTNESS` | float | no | `0.15` | **`approach` only.** LINEAR multiplier of `BRIGHTNESS` for idle (non-anchor, non-train) LEDs — rendered STATIC (no gamma, no dither; see `docs/contracts/approach-contract.md` § Floor), so pick a value that clears ~1 output code per `FLOOR_COLOR` channel or it truncates invisibly to black. `0` = fully off |
 | `FLOOR_COLOR` | tuple | no | `(80, 80, 80)` | **`approach` only.** Idle-LED colour — deliberately *not* a dimmed `LINE_COLOR`, so an empty slot can't read as "a very distant train" |
 | `TRANSITION_MS` | int | no | `4000` | **`approach` only.** Crossfade duration between position updates, ms; `0` = instant jump |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
