@@ -268,13 +268,31 @@ falls out of clean config-driven design.
 
        **Third-pass finding, real jar (not clear bench):** the brown bottle
        shifts perceived colour noticeably (white anchor → soft orange-white,
-       green marker → yellow-green, gray floor → yellow — "not bad," logged
-       in `docs/hardware.md`) and its added darkness means brightness can go
-       *up* from the clear-air bench numbers (`BRIGHTNESS` toward `0.5`,
-       `ANCHOR_BRIGHTNESS` toward `2.0`). Also: **face-up beats
+       green train → yellow-green, gray idle ticks → yellow — "not bad,"
+       logged in `docs/hardware.md`) and its added darkness means brightness
+       can go *up* from the clear-air bench numbers (`BRIGHTNESS` toward
+       `0.5`, `ANCHOR_BRIGHTNESS` toward `2.0`). Also: **face-up beats
        downward-facing** for this bottle — reverses the original mounting
-       plan. Added `MARKER_SATURATION` (genuinely muted marker colour, not
-       just dimmer — `docs/contracts/approach-contract.md`).
+       plan.
+
+       **Fourth-pass: terminology rename.** A bug report ("MARKER_BRIGHTNESS
+       doesn't change the other 19 markers") surfaced that the actual mental
+       model in use — **anchor** = the "0"; **marker** = the idle tick LEDs
+       (what code/docs had been calling "floor"); "where the train is" = just
+       `BRIGHTNESS` itself, no separate knob at all — was simpler than what
+       got built, and is what should have been designed from the start.
+       Renamed throughout: `FLOOR_BRIGHTNESS`/`FLOOR_COLOR` →
+       `MARKER_BRIGHTNESS`/`MARKER_COLOR`; the old train-dot
+       `MARKER_BRIGHTNESS` knob removed entirely (train now always renders at
+       `BRIGHTNESS`, `mult=1.0`); `MARKER_FADE_FLOOR` → `LINE_FADE_FLOOR`;
+       `MARKER_SATURATION` → `LINE_SATURATION`. Net: three independent
+       brightness surfaces (`ANCHOR_BRIGHTNESS`, `MARKER_BRIGHTNESS`,
+       `BRIGHTNESS`) instead of four knobs across two confusingly-named
+       concepts. Also added `LINE_SATURATION` (genuinely muted train colour,
+       not just dimmer — a "few notches darker" request turned out to be
+       identical to brightness under the render pipeline's linear math, so a
+       real muted look needed the new `desaturate()` primitive instead —
+       `docs/contracts/approach-contract.md`).
 5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
        at actual final brightness (not full brightness — see the `0.15` Qi
        ceiling in `docs/hardware.md`)
