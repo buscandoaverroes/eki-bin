@@ -100,6 +100,44 @@ def test_hue_rotate_grey_is_unaffected(load_main):
     assert m.hue_rotate((128, 128, 128), 90) == (128, 128, 128)
 
 
+def test_desaturate_identity_at_one(load_main):
+    m = load_main()
+    assert m.desaturate((34, 139, 34), 1.0) == (34, 139, 34)
+
+
+def test_desaturate_zero_is_grey_at_same_value(load_main):
+    m = load_main()
+    r, g, b = m.desaturate((200, 50, 50), 0.0)
+    assert r == g == b  # fully grey
+    _, _, v_before = m._rgb_to_hsv(*(c / 255.0 for c in (200, 50, 50)))
+    _, _, v_after = m._rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    assert abs(v_before - v_after) < 0.02  # same brightness, not just same hue
+
+
+def test_desaturate_preserves_hue_and_value(load_main):
+    m = load_main()
+    h, _, v = m._rgb_to_hsv(*(c / 255.0 for c in (34, 139, 34)))
+    r, g, b = m.desaturate((34, 139, 34), 0.5)
+    h2, s2, v2 = m._rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    assert abs(h - h2) < 0.02
+    assert abs(v - v2) < 0.02
+    assert s2 < 1.0  # actually less saturated, not a no-op
+
+
+def test_desaturate_is_not_the_same_as_dimming(load_main):
+    # The whole reason desaturate() exists: scaling brightness (mult) can only
+    # ever produce a DARKER version of the same colour, never a MUTED one — a
+    # muted colour's channels move toward each other (toward the colour's own
+    # max channel), not toward zero. Confirm desaturate does the latter.
+    m = load_main()
+    muted = m.desaturate((34, 139, 34), 0.3)
+    dimmed = tuple(int(c * 0.5) for c in (34, 139, 34))
+    # dimming preserves the channel RATIOS (still exactly forest-green-shaped,
+    # just darker); desaturation collapses the channels toward each other.
+    assert muted[1] - muted[0] < 139 - 34  # G-R gap shrank (moved toward grey)
+    assert dimmed[1] - dimmed[0] == int((139 - 34) * 0.5)  # gap only scaled
+
+
 def test_gamma_contract(load_main):
     """Holds for the no-op stub AND the real curve: fixed endpoints, monotonic,
     in range. Once gamma() becomes `mult ** g`, add: assert m.gamma(0.5) < 0.5."""

@@ -21,6 +21,10 @@ SCHEDULE_FILE = "schedule.json"  # filename on device filesystem
 # ── Which trains ──────────────────────────────────────────────────
 DISPLAY_DIRECTION = "b"  # which timetable direction the ring shows
 #                          (V1 has no magnetometer; matches a key in schedule.json)
+# DISPLAY_DIRECTION_B = "a"  # "approach" contract, phase 2 (bidirectional)
+#                          only — a SECOND direction key, feeding arm B.
+#                          Unset = single-direction, phase 1. Also needs
+#                          ARM_B_LEN > 0 in config.py's approach-contract block.
 WALK_TO_STATION_MINS = 2.5  # room→platform; trains you can't catch are hidden
 
 # ── Display: hardware ─────────────────────────────────────────────
@@ -41,6 +45,7 @@ HEARTBEAT_PIN = "LED"  # status LED. "LED" is a Pico-2W-only alias — on boards
 BRIGHTNESS = 0.15  # 0.0–1.0 global ceiling — ambient, not blinding
 CONTRACT = "breathing"  # "sandtimer" | "color" | "breathing"
 #                         | "breathing_exponent" | "breathing_inverse" | "echo"
+#                         | "approach"
 COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
@@ -62,6 +67,34 @@ BACKGROUND_BRIGHTNESS = 0.35  # 0..1; relative brightness of the 2nd train's
 SECONDARY_HUE_SHIFT_DEG = 20  # degrees per train index beyond the primary
 SECONDARY_BREATHE_PERIOD_MS = 3000  # ms per breath cycle
 SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
+
+# "approach" contract only — positional/approach paradigm, see
+# docs/contracts/approach-contract.md. A train renders as a single LED that
+# moves toward ANCHOR_INDEX as it nears, instead of a growing/shrinking arc.
+# ANCHOR_INDEX = 0        # LED index of the station/anchor position
+# ARM_A_LEN = 20          # LEDs available outward from the anchor, direction A
+# ARM_B_LEN = 0           # direction B; 0 = single-direction (phase 1) layout
+# ANCHOR_COLOR = (255, 200, 120)  # always-on anchor ("the 0") colour
+# ANCHOR_BRIGHTNESS = 1.6  # >1.0 = brighter than a normal "full" position
+# POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
+# LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded.
+#                            Where the train currently is renders at
+#                            BRIGHTNESS directly — no separate brightness knob.
+# LINE_SATURATION = 1.0    # 1.0=unchanged; lower = a genuinely MUTED
+#                            (desaturated) LINE_COLOR, not just a dimmer one
+# MARKER_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
+#                            avoids low-brightness flicker) for the idle
+#                            "tick" LEDs — 0 = fully off. A train is never
+#                            dimmer than BRIGHTNESS itself.
+# MARKER_COLOR = (80, 80, 80)     # idle tick-LED colour, NOT a dimmed LINE_COLOR
+# TRANSITION_MS = 4000     # chase-transition duration, ms; 0 = instant switch.
+#                            A moving highlight sweeps LED-by-LED between old
+#                            and new positions, always at full brightness —
+#                            never a dim intermediate value (avoids low-
+#                            brightness dithering flicker on this hardware).
+# N trains per arm (iteration 2) reuses N_TRAINS/SECONDARY_HUE_SHIFT_DEG
+# above — trains beyond the primary are hue-shifted, never dimmed (same
+# reasoning as "echo" above, and everything CHASE already does).
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24

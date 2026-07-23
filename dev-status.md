@@ -3,7 +3,13 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.1 Qi power **confirmed, self-contained in a bottle** → NFC next
+## Current phase: v1.4 — ApproachContract gift build (branch `feature/positional-display`)
+
+> **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
+> (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
+> below. Immediate work is unrelated to provisioning: a new positional/approach
+> display paradigm (`docs/contracts/approach-contract.md`) for a friend gift
+> build. Concept doc has the *what/why*; this section has the *when/how*.
 
 > **Milestone (2026-07-13):** the whole unit — XIAO ESP32-C3 + 120-LED WS2812B-4020
 > tape + unbranded Qi receiver — placed in a wide-mouth glass pitcher and run off a
@@ -11,7 +17,7 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 > full "MCU + lights inside, powered wirelessly, no visible wire" concept ran
 > self-contained. The core v1.1 hardware thesis is proven. Bring-up details +
 > the one open caveat (full-brightness power headroom untested) in
-> `docs/hardware.md`. **Next: NFC** for app-free settings/station provisioning.
+> `docs/hardware.md`.
 
 V1 is a stable freeze point: full `time → LeaveSignal → DisplayContract → LEDs`
 pipeline, five display contracts, the animation/smoothing stack (gamma + dither +
@@ -195,6 +201,237 @@ differentiation axis:
 
 ---
 
+## V1.4 — ApproachContract + crossfade (friend gift build)
+
+Concept/design reference: `docs/contracts/approach-contract.md`. This section
+is the dev plan only — sequencing, hardware, config, and test order for this
+specific build session(s).
+
+**Scope note:** this is a new build for a friend gift, on a new XIAO, alongside
+the new positional/approach paradigm intended to eventually replace arc-based
+contracts for the "which train, how close" job. **Not in scope this pass:**
+line-color palettes, IMU, NFC/any provisioning, Matter/Embedded Swift rewrite,
+e-ink — later phases, don't over-engineer hooks for them beyond what naturally
+falls out of clean config-driven design.
+
+### Hardware (physical work, not firmware)
+
+- [x] New XIAO ESP32-C3, fresh flash
+- [x] WS2812B tape cut to **21 LEDs** (confirmed 1-LED-per-segment cut points —
+      no rounding needed); `make led-test` confirms all 21 light. Brightness
+      bench findings (0.15–0.2 = full, 0.005 = ideal floor) in `docs/hardware.md`
+- [x] Mount LEDs **face-up**, not downward-facing as originally planned —
+      tested both, face-up refracts/diffuses better through this bottle. Pure
+      mounting decision, no `ARC_ORIGIN`/`_physical()` flip needed in code
+- [ ] Direct solder to XIAO (no connector) — ~300–470Ω series resistor near
+      LED #1, ~1000µF bulk cap across 5V/GND at strip start (no dev-board
+      buffering on a direct-solder setup)
+- [ ] Alligator-clip test **before** committing to solder, fully outside the
+      bottle
+- [ ] Power via USB-C throughout; Qi-into-bottle fit is a separate mechanical
+      test, decoupled from firmware, **not this pass** (step 9 below)
+
+### Firmware build order
+
+1. [x] Alligator-clip strip to XIAO, outside bottle, home WiFi/dev `config.py`
+2. [x] Sanity-check LED indexing on the new 21-LED length (`make led-test`,
+       all 21 confirmed)
+3. [x] `ApproachContract` phase-1 implemented on `feature/positional-display`
+       (`ANCHOR_INDEX=0`, `ARM_A_LEN=20`, `ARM_B_LEN=0`) + 24 host tests, all
+       passing — `docs/contracts/approach-contract.md`,
+       `tests/test_approach_contract.py`. `micropython/config_friend1.py`
+       created with starting tuning values. **Still needed:** validate on the
+       actual device (host tests only so far)
+4. [x] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` on real hardware — first pass
+       found the floor **flickering with visible multicolour "sparkle"**, not
+       a smooth glow: the same low-brightness dithering artifact
+       `docs/insights.md` §6 already documented for `EchoContract`, now
+       showing up on a constant/idle pixel instead of an animated one. Fixed
+       by adding a STATIC render path (`_write_frame`, `main.py`) — no gamma,
+       no dither — for pixels that don't change frame-to-frame (floor, anchor,
+       a settled train position); only genuinely mid-crossfade pixels use the
+       gamma+dither ANIMATED path. `FLOOR_BRIGHTNESS` is now a direct linear
+       multiplier (not gamma-shaped), corrected default `0.15`. Also added
+       `ANCHOR_BRIGHTNESS` (default `1.6`) so the anchor reads brighter than a
+       normal "full" position, not just differently coloured — colour alone
+       wasn't a strong enough cue on the real strip. See
+       `docs/contracts/approach-contract.md` § Floor / idle state.
+
+       **Second-pass finding:** retuning `FLOOR_BRIGHTNESS` down (still too
+       bright at `0.10`) revealed the crossfading dot's brightness was
+       coupled to it too — a single shared scalar was governing both
+       "how dim is idle" and "what's the dot's fade floor," so tuning one
+       moved the other. Split into fully independent knobs:
+       `MARKER_BRIGHTNESS` (settled dot mult, default `1.0`) and
+       `MARKER_FADE_FLOOR` (dot's own fade-envelope floor, default `0.3`) —
+       `FLOOR_BRIGHTNESS` now *only* affects genuinely idle LEDs.
+
+       **Third-pass finding, real jar (not clear bench):** the brown bottle
+       shifts perceived colour noticeably (white anchor → soft orange-white,
+       green train → yellow-green, gray idle ticks → yellow — "not bad,"
+       logged in `docs/hardware.md`) and its added darkness means brightness
+       can go *up* from the clear-air bench numbers (`BRIGHTNESS` toward
+       `0.5`, `ANCHOR_BRIGHTNESS` toward `2.0`). Also: **face-up beats
+       downward-facing** for this bottle — reverses the original mounting
+       plan.
+
+       **Fourth-pass: terminology rename.** A bug report ("MARKER_BRIGHTNESS
+       doesn't change the other 19 markers") surfaced that the actual mental
+       model in use — **anchor** = the "0"; **marker** = the idle tick LEDs
+       (what code/docs had been calling "floor"); "where the train is" = just
+       `BRIGHTNESS` itself, no separate knob at all — was simpler than what
+       got built, and is what should have been designed from the start.
+       Renamed throughout: `FLOOR_BRIGHTNESS`/`FLOOR_COLOR` →
+       `MARKER_BRIGHTNESS`/`MARKER_COLOR`; the old train-dot
+       `MARKER_BRIGHTNESS` knob removed entirely (train now always renders at
+       `BRIGHTNESS`, `mult=1.0`); `MARKER_FADE_FLOOR` → `LINE_FADE_FLOOR`;
+       `MARKER_SATURATION` → `LINE_SATURATION`. Net: three independent
+       brightness surfaces (`ANCHOR_BRIGHTNESS`, `MARKER_BRIGHTNESS`,
+       `BRIGHTNESS`) instead of four knobs across two confusingly-named
+       concepts. Also added `LINE_SATURATION` (genuinely muted train colour,
+       not just dimmer — a "few notches darker" request turned out to be
+       identical to brightness under the render pipeline's linear math, so a
+       real muted look needed the new `desaturate()` primitive instead —
+       `docs/contracts/approach-contract.md`).
+5. [x] Iterate the transition feel — found the brightness-blend crossfade
+       flickering ("withering") at its low point on real hardware; replaced
+       with the CHASE transition (see below) — gamma/brightness-blend no
+       longer part of this contract's transition at all. `TRANSITION_MS`
+       duration itself still open to live taste-tuning
+6. [ ] Solder properly once satisfied (no more alligator clips)
+7. [ ] New `config_friend1.py` (friend's WiFi creds + hardcoded single
+       line/station) — keep separate from dev `config.py` rather than editing
+       it, so home dev config stays intact when swapping creds for handoff
+8. [ ] Final validation on friend's actual network before handoff
+9. [ ] *(Not this pass)* Physical fit test: Qi coil in bottle vs. wired
+       fallback — mechanical, independent of firmware work above
+
+### Startup sequence ("boot ceremony") — planned, design doc only
+
+Full design: `docs/contracts/startup-sequence.md`. Resolves the open fork in
+`docs/insights.md` §5 (does a boot animation break the clock illusion?) —
+decided **yes, bounded and one-time**: loading-circle spin during WiFi/NTP →
+"hanabi" burst on success → crossfade into the live contract, or a
+persistent red breathe on failure. Not started — real engineering risk is
+restructuring `connect_wifi()`'s blocking poll loop to interleave animation
+frames, not the animation math itself (all reuses existing primitives). Three
+open questions before coding, listed in the doc (skippable/config-gated?
+hanabi shape contract-agnostic or anchor-relative? failure recovery — reset
+required, or auto-retry?).
+
+### Phase 2 — bidirectional (iteration 1: one train per arm) ✅ implemented
+
+`ANCHOR_INDEX`/`ARM_A_LEN`/`ARM_B_LEN` index math was genuinely config-only
+as promised. What wasn't: *which signals feed the two arms* — a real
+structural addition, not just numbers. Built:
+
+- [x] `DISPLAY_DIRECTION_B` config (a 2nd `schedule.json` direction key,
+      feeding arm B; `None` default = phase 1 unchanged)
+- [x] `_ArmState` — crossfade state factored out of `ApproachContract`
+      itself; the contract now always holds two (`_arm_a`, `_arm_b`)
+- [x] `_advance_arm()` — the crossfade math, now in one place, called once
+      per arm by both `render()` (phase 1, unchanged) and the new
+      `render_dual(signal_a, signal_b, phase_ms)` (phase 2)
+- [x] `_render_dispatch()` in `main.py` — picks `render` vs `render_dual`
+      (`signal_b is not None and hasattr(contract, "render_dual")`); every
+      other contract and phase-1 configs completely unaffected
+- [x] No index-collision handling needed — arm A/B occupy disjoint ranges by
+      construction (`_arm_target`); only the anchor can coincide, and it's
+      always painted last
+- [x] Uneven `NUM_LEDS` (no clean centre): confirmed **not** a code problem —
+      `ANCHOR_INDEX`/arm lengths are independent knobs already; recommended
+      letting arms differ by 1 LED rather than building a wide-anchor mode
+- [x] 9 new tests (`tests/test_approach_dual.py`) — both arms land correctly,
+      independent crossfade timing (one arm's transition doesn't perturb the
+      other's), only-primary-per-arm scope, anchor priority/no-collision,
+      dispatch logic. 88 tests total, all passing
+- [x] **Validated on real hardware** — bidirectional confirmed working
+- [x] Iteration 2: N trains per arm — see below
+
+### CHASE transition — replaced the brightness-blend crossfade ✅ implemented
+
+Real-hardware bring-up on bidirectional found the transition's low point
+"withering" — the same low-brightness dithering flicker the marker ticks and
+`EchoContract`'s secondary layer had already hit, now on a genuinely
+*animated* pixel (so it couldn't be fixed by rendering it STATIC — that
+would freeze the fade, not smooth it). Discussed four+ alternative
+transition paradigms that avoid dipping into low brightness at all (colour
+change, hard-cut overlap, "bounce" overshoot, chase/sweep) and built
+**chase**: a moving highlight sweeps LED-by-LED from the old position to the
+new one, always at full brightness — never a dim intermediate value, so
+dithering is never *needed* during a transition, not just tuned to be less
+visible.
+
+- [x] `_ArmState` reworked: `active_index`/`active_color`/`fading_index`/
+      `fading_color` → `index`/`color`/`sweep_from`
+- [x] `_advance_arm()` rewritten: one-LED hops (the common case) are a single
+      sharp switch at the transition's midpoint; multi-LED hops sweep
+      through every intermediate LED, each getting an equal time-slice —
+      reuses the sequential-sweep idea `led_test.py`'s bring-up `chase()`
+      already proved on this hardware. Appearing-from-nothing/vanishing-to-
+      nothing snap instead of sweeping (no second endpoint to animate
+      toward)
+- [x] `LINE_FADE_FLOOR` config **removed entirely** — dead knob once no
+      pixel is ever dim during a transition
+- [x] `gamma()`/`lerp_color()` no longer used by `ApproachContract` at all
+      (still used elsewhere — `BreathingContract` etc. — untouched)
+- [x] Tests rewritten for the new behaviour (sharp midpoint switch,
+      multi-LED sweep sequencing, snap-on-appear/vanish, and a direct
+      invariant test: every rendered pixel is always exactly full brightness
+      or the marker baseline, never anything in between). 90 tests total,
+      all passing
+- [ ] Live on-hardware tuning of `TRANSITION_MS` for the chase feel (bounce/
+      overlap variants explicitly not built this pass — chase alone, per the
+      2026-07-23 discussion)
+
+### N trains per arm (iteration 2) ✅ implemented
+
+Reused `N_TRAINS` (the same knob `sandtimer`/`breathing*` already use) rather
+than a new dedicated knob — each arm now holds a LIST of `N_TRAINS`
+`_TrainState`s (renamed from `_ArmState`, one instance per train slot rather
+than per arm) instead of one, so every simultaneous marker gets its own
+independent CHASE transition. Default `1` keeps every prior behaviour
+byte-identical.
+
+- [x] `_TrainState` (renamed `_ArmState`) + `_advance_train` (renamed
+      `_advance_arm`, unchanged logic, now operates on one slot rather than
+      implicitly "the" arm)
+- [x] New `_advance_arm(frame, slots, signal, arm_len, direction,
+      base_color, phase_ms)` maps `signal.ttls[:N_TRAINS]` onto slots
+      soonest-first and advances/paints each
+- [x] Secondary trains differentiate by **hue** (`_layer_hue_shift`,
+      `SECONDARY_HUE_SHIFT_DEG` — same knob/formula `EchoContract` already
+      uses), never brightness — dimming a slot would silently undo the whole
+      point of the CHASE transition (every train always full brightness).
+      Direct continuation of the `docs/insights.md` §6 lesson
+- [x] Index collisions between slots resolve like `_paint_layers` already
+      does: slots painted in reverse order, slot 0 (primary) painted last,
+      wins any overlap
+- [x] Composes with bidirectional unchanged — both arms independently get
+      their own `N_TRAINS` slots
+- [x] Documented as an accepted simplification: no cross-tick train
+      identity (Stage 1 is ephemeral by design) — "slot 0" means "whichever
+      train is currently closest," so a rank shift when the primary departs
+      can look like slot 0 jumping to the former slot 1's position. Revisit
+      only if it reads as jarring on real hardware
+- [x] 5 new tests (single-direction: multiple simultaneous markers, primary
+      unshifted/secondaries hue-shifted at full brightness, collision
+      tie-break, independent per-slot chase state) + 1 dual-arm test. 95
+      tests total, all passing
+- [ ] **Not yet validated on real hardware** — host tests only so far
+
+### Deferred to later sessions
+
+- [ ] Line-color palette / metro-line static color scheme
+- [ ] IMU tap/shake interaction layer (see Open decisions — planned as a
+      *runtime* interaction layer, not a provisioning mechanism)
+- [ ] NFC / any provisioning mechanism (see Open decisions — under
+      reconsideration, not blocking this build)
+- [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
+      block any of the above
+
+---
+
 ## V1.5 — Round PCB LED ring (still MicroPython)
 
 - [ ] Solder OSTW3535C1A SMD chips onto AE-27mm-TH round PCB in ring formation
@@ -249,9 +486,10 @@ differentiation axis:
 | Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
 | WCR power at full brightness | ✅ characterized (2026-07-13) | `BRIGHTNESS=1.0` full-white froze the Qi path (rail collapse) and tripped MacBook USB overcurrent. `0.15` is the stable ceiling on both — already visually "full" for the 120-LED tape. Real ceiling is ≈0.15 or lower; see `docs/hardware.md` |
 | LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
-| NFC provisioning approach | ✅ decided (2026-07) | No-app/Shortcuts route ruled out on the bench (iOS generic-NDEF API breaks on ISO-15693/Type-5). Building a minimal first-party iOS app on low-level ISO-15693. See `docs/nfc-provisioning.md` |
-| iOS NFC app: separate repo? | 🔲 open | Leaning yes (separate Swift/Xcode toolchain). Tag data contract stays in this repo as the shared interface. `docs/nfc-provisioning.md` §7 |
-| Tag payload: NDEF vs private format | 🔲 open (leaning private) | Private length+CRC+JSON, no NFC-NDEF compliance needed (no 3rd-party reader in the picture). `docs/nfc-provisioning.md` §4, §7 |
+| NFC provisioning approach | ⏸ on hold (2026-07-23) | The custom-iOS-app plan (`docs/nfc-provisioning.md`) hit two stacked toolchain walls: the dev Mac (2019 Intel MacBook Air) is structurally capped below the macOS/Xcode version needed for iOS-26 builds, and iOS NFC reading needs the paid $99/yr Apple Developer Program regardless. Reconsidering the whole provisioning *mechanism*, not just working around the walls — candidates include ESP32 SoftAP + browser form (no app, cross-platform) and passive NTAG213 (Type-2, not Type-5 — iOS Shortcuts *does* work on Type-2) station cards, closer to the original concept. Longer-term direction leans toward an Embedded Swift/Matter rewrite (own track, own timeline — see below), which would remove the custom-app requirement entirely: settings live in Matter attributes edited from the Home app, no Xcode/App Store gate. Not blocking the v1.4 gift build. |
+| iOS NFC app: separate repo? | ⏸ moot while approach is on hold | Was leaning yes if the custom-app plan resumes. `docs/nfc-provisioning.md` §7 |
+| Tag payload: NDEF vs private format | ⏸ moot while approach is on hold | Was leaning private (length+CRC+JSON). `docs/nfc-provisioning.md` §4, §7 |
+| V2 rewrite target: Rust/Embassy vs. Embedded Swift/Matter | 🔲 open, new (2026-07-23) | Two independent V2 candidates now on the table, arrived at from different directions. Embedded Swift/Matter would also solve provisioning (Home app UI, no custom app, no entitlement gate) but the toolchain is experimental (not source-stable, real setup friction reported) and means re-deriving the whole display pipeline (contracts, gamma/dither, config) from scratch. Not deciding yet — V1.4/V1.5 firmware work doesn't depend on this. |
 | MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
 | E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |
 | Station card storage | 🔲 open | Dish / card holder / pinned to noticeboard |

@@ -117,6 +117,65 @@ full-white-ish 120-LED frame, across the three sources:
 
 ---
 
+## Bring-up log — 21-LED gift-jar strip, brightness (2026-07-23)
+
+New XIAO ESP32-C3 + WS2812B tape cut to **21 LEDs** for the friend gift build
+(v1.4, `ApproachContract` — see `dev-status.md` § V1.4). `make led-test`
+confirmed all 21 light on `DATA_PIN=2`. `led_test.py`'s `BRIGHTNESS` is a flat
+linear scale with no gamma correction, so these readings are directly
+comparable to what `main.py`'s global `BRIGHTNESS` produces at `mult=1.0`:
+
+- **`0.15`–`0.2`** reads as a good "full/max" level — bright enough to read
+  clearly, not blinding. Matches the existing `0.15` Qi-safe ceiling from the
+  120-LED bring-up above, though this is a much shorter strip so the ceiling
+  here is a visual/comfort call, not a power one.
+- **`0.005`** is the sweet spot for an idle/"floor" level — `0.01` already
+  read as almost too bright. An order of magnitude below the "full" reading.
+
+**Translating to `ApproachContract`'s two-tier brightness:** `FLOOR_BRIGHTNESS`
+is a *multiplier* run through `gamma()` (`BRIGHTNESS × FLOOR_BRIGHTNESS^GAMMA`),
+not a directly-comparable absolute level like `led_test.py`'s flat scale.
+Solving for the bench-preferred `≈0.005` absolute floor at `BRIGHTNESS=0.15`,
+default `GAMMA=2.2`: `FLOOR_BRIGHTNESS ≈ 0.21` — the contract's built-in
+default of `0.05` is roughly 10× dimmer than this and was not the right
+starting point. `config_friend1.py` uses the corrected `0.21` starting value;
+still expect live retuning once mounted in the actual jar (diffusion changes
+perception).
+
+**LED orientation (2026-07-23 follow-up):** originally planned downward-facing
+(max refraction off the counter/base — see `dev-status.md` § V1.4). Tested
+both ways in the actual **brown glass bottle**; **face-up reads better** —
+the opposite of the original plan. Noted here since it's a plan reversal, not
+just a confirmation.
+
+**Brown bottle colour filtering (2026-07-23):** the bottle glass itself
+noticeably shifts perceived colour — confirmed in the actual jar, not just on
+open bench:
+
+| Rendered colour | Reads as, through the brown glass |
+|---|---|
+| White (`ANCHOR_COLOR`) | Soft orange-white |
+| Forest green (`LINE_COLOR`) | Yellow-green |
+| Dim neutral gray (`FLOOR_COLOR`) | Yellow |
+
+Read as a pleasant effect, not a defect — "that's actually not bad." Two
+follow-on findings from the same session:
+
+- **The added darkness from the brown glass means brightness can go up.**
+  A clear/bench readout of "too bright" doesn't hold once diffused through
+  brown glass — `BRIGHTNESS` moved from the bench-tuned `0.15` up toward
+  `0.5`, `ANCHOR_BRIGHTNESS` from `1.6` toward `2.0`, in the actual jar. All
+  bench brightness numbers above are a clear-air starting point, not the
+  in-jar final values — confirms diffusion/perception in the real jar is the
+  final tuning authority, same lesson `docs/insights.md` §3/§5 already drew
+  from the V1 jar-diffusion assessment.
+- **Parked idea:** 2–3 "bin filter" colour presets that pre-shift the
+  rendered RGB to compensate for (or lean into) this bottle's amber cast —
+  not built, just noted as worth a future look if colour fidelity through
+  glass becomes a priority again (e.g. for a different, less-tinted bottle).
+
+---
+
 ## NFC — ST25DV dynamic tag (v1.x "givable" phase)
 
 **Purpose:** provisioning — tap the jar with an iPhone to load a station

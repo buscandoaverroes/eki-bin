@@ -35,6 +35,11 @@ SCHEDULE_FILE = getattr(config, "SCHEDULE_FILE", "schedule.json")
 
 # Which trains
 DISPLAY_DIRECTION = getattr(config, "DISPLAY_DIRECTION", "b")
+DISPLAY_DIRECTION_B = getattr(config, "DISPLAY_DIRECTION_B", None)  # phase 2 —
+#   bidirectional ApproachContract only. Set to a SECOND schedule.json
+#   direction key (DISPLAY_DIRECTION feeds arm "a", this feeds arm "b") to show
+#   one train per arm. None (default) = single-direction, phase 1 unchanged.
+#   Ignored entirely by every other contract (see render_for_interval()).
 WALK_TO_STATION_MINS = getattr(config, "WALK_TO_STATION_MINS", 2.5)
 # [→ NFC] WALK could later be read from the station card, not config.
 
@@ -75,6 +80,46 @@ SECONDARY_BREATHE_FLOOR = getattr(config, "SECONDARY_BREATHE_FLOOR", 0.7)  # hig
 #   this is a subtle differentiation pulse, not the urgency-signalling breath
 #   BreathingContract's own BREATHE_FLOOR drives; deliberately separate knobs
 #   so tuning one doesn't fight the other.
+
+# ApproachContract only — positional paradigm, see docs/contracts/approach-contract.md.
+# ANCHOR_INDEX/ARM_*_LEN are one arm-generic mechanism: phase 1 (this build) sets
+# ARM_B_LEN=0 for a single direction; phase 2 (bidirectional) is the same code
+# path with different config, not a second contract.
+ANCHOR_INDEX = getattr(config, "ANCHOR_INDEX", 0)
+ARM_A_LEN = getattr(config, "ARM_A_LEN", NUM_LEDS - 1)
+ARM_B_LEN = getattr(config, "ARM_B_LEN", 0)
+ANCHOR_COLOR = getattr(config, "ANCHOR_COLOR", (255, 200, 120))  # warm white/amber —
+#   distinct from both LINE_COLOR and MARKER_COLOR so the anchor never
+#   reads as "a very close train" or "an empty tick".
+ANCHOR_BRIGHTNESS = getattr(config, "ANCHOR_BRIGHTNESS", 1.6)  # relative to a normal
+#   "full" position (mult=1.0) — >1.0 makes the anchor genuinely brighter than
+#   the BRIGHTNESS ceiling everything else tops out at, not just relying on
+#   colour alone to read as "the fixed one". Rendered via the STATIC path (see
+#   _write_frame), so this scales BRIGHTNESS LINEARLY — no gamma reshaping.
+POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
+# The train's own colour is fixed, NOT urgency-banded like PALETTE: in this
+# paradigm distance-to-anchor already encodes urgency continuously, so colour
+# is freed up to mean "this line" instead of re-encoding the same signal a
+# second way (same reasoning MARKER_COLOR-not-dimmed already uses below).
+LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
+LINE_SATURATION = getattr(config, "LINE_SATURATION", 1.0)  # 1.0=unchanged;
+#   lower = a genuinely MUTED (desaturated) LINE_COLOR, not just a dimmer one
+#   — see desaturate()'s docstring for why those are different transforms.
+#   Applied once at class-definition time (ApproachContract.line_color).
+# Where the train currently is renders at BRIGHTNESS directly (mult=1.0,
+# STATIC path, always — see the CHASE transition below, which never dims a
+# train at all). Two independent brightness surfaces total:
+# ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS (the idle ticks, below) —
+# BRIGHTNESS itself is the train's, with no separate scalar on top.
+MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.15)  # LINEAR multiplier
+#   of BRIGHTNESS for the idle "tick" LEDs — every position that ISN'T the
+#   anchor or the train right now (the gaps on the thermometer). Rendered via
+#   the STATIC path (see _write_frame) — direct linear, no gamma. Needs to
+#   clear ~1 output code per MARKER_COLOR channel or it truncates invisibly
+#   to black. 0 = idle LEDs fully off.
+MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
+#   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
+TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
 
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
@@ -201,6 +246,32 @@ def _physical(logical):
     return logical  # "near" (default): logical index == physical index
 
 
+def _position_offset(ttl):
+    """time-to-leave (minutes) → integer offset from the anchor (always ≥1),
+    POSITION_MINUTES_PER_LED minutes per LED — the ApproachContract analogue of
+    _arc_len, but a single step count rather than a growing arc length. (ttl is
+    guaranteed ≥0 — uncatchable was already dropped in Stage 1.)"""
+    return max(1, math.ceil(ttl / POSITION_MINUTES_PER_LED))
+
+
+def _arm_target(ttl, arm_len, direction):
+    """time-to-leave → a logical strip index along one arm of ApproachContract's
+    anchor/arm geometry, or None if the offset exceeds that arm's length —
+    dropped, the same "uncatchable" precedent time_to_leave() already applies
+    for trains inside WALK_TO_STATION_MINS: an approach contract can't show a
+    train further out than the strip's physical arm reaches, just like an arc
+    contract can't grow an arc past NUM_LEDS.
+
+    direction: "a" walks outward with increasing indices (ANCHOR_INDEX + offset,
+    phase 1's only active arm); "b" walks the other way (ANCHOR_INDEX - offset,
+    phase 2 / bidirectional). Same function either way — arm choice is a config
+    question (ARM_A_LEN vs ARM_B_LEN), not a code fork."""
+    offset = _position_offset(ttl)
+    if offset > arm_len:
+        return None
+    return ANCHOR_INDEX + offset if direction == "a" else ANCHOR_INDEX - offset
+
+
 def _heartbeat_pin(name):
     """Construct the status-heartbeat Pin, or None if disabled. Pulled out as its
     own function (rather than inline in main()) purely so it's host-testable
@@ -230,6 +301,20 @@ def _quantize(value, res, ch):
     return q
 
 
+def _clamp255(value):
+    """Clip a float channel value into the valid 0..255 output range, then
+    truncate to int. `_quantize` does its own clamping for the dithered path;
+    this covers the two plain-truncation paths (DITHER off, and the STATIC
+    path in _write_frame) — both matter now that `mult` isn't guaranteed to
+    stay within 0..1 (e.g. ANCHOR_BRIGHTNESS > 1.0 to render brighter than a
+    normal "full" position)."""
+    if value < 0:
+        return 0
+    if value > 255:
+        return 255
+    return int(value)
+
+
 def _layer_mult(index):
     """Relative brightness (0..1) for the `index`-th train layer. index 0 (the
     primary) is always full-relative (1.0); each layer beyond it is dimmer by
@@ -248,9 +333,65 @@ def _layer_hue_shift(index):
     return 0 if index == 0 else SECONDARY_HUE_SHIFT_DEG * index
 
 
+def _write_frame(frame):
+    """Composite a resolved frame onto the physical strip in ONE np.write().
+    This is the shared tail every render path converges on, and honours the
+    `_physical()` HAL seam either way. `_paint_layers` builds `frame` from
+    arc-shaped layers; a contract with different geometry (e.g.
+    ApproachContract's single positions, not arcs) can build `frame` directly
+    and call this instead.
+
+    Each entry in `frame` is one of:
+      None                    — LED off
+      (color, mult)           — ANIMATED: gamma-corrects `mult`, then dithers
+                                 (if DITHER) — for a pixel whose value is
+                                 genuinely changing frame-to-frame (a mid-
+                                 crossfade position, a breathing arc). Dithering
+                                 approximates a fractional brightness by
+                                 averaging across frames — it has something to
+                                 average *because the target is moving*.
+      (color, mult, "static") — STATIC: `level = BRIGHTNESS * mult` directly
+                                 (no gamma, no dither) for a pixel whose target
+                                 does NOT change between frames (an idle/floor
+                                 LED, the always-on anchor, a train position
+                                 that's finished crossfading and is just
+                                 sitting there). Dithering a CONSTANT value
+                                 has nothing to average against — it just
+                                 toggles the same one-or-two codes forever,
+                                 which at low absolute brightness (few output
+                                 codes to work with) reads as visible flicker,
+                                 and because each of R/G/B is deliberately
+                                 phase-staggered per-LED (see `_residual` below
+                                 — decorrelation so LEDs don't flicker in
+                                 lockstep), that flicker shows up as
+                                 asynchronous per-channel noise: a "sparkling
+                                 rgb" idle LED instead of a smooth dim glow.
+                                 Same root cause docs/insights.md §6 already
+                                 hit with EchoContract's dimmed secondary layer
+                                 — see docs/contracts/approach-contract.md."""
+    for logical in range(NUM_LEDS):
+        phys = _physical(logical)
+        entry = frame[logical]
+        if entry is None:
+            np[phys] = (0, 0, 0)
+            continue
+        color, mult = entry[0], entry[1]
+        if len(entry) > 2 and entry[2] == "static":
+            level = BRIGHTNESS * mult
+            np[phys] = tuple(_clamp255(color[ch] * level) for ch in range(3))
+            continue
+        level = BRIGHTNESS * gamma(mult)
+        if DITHER:
+            res = _residual[phys]
+            np[phys] = tuple(_quantize(color[ch] * level, res, ch) for ch in range(3))
+        else:
+            np[phys] = tuple(_clamp255(color[ch] * level) for ch in range(3))
+    np.write()
+
+
 def _paint_layers(layers):
-    """Composite multiple (color, lit, mult) arcs onto the strip in ONE frame —
-    the paradigm-independent primitive `_paint` is built on. Each layer is a
+    """Composite multiple (color, lit, mult) arcs into a frame — the
+    paradigm-independent primitive `_paint` is built on. Each layer is a
     logical-position count (`lit`) exactly like `_paint` takes; this is what
     makes "N trains" work identically for a bar, a ring, or a randomized layout:
     none of this function's geometry knowledge is paradigm-specific — that all
@@ -260,30 +401,13 @@ def _paint_layers(layers):
     FIRST, so entries EARLIER in the list win where arcs overlap. In practice
     `layers` is ordered primary-first (brightest, usually shortest), so the
     primary always wins the overlap — this holds even in the edge case where two
-    trains happen to produce the same arc length. One np.write() regardless of
-    layer count, so temporal dithering stays coherent across frames (multiple
-    separate _paint() calls would each flush the strip, wasting writes and
-    fighting the dither residual)."""
+    trains happen to produce the same arc length."""
     frame = [None] * NUM_LEDS  # logical position → (color, mult) or None (dark)
     for color, lit, mult in layers[::-1]:  # slicing, not reversed() — some
         # MicroPython builds omit the reversed() builtin; slicing is universal
         for logical in range(lit):
             frame[logical] = (color, mult)
-
-    for logical in range(NUM_LEDS):
-        phys = _physical(logical)
-        entry = frame[logical]
-        if entry is None:
-            np[phys] = (0, 0, 0)
-            continue
-        color, mult = entry
-        level = BRIGHTNESS * gamma(mult)
-        if DITHER:
-            res = _residual[phys]
-            np[phys] = tuple(_quantize(color[ch] * level, res, ch) for ch in range(3))
-        else:
-            np[phys] = tuple(int(color[ch] * level) for ch in range(3))
-    np.write()
+    _write_frame(frame)
 
 
 def _paint(color, lit, mult=1.0):
@@ -444,6 +568,29 @@ def hue_rotate(color, degrees):
     r, g, b = _hsv_to_rgb(h, s, v)
     # round, not truncate — a 360° round-trip should be a lossless identity,
     # not off-by-one from floating-point drift through the hsv conversion.
+    return (int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5))
+
+
+def desaturate(color, saturation):
+    """Scale a colour's SATURATION by `saturation` (0.0 = fully gray, 1.0 =
+    unchanged), keeping hue and value the same — a genuinely MUTED variant of
+    a colour, not just a dimmer one. `hue_rotate()`'s counterpart on the other
+    HSV axis: hue_rotate keeps the same brightness/vividness and shifts which
+    colour it is; desaturate keeps the same colour/brightness and shifts how
+    vivid it is.
+
+    Distinct from just lowering a render `mult` (brightness): scaling
+    brightness scales R/G/B by the same factor, which is mathematically
+    identical to picking a *dimmer* version of the same colour — it can't
+    produce a *muted* (desaturated, toward-gray) version, since that requires
+    each channel to move toward the colour's own maximum channel value, not
+    toward zero. Used for ApproachContract's LINE_COLOR (LINE_SATURATION) —
+    see docs/contracts/approach-contract.md.
+    """
+    r, g, b = (c / 255.0 for c in color)
+    h, s, v = _rgb_to_hsv(r, g, b)
+    s *= max(0.0, saturation)
+    r, g, b = _hsv_to_rgb(h, s, v)
     return (int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5))
 
 
@@ -610,6 +757,189 @@ class EchoContract(DisplayContract):
         _paint_layers(layers)
 
 
+class _TrainState:
+    """CHASE-transition state for ONE train marker. Phase 1/2 (single train
+    per arm) needed exactly one of these per arm; N_TRAINS>1 (iteration 2)
+    keeps a LIST of these per arm — one per rank (closest, 2nd-closest, …) —
+    so every simultaneous marker animates independently, on its own clock,
+    without interfering with any other slot's."""
+
+    def __init__(self):
+        self.index = None  # current/incoming train position, or None
+        self.color = None
+        self.sweep_from = None  # index a sweep is currently animating FROM,
+        #   or None if settled (or nothing to sweep between — see below)
+        self.transition_start = None  # phase_ms the current sweep began
+
+
+def _advance_train(frame, train, target, color, phase_ms):
+    """Advance one train's CHASE transition given this tick's target index
+    (or None), and paint its contribution into `frame` (mutated in place,
+    NOT returned). The one place the transition logic lives — every call
+    site (single train, N_TRAINS>1, bidirectional) goes through this, once
+    per train slot, so the logic exists exactly once regardless of how many
+    are active.
+
+    A moving highlight sweeps LED-by-LED from the old position to the new
+    one, one LED lit at a time, always at FULL brightness (mult=1.0,
+    STATIC). This deliberately replaced an earlier brightness/colour-blend
+    crossfade: that design necessarily passed through low-brightness
+    intermediate values, and at low enough absolute brightness temporal
+    dithering breaks down on this hardware (visible flicker — the exact
+    failure mode docs/insights.md §6 and the marker-tick fix both already
+    hit). CHASE never asks for anything between "off" and "full" — every
+    touched LED is always a fully-populated 8-bit code, so dithering is
+    never needed at all during a transition, not just tuned to be less
+    visible. See docs/contracts/approach-contract.md § Chase transition."""
+    if target != train.index:
+        # A sweep only makes sense between two KNOWN positions. Appearing
+        # from nothing (a train's first tick) or vanishing to nothing (no
+        # longer catchable) has no LED to sweep from/to — snap instead, no
+        # animation possible or needed.
+        if target is not None and train.index is not None:
+            train.sweep_from = train.index
+        else:
+            train.sweep_from = None
+        train.index = target
+        train.color = color
+        train.transition_start = phase_ms
+
+    if train.index is None:
+        return  # nothing to show for this slot right now
+
+    if train.sweep_from is None:
+        # Settled (or just snapped in/out with nothing to sweep between) —
+        # identical every frame until the position next changes.
+        frame[train.index] = (train.color, 1.0, "static")
+        return
+
+    progress = 1.0
+    if TRANSITION_MS > 0 and train.transition_start is not None:
+        elapsed = phase_ms - train.transition_start  # phase_ms: absolute
+        #   ticks_ms(), same "no snap-back across intervals" pattern the
+        #   breathing envelopes use — see render_for_interval().
+        progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
+
+    # Divide the sweep into `distance` equal LED-to-LED steps (distance=1 for
+    # the common one-LED-per-tick hop → a single sharp switch at the
+    # halfway point; larger jumps sweep through every LED in between, each
+    # getting an equal time-slice). `min(distance, ...)` clamps the final
+    # step to land exactly on `train.index` at progress=1.0.
+    distance = abs(train.index - train.sweep_from)
+    sign = 1 if train.index > train.sweep_from else -1
+    step = min(distance, int(progress * (distance + 1)))
+    frame[train.sweep_from + sign * step] = (train.color, 1.0, "static")
+
+    if progress >= 1.0:
+        train.sweep_from = None  # sweep finished — future frames render settled
+
+
+def _advance_arm(frame, slots, signal, arm_len, direction, base_color, phase_ms):
+    """Advance every train slot for ONE arm (up to len(slots) == N_TRAINS,
+    soonest-first, same rank convention as _paint_layers' N_TRAINS handling
+    elsewhere) and paint each into `frame`.
+
+    Slot 0 (the primary/closest train) renders `base_color` unshifted; every
+    slot beyond it is hue-rotated (_layer_hue_shift — the same per-index
+    scaling EchoContract already uses) so multiple simultaneous markers stay
+    visually distinguishable WITHOUT dimming. Dimming a secondary layer is
+    exactly the failure mode docs/insights.md §6 already ruled out (breaks
+    at low absolute brightness on this hardware) — hue doesn't have that
+    problem, and every CHASE-rendered train is full brightness anyway (see
+    _advance_train), so dimming a slot would also silently undo that.
+
+    Slots are advanced/painted in REVERSE order (last slot first) so slot 0
+    is painted LAST and wins any index collision — same convention
+    _paint_layers uses for arc-based contracts.
+
+    Note on identity: Stage 1 (LeaveSignal) is deliberately ephemeral and
+    tracks no train identity across ticks — "slot 0" means "whichever train
+    is currently closest," not a specific physical train. If the current
+    primary departs and the former rank-1 train becomes rank-0, slot 0's
+    CHASE will animate from the old primary's position to wherever that
+    train already was, rather than continuing rank-1's own animation. This
+    is an accepted simplification consistent with Stage 1's existing
+    "ephemeral, rebuilt every tick, no identity" design — true per-train
+    identity tracking would be a bigger structural change than "N trains,
+    set in config" scoped for this iteration."""
+    ttls = signal.ttls if signal.urgency is not HIDDEN else []
+    n = len(slots)
+    targets = [None] * n
+    for i, ttl in enumerate(ttls[:n]):
+        targets[i] = _arm_target(ttl, arm_len, direction)
+
+    for i in range(n - 1, -1, -1):
+        color = base_color if i == 0 else hue_rotate(base_color, _layer_hue_shift(i))
+        _advance_train(frame, slots[i], targets[i], color, phase_ms)
+
+
+class ApproachContract(DisplayContract):
+    """Positional/approach paradigm: each train renders as a SINGLE LED that
+    moves toward ANCHOR_INDEX as its time-to-leave shrinks, rather than an
+    arc that grows/shrinks from a fixed origin. See
+    docs/contracts/approach-contract.md for the full design rationale.
+
+    Phase 1: ARM_B_LEN=0, single direction — call render(signal, phase_ms),
+    exactly as before. Phase 2 (bidirectional, DISPLAY_DIRECTION_B configured):
+    call render_dual(signal_a, signal_b, phase_ms) instead — one arm's worth
+    of trains per direction. main()'s loop picks the entry point;
+    ApproachContract itself doesn't know which mode it's in beyond which
+    method got called.
+
+    N_TRAINS (iteration 2, reusing the same knob the arc contracts use)
+    controls how many simultaneous markers each arm shows, soonest-first —
+    default 1, phase 1/2's original single-train-per-arm behaviour unchanged.
+
+    Two independent brightness surfaces, matching how this actually reads to
+    a viewer: ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS/MARKER_COLOR
+    (the idle "tick" LEDs — every position that isn't the anchor or a train
+    right now). A train is never dimmer than BRIGHTNESS itself — no separate
+    knob, and (since the CHASE transition below) no dim intermediate state
+    either. MARKER_COLOR is deliberately a different colour from LINE_COLOR,
+    not a dimmed version of it, so an idle tick can't be mistaken for "a
+    very distant train" (see the concept doc's Marker ticks section).
+    """
+
+    frame_ms = FRAME_MS
+    line_color = desaturate(LINE_COLOR, LINE_SATURATION)  # computed once at
+    #   module load — LINE_SATURATION=1.0 (default) is a no-op identity
+
+    def __init__(self):
+        # Instance state, not class state: tracks the *last actually rendered*
+        # position across calls, so a change in position can be detected and
+        # crossfaded — unlike every other contract here, this one is not a
+        # pure function of (signal, phase_ms) alone. Two arms' worth of slots
+        # always exist; phase 1 (render()) simply never touches _arm_b.
+        self._arm_a = [_TrainState() for _ in range(N_TRAINS)]
+        self._arm_b = [_TrainState() for _ in range(N_TRAINS)]
+
+    def render(self, signal, phase_ms):
+        """Phase 1 — single direction. Kept as its own method (not
+        render_dual with a None second signal) so a phase-1 config's
+        behaviour can never be perturbed by phase-2 code."""
+        frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
+        _advance_arm(frame, self._arm_a, signal, ARM_A_LEN, "a", self.line_color, phase_ms)
+
+        # Anchor is painted last so it always wins, even the instant a train
+        # lands on ANCHOR_INDEX itself — it never participates in train logic.
+        # Always STATIC: it's a fixed brightness forever, never animated.
+        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
+        _write_frame(frame)
+
+    def render_dual(self, signal_a, signal_b, phase_ms):
+        """Phase 2 — bidirectional: one arm's worth of trains per direction,
+        each with its own independent CHASE transition, composited into the
+        same frame. Arm "a" and arm "b" occupy disjoint index ranges
+        (ANCHOR_INDEX+offset vs ANCHOR_INDEX-offset — see _arm_target), so
+        there's no overlap to resolve between them; only the anchor itself
+        can coincide, and it's painted last regardless."""
+        frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
+        _advance_arm(frame, self._arm_a, signal_a, ARM_A_LEN, "a", self.line_color, phase_ms)
+        _advance_arm(frame, self._arm_b, signal_b, ARM_B_LEN, "b", self.line_color, phase_ms)
+        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
+        _write_frame(frame)
+
+
 # Registry: config's CONTRACT name → class. Add new contracts here so they're
 # selectable from config.py without touching the main loop.
 CONTRACTS = {
@@ -619,6 +949,7 @@ CONTRACTS = {
     "breathing_exponent": BreathingExponentContract,
     "breathing_inverse": BreathingInverseContract,
     "echo": EchoContract,
+    "approach": ApproachContract,
 }
 ACTIVE_CONTRACT = CONTRACTS.get(CONTRACT_NAME, SandTimerContract)()
 
@@ -731,22 +1062,38 @@ def sync_ntp():
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────
-def render_for_interval(contract, signal, seconds):
-    """Hand the signal to the contract for ~`seconds`. Static contracts draw once
-    and return immediately (the caller sleeps). Animated contracts get a frame
-    loop, fed the **absolute** ms clock so their phase is continuous across
-    intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The signal is
-    fixed for the interval; only the clock advances (update/render split).
+def _render_dispatch(contract, signal, signal_b):
+    """Pick render() vs render_dual() based on whether signal_b is given AND
+    the contract actually implements render_dual — phase-2 bidirectional
+    support (ApproachContract only, see DISPLAY_DIRECTION_B). Every other
+    contract, and phase-1 ApproachContract configs (DISPLAY_DIRECTION_B
+    unset, signal_b is None), fall through to the ordinary single-signal path
+    unaffected. Pulled out as its own pure function — no clock involved — so
+    this decision is host-testable in isolation from render_for_interval's
+    real-time frame loop below, which isn't (it uses actual time.ticks_ms())."""
+    if signal_b is not None and hasattr(contract, "render_dual"):
+        return lambda phase_ms: contract.render_dual(signal, signal_b, phase_ms)
+    return lambda phase_ms: contract.render(signal, phase_ms)
+
+
+def render_for_interval(contract, signal, seconds, signal_b=None):
+    """Hand the signal(s) to the contract for ~`seconds`. Static contracts draw
+    once and return immediately (the caller sleeps). Animated contracts get a
+    frame loop, fed the **absolute** ms clock so their phase is continuous
+    across intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The
+    signal(s) are fixed for the interval; only the clock advances (update/
+    render split).
 
     Safe with the huge absolute value because the envelopes do `(clock % period)`
     — the modulo runs in integer space before the divide, so no float precision is
     lost. `ticks_ms()` wraps ~every 12 days → one harmless single-frame hitch."""
+    render = _render_dispatch(contract, signal, signal_b)
     if contract.frame_ms is None:
-        contract.render(signal, 0)
+        render(0)
         return  # caller sleeps the interval
     start = time.ticks_ms()
     while time.ticks_diff(time.ticks_ms(), start) < seconds * 1000:
-        contract.render(signal, time.ticks_ms())
+        render(time.ticks_ms())
         time.sleep_ms(contract.frame_ms)
 
 
@@ -813,14 +1160,25 @@ def main():
                         )
 
             # ── Drive the LED ring ───────────────────────────────────
-            # One ring → one direction (no magnetometer in V1). Build the abstract
-            # signal, then let whichever contract is active interpret it.
+            # One ring → one direction (no magnetometer in V1) — or two, for
+            # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
+            # Build the abstract signal(s), then let whichever contract is
+            # active interpret them.
             signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
             if signal.ttls:
                 leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
                 print(f"\n  ring: leave in [{leaves}] min  →  {signal.urgency.name}")
             else:
                 print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
+
+            signal_b = None
+            if DISPLAY_DIRECTION_B is not None:
+                signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+                if signal_b.ttls:
+                    leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                    print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+                else:
+                    print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
             # Night → dark + sleep. Otherwise the contract renders for the interval
             # (static returns at once → we sleep; animated runs its own frame loop).
@@ -829,7 +1187,7 @@ def main():
                 clear()
                 time.sleep(LOOP_INTERVAL_SECS)
             else:
-                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS)
+                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
                 if ACTIVE_CONTRACT.frame_ms is None:
                     time.sleep(LOOP_INTERVAL_SECS)
     except KeyboardInterrupt:
