@@ -43,12 +43,20 @@ by config, not two separate contracts:
 
 - **Phase 1:** `ANCHOR_INDEX = 0`, `ARM_A_LEN = 20`, `ARM_B_LEN = 0` — single
   direction, arm B unused. Matches the 21-LED gift-jar strip (1 anchor + 20).
-- **Phase 2 (later):** `ANCHOR_INDEX = 10`, `ARM_A_LEN = 10`, `ARM_B_LEN = 10` —
-  bidirectional, same render logic, just different config. This is why the
-  mechanism must be arm-generic from the start: phase 2 should require zero
-  contract-logic changes, only a config edit — same portability property the
-  existing multi-train (`N_TRAINS`) and board-portability (`LED_PIN`) work
-  established elsewhere in this codebase.
+- **Phase 2:** `ANCHOR_INDEX = 10`, `ARM_A_LEN = 10`, `ARM_B_LEN = 10` —
+  bidirectional. The index math genuinely is config-only, as originally
+  promised — `_arm_target()` was written arm-generic from day one. What
+  turned out **not** to be config-only: *which signals feed the two arms* is
+  a real structural question (below), not just numbers.
+
+**Uneven `NUM_LEDS` (no clean centre LED):** not a code problem — nothing
+derives `ANCHOR_INDEX`/`ARM_A_LEN`/`ARM_B_LEN` from `NUM_LEDS`, they're
+independent knobs. For an odd count (21, this build) they split evenly
+(`10 | 1 | 10`). For an even count, just let the arms differ by one LED
+(e.g. `ARM_A_LEN=10, ARM_B_LEN=9`) — imperceptible in practice. Deliberately
+**not** building a multi-LED "wide anchor" mode for this: it would add real
+render/index-math complexity (anchor-collision edge cases, a second anchor
+width knob) to fix an asymmetry nobody would notice on a lit strip.
 
 The anchor LED itself renders `ANCHOR_COLOR` at `ANCHOR_BRIGHTNESS` — always —
 it never participates in train logic and is never overwritten by a train
@@ -246,9 +254,54 @@ recomputed every frame, since it's a fixed transform of a fixed colour.
 
 ---
 
+## Bidirectional (phase 2)
+
+**Iteration 1 scope:** one primary train per arm — two trains showing
+simultaneously, one per direction. Not N-trains-per-arm nesting (that's
+iteration 2, deferred below).
+
+**What's genuinely new, not just config:**
+
+1. **Two `LeaveSignal`s, not one.** `schedule.json` already has direction
+   keys (e.g. `"a"`/`"b"`) for inbound/outbound — the natural feed for the
+   two arms. New config: `DISPLAY_DIRECTION_B` — `None` (default) means
+   single-direction, phase 1, completely unchanged. Set it to a second
+   direction key and `main()`'s loop builds a second `LeaveSignal` (arm A
+   still reads `DISPLAY_DIRECTION`, unchanged).
+2. **Two independent crossfade state machines.** `_ArmState` (a small
+   instance holding `active_index`/`active_color`/`fading_index`/
+   `fading_color`/`transition_start`) replaced what used to be flat
+   attributes directly on `ApproachContract`. `ApproachContract` now always
+   holds two — `self._arm_a`, `self._arm_b` — so each direction's train
+   crossfades on its own clock. `_advance_arm(frame, arm, target, color,
+   phase_ms)` is the one place the crossfade math lives; both `render()`
+   (phase 1) and `render_dual()` (phase 2) call it, once per arm, so the
+   logic exists exactly once regardless of how many arms are active.
+3. **Two entry points, not one method with an optional argument.**
+   `render(signal, phase_ms)` — phase 1, byte-identical to before.
+   `render_dual(signal_a, signal_b, phase_ms)` — phase 2. Kept as two
+   methods, not `render(signal, phase_ms, signal_b=None)`, so a phase-1
+   config's code path can never be perturbed by phase-2 logic — there's
+   nothing for it to accidentally touch. `render_for_interval()` picks
+   which to call via `_render_dispatch()` (a small pure function, pulled out
+   specifically so the *decision* is host-testable without touching the
+   real-time frame loop, which isn't): `signal_b is not None and
+   hasattr(contract, "render_dual")`. Every other contract, and phase-1
+   ApproachContract configs, take the ordinary single-signal path — the
+   `hasattr` check means passing `DISPLAY_DIRECTION_B` under a non-`approach`
+   `CONTRACT` is silently ignored, not a crash.
+
+**No index collision to resolve between arms.** Arm "a" only ever targets
+`ANCHOR_INDEX + offset`; arm "b" only ever targets `ANCHOR_INDEX - offset`
+(see `_arm_target`) — disjoint ranges by construction. Only the anchor index
+itself could coincide with an arm's target, and the anchor is always painted
+last regardless of how many arms are active, so it always wins.
+
+---
+
 ## Explicitly deferred (not this contract's job yet)
 
+- Iteration 2: N trains per arm (config-driven), not just one
 - Line-color palettes / metro-line static color scheme
 - IMU tap/shake interaction layer
 - NFC / provisioning of any kind
-- Dual-train interaction tuning on the bidirectional (phase 2) layout

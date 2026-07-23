@@ -21,6 +21,10 @@ SCHEDULE_FILE = "schedule.json"  # filename on device filesystem
 # ── Which trains ──────────────────────────────────────────────────
 DISPLAY_DIRECTION = "b"  # which timetable direction the ring shows
 #                          (V1 has no magnetometer; matches a key in schedule.json)
+# DISPLAY_DIRECTION_B = "a"  # "approach" contract, phase 2 (bidirectional)
+#                          only — a SECOND direction key, feeding arm B.
+#                          Unset = single-direction, phase 1. Also needs
+#                          ARM_B_LEN > 0 in config.py's approach-contract block.
 WALK_TO_STATION_MINS = 2.5  # room→platform; trains you can't catch are hidden
 
 # ── Display: hardware ─────────────────────────────────────────────

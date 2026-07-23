@@ -24,7 +24,8 @@ it with `getattr(config, "NAME", default)`, so
 | `UTC_OFFSET_HOURS` | int | no | `9` | JST = UTC+9. Clock display + weekday detection |
 | `LOOP_INTERVAL_SECS` | int | no | `30` | How often the loop recomputes + updates |
 | `SCHEDULE_FILE` | str | no | `"schedule.json"` | Filename on device filesystem |
-| `DISPLAY_DIRECTION` | str | no | `"b"` | Which schedule direction key the LED ring follows (one ring, no magnetometer in V1) |
+| `DISPLAY_DIRECTION` | str | no | `"b"` | Which schedule direction key the LED ring follows (one ring, no magnetometer in V1). Feeds arm A when `DISPLAY_DIRECTION_B` is also set |
+| `DISPLAY_DIRECTION_B` | str | no | `None` | **`approach` phase 2 (bidirectional) only.** A second schedule direction key, feeding arm B — one train per arm. `None` = single-direction, phase 1 unchanged. Ignored (not an error) by every other contract |
 | `WALK_TO_STATION_MINS` | float | no | `2.5` | Room→platform time; subtracted from each departure. Trains you can't catch are hidden. `[→ NFC]` later from the station card |
 | `LED_PIN` | int | no | `6` | GP pin driving the WS2812B data line |
 | `NUM_LEDS` | int | no | `8` | LEDs on the strip (stick = 8; V1.5 ring = 12) |

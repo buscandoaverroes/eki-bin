@@ -35,6 +35,11 @@ SCHEDULE_FILE = getattr(config, "SCHEDULE_FILE", "schedule.json")
 
 # Which trains
 DISPLAY_DIRECTION = getattr(config, "DISPLAY_DIRECTION", "b")
+DISPLAY_DIRECTION_B = getattr(config, "DISPLAY_DIRECTION_B", None)  # phase 2 —
+#   bidirectional ApproachContract only. Set to a SECOND schedule.json
+#   direction key (DISPLAY_DIRECTION feeds arm "a", this feeds arm "b") to show
+#   one train per arm. None (default) = single-direction, phase 1 unchanged.
+#   Ignored entirely by every other contract (see render_for_interval()).
 WALK_TO_STATION_MINS = getattr(config, "WALK_TO_STATION_MINS", 2.5)
 # [→ NFC] WALK could later be read from the station card, not config.
 
@@ -759,21 +764,100 @@ class EchoContract(DisplayContract):
         _paint_layers(layers)
 
 
+class _ArmState:
+    """Crossfade state for ONE arm's train marker. Phase 1 needed exactly one
+    of these (implicitly, as ApproachContract's own attributes); phase 2
+    (bidirectional) keeps two — one per arm — so each direction's train
+    crossfades independently, on its own clock, without interfering with the
+    other arm's."""
+
+    def __init__(self):
+        self.active_index = None  # current/incoming train position, or None
+        self.active_color = None
+        self.fading_index = None  # previous position, ramping toward idle
+        self.fading_color = None
+        self.transition_start = None  # phase_ms the current transition began
+
+
+def _advance_arm(frame, arm, target, color, phase_ms):
+    """Advance one arm's crossfade state given this tick's target index (or
+    None), and paint its contribution into `frame` (mutated in place, NOT
+    returned). The one place the crossfade math lives — render() (single arm)
+    and render_dual() (two arms) both call this, once per arm, so phase 2
+    doesn't duplicate phase 1's logic."""
+    if target != arm.active_index:
+        if arm.active_index is not None:
+            arm.fading_index = arm.active_index
+            arm.fading_color = arm.active_color
+        arm.active_index = target
+        arm.active_color = color
+        arm.transition_start = phase_ms
+
+    progress = 1.0
+    if TRANSITION_MS > 0 and arm.transition_start is not None:
+        elapsed = phase_ms - arm.transition_start  # phase_ms: absolute
+        #   ticks_ms(), same "no snap-back across intervals" pattern the
+        #   breathing envelopes use — see render_for_interval().
+        progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
+    animating = progress < 1.0  # mid-crossfade — see _write_frame's
+    #   ANIMATED vs STATIC split: only a pixel that's actually changing
+    #   frame-to-frame benefits from gamma+dither; a settled one should
+    #   render STATIC or risk the same low-brightness dither-flicker the
+    #   marker ticks have (docs/contracts/approach-contract.md § Marker ticks).
+
+    # gamma-shape the brightness ramp (not the colour lerp — colour blending
+    # doesn't suffer the same dim-end banding brightness does), same
+    # perceptual-smoothness rationale gamma() already documents. Only
+    # matters while animating; unused once settled (see below).
+    fade_in = gamma(progress)
+    fade_out = gamma(1.0 - progress)
+
+    # The train's own crossfade dim/bright endpoints — LINE_FADE_FLOOR up to
+    # 1.0 (full BRIGHTNESS, the same "settled" level below), NOT
+    # MARKER_BRIGHTNESS. A train fading in/out blends toward MARKER_COLOR
+    # (still "sinking into the idle look" visually) but its BRIGHTNESS range
+    # is its own, independently tunable axis.
+    line_span = 1.0 - LINE_FADE_FLOOR
+
+    if animating and arm.fading_index is not None:
+        frame[arm.fading_index] = (
+            lerp_color(arm.fading_color, MARKER_COLOR, progress),
+            LINE_FADE_FLOOR + line_span * fade_out,
+        )  # ANIMATED: genuinely ramping down this frame
+    else:
+        arm.fading_index = None  # settled — stop tracking, no longer drawn
+
+    if arm.active_index is not None:
+        if animating:
+            frame[arm.active_index] = (
+                lerp_color(MARKER_COLOR, arm.active_color, progress),
+                LINE_FADE_FLOOR + line_span * fade_in,
+            )  # ANIMATED: genuinely ramping up this frame
+        else:
+            # Settled: identical every frame until the position next
+            # changes — render STATIC (see _write_frame) so it doesn't
+            # dither-flicker while just sitting there. mult=1.0, i.e.
+            # exactly BRIGHTNESS — no separate "train brightness" knob.
+            frame[arm.active_index] = (arm.active_color, 1.0, "static")
+
+
 class ApproachContract(DisplayContract):
-    """Positional/approach paradigm: the primary train renders as a SINGLE LED
-    that moves toward ANCHOR_INDEX as its time-to-leave shrinks, rather than an
+    """Positional/approach paradigm: each train renders as a SINGLE LED that
+    moves toward ANCHOR_INDEX as its time-to-leave shrinks, rather than an
     arc that grows/shrinks from a fixed origin. See
     docs/contracts/approach-contract.md for the full design rationale.
 
-    Phase 1 (this build): ARM_B_LEN=0, so only arm "a" is ever targeted. Phase 2
-    (bidirectional) reuses this exact class with different config — the arm
-    machinery (_arm_target) is already direction-generic, only the render()
-    call site would need to also target arm "b" for a second signal.
+    Phase 1: ARM_B_LEN=0, single direction — call render(signal, phase_ms),
+    exactly as before. Phase 2 (bidirectional, DISPLAY_DIRECTION_B configured):
+    call render_dual(signal_a, signal_b, phase_ms) instead — one primary train
+    per arm, each with its own independent crossfade (_ArmState). main()'s
+    loop picks the entry point; ApproachContract itself doesn't know which
+    mode it's in beyond which method got called.
 
     Three independent brightness surfaces, matching how this actually reads
     to a viewer: ANCHOR_BRIGHTNESS (the "0"), MARKER_BRIGHTNESS/MARKER_COLOR
-    (the idle "tick" LEDs — every position that isn't the anchor or the train
-    right now), and BRIGHTNESS itself (where the train is — no separate knob,
+    (the idle "tick" LEDs — every position that isn't the anchor or a train
+    right now), and BRIGHTNESS itself (where a train is — no separate knob,
     it's just the global ceiling, mult=1.0, once settled). MARKER_COLOR is
     deliberately a different colour from LINE_COLOR, not a dimmed version of
     it, so an idle tick can't be mistaken for "a very distant train" (see the
@@ -791,80 +875,45 @@ class ApproachContract(DisplayContract):
         # Instance state, not class state: tracks the *last actually rendered*
         # position across calls, so a change in position can be detected and
         # crossfaded — unlike every other contract here, this one is not a
-        # pure function of (signal, phase_ms) alone.
-        self._active_index = None  # current/incoming train position, or None
-        self._active_color = None
-        self._fading_index = None  # previous position, ramping toward idle
-        self._fading_color = None
-        self._transition_start = None  # phase_ms the current transition began
+        # pure function of (signal, phase_ms) alone. Two arms always exist;
+        # phase 1 (render()) simply never touches _arm_b.
+        self._arm_a = _ArmState()
+        self._arm_b = _ArmState()
 
     def render(self, signal, phase_ms):
+        """Phase 1 — single direction. Unchanged since it was written; kept
+        as its own method (not render_dual with a None second signal) so a
+        phase-1 config's behaviour can never be perturbed by phase-2 code."""
         target = None
         if signal.urgency is not HIDDEN and signal.primary is not None:
             target = _arm_target(signal.primary, ARM_A_LEN, "a")
 
-        if target != self._active_index:
-            if self._active_index is not None:
-                self._fading_index = self._active_index
-                self._fading_color = self._active_color
-            self._active_index = target
-            self._active_color = self.line_color
-            self._transition_start = phase_ms
-
-        progress = 1.0
-        if TRANSITION_MS > 0 and self._transition_start is not None:
-            elapsed = phase_ms - self._transition_start  # phase_ms: absolute
-            #   ticks_ms(), same "no snap-back across intervals" pattern the
-            #   breathing envelopes use — see render_for_interval().
-            progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
-        animating = progress < 1.0  # mid-crossfade — see _write_frame's
-        #   ANIMATED vs STATIC split: only a pixel that's actually changing
-        #   frame-to-frame benefits from gamma+dither; a settled one should
-        #   render STATIC or risk the same low-brightness dither-flicker the
-        #   marker ticks have (docs/contracts/approach-contract.md § Marker ticks).
-
-        # gamma-shape the brightness ramp (not the colour lerp — colour blending
-        # doesn't suffer the same dim-end banding brightness does), same
-        # perceptual-smoothness rationale gamma() already documents. Only
-        # matters while animating; unused once settled (see below).
-        fade_in = gamma(progress)
-        fade_out = gamma(1.0 - progress)
-
-        # Marker ticks are always STATIC — they never change frame-to-frame,
-        # so they never benefit from dithering, only risk flickering from it.
         frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
-
-        # The train's own crossfade dim/bright endpoints — LINE_FADE_FLOOR up
-        # to 1.0 (full BRIGHTNESS, the same "settled" level below), NOT
-        # MARKER_BRIGHTNESS. A train fading in/out blends toward MARKER_COLOR
-        # (still "sinking into the idle look" visually) but its BRIGHTNESS
-        # range is its own, independently tunable axis.
-        line_span = 1.0 - LINE_FADE_FLOOR
-
-        if animating and self._fading_index is not None:
-            frame[self._fading_index] = (
-                lerp_color(self._fading_color, MARKER_COLOR, progress),
-                LINE_FADE_FLOOR + line_span * fade_out,
-            )  # ANIMATED: genuinely ramping down this frame
-        else:
-            self._fading_index = None  # settled — stop tracking, no longer drawn
-
-        if self._active_index is not None:
-            if animating:
-                frame[self._active_index] = (
-                    lerp_color(MARKER_COLOR, self._active_color, progress),
-                    LINE_FADE_FLOOR + line_span * fade_in,
-                )  # ANIMATED: genuinely ramping up this frame
-            else:
-                # Settled: identical every frame until the position next
-                # changes — render STATIC (see _write_frame) so it doesn't
-                # dither-flicker while just sitting there. mult=1.0, i.e.
-                # exactly BRIGHTNESS — no separate "train brightness" knob.
-                frame[self._active_index] = (self._active_color, 1.0, "static")
+        _advance_arm(frame, self._arm_a, target, self.line_color, phase_ms)
 
         # Anchor is painted last so it always wins, even the instant a train
         # lands on ANCHOR_INDEX itself — it never participates in train logic.
         # Always STATIC: it's a fixed brightness forever, never animated.
+        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
+        _write_frame(frame)
+
+    def render_dual(self, signal_a, signal_b, phase_ms):
+        """Phase 2 — bidirectional: one primary train per arm, two
+        independent crossfades composited into the same frame. Arm "a" and
+        arm "b" occupy disjoint index ranges (ANCHOR_INDEX+offset vs
+        ANCHOR_INDEX-offset — see _arm_target), so there's no overlap to
+        resolve between them; only the anchor itself can coincide, and it's
+        painted last regardless."""
+        target_a = None
+        if signal_a.urgency is not HIDDEN and signal_a.primary is not None:
+            target_a = _arm_target(signal_a.primary, ARM_A_LEN, "a")
+        target_b = None
+        if signal_b.urgency is not HIDDEN and signal_b.primary is not None:
+            target_b = _arm_target(signal_b.primary, ARM_B_LEN, "b")
+
+        frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
+        _advance_arm(frame, self._arm_a, target_a, self.line_color, phase_ms)
+        _advance_arm(frame, self._arm_b, target_b, self.line_color, phase_ms)
         frame[ANCHOR_INDEX] = (ANCHOR_COLOR, ANCHOR_BRIGHTNESS, "static")
         _write_frame(frame)
 
@@ -991,22 +1040,38 @@ def sync_ntp():
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────
-def render_for_interval(contract, signal, seconds):
-    """Hand the signal to the contract for ~`seconds`. Static contracts draw once
-    and return immediately (the caller sleeps). Animated contracts get a frame
-    loop, fed the **absolute** ms clock so their phase is continuous across
-    intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The signal is
-    fixed for the interval; only the clock advances (update/render split).
+def _render_dispatch(contract, signal, signal_b):
+    """Pick render() vs render_dual() based on whether signal_b is given AND
+    the contract actually implements render_dual — phase-2 bidirectional
+    support (ApproachContract only, see DISPLAY_DIRECTION_B). Every other
+    contract, and phase-1 ApproachContract configs (DISPLAY_DIRECTION_B
+    unset, signal_b is None), fall through to the ordinary single-signal path
+    unaffected. Pulled out as its own pure function — no clock involved — so
+    this decision is host-testable in isolation from render_for_interval's
+    real-time frame loop below, which isn't (it uses actual time.ticks_ms())."""
+    if signal_b is not None and hasattr(contract, "render_dual"):
+        return lambda phase_ms: contract.render_dual(signal, signal_b, phase_ms)
+    return lambda phase_ms: contract.render(signal, phase_ms)
+
+
+def render_for_interval(contract, signal, seconds, signal_b=None):
+    """Hand the signal(s) to the contract for ~`seconds`. Static contracts draw
+    once and return immediately (the caller sleeps). Animated contracts get a
+    frame loop, fed the **absolute** ms clock so their phase is continuous
+    across intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The
+    signal(s) are fixed for the interval; only the clock advances (update/
+    render split).
 
     Safe with the huge absolute value because the envelopes do `(clock % period)`
     — the modulo runs in integer space before the divide, so no float precision is
     lost. `ticks_ms()` wraps ~every 12 days → one harmless single-frame hitch."""
+    render = _render_dispatch(contract, signal, signal_b)
     if contract.frame_ms is None:
-        contract.render(signal, 0)
+        render(0)
         return  # caller sleeps the interval
     start = time.ticks_ms()
     while time.ticks_diff(time.ticks_ms(), start) < seconds * 1000:
-        contract.render(signal, time.ticks_ms())
+        render(time.ticks_ms())
         time.sleep_ms(contract.frame_ms)
 
 
@@ -1073,14 +1138,25 @@ def main():
                         )
 
             # ── Drive the LED ring ───────────────────────────────────
-            # One ring → one direction (no magnetometer in V1). Build the abstract
-            # signal, then let whichever contract is active interpret it.
+            # One ring → one direction (no magnetometer in V1) — or two, for
+            # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
+            # Build the abstract signal(s), then let whichever contract is
+            # active interpret them.
             signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
             if signal.ttls:
                 leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
                 print(f"\n  ring: leave in [{leaves}] min  →  {signal.urgency.name}")
             else:
                 print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
+
+            signal_b = None
+            if DISPLAY_DIRECTION_B is not None:
+                signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+                if signal_b.ttls:
+                    leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                    print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+                else:
+                    print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
             # Night → dark + sleep. Otherwise the contract renders for the interval
             # (static returns at once → we sleep; animated runs its own frame loop).
@@ -1089,7 +1165,7 @@ def main():
                 clear()
                 time.sleep(LOOP_INTERVAL_SECS)
             else:
-                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS)
+                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
                 if ACTIVE_CONTRACT.frame_ms is None:
                     time.sleep(LOOP_INTERVAL_SECS)
     except KeyboardInterrupt:

@@ -317,11 +317,38 @@ open questions before coding, listed in the doc (skippable/config-gated?
 hanabi shape contract-agnostic or anchor-relative? failure recovery — reset
 required, or auto-retry?).
 
+### Phase 2 — bidirectional (iteration 1: one train per arm) ✅ implemented
+
+`ANCHOR_INDEX`/`ARM_A_LEN`/`ARM_B_LEN` index math was genuinely config-only
+as promised. What wasn't: *which signals feed the two arms* — a real
+structural addition, not just numbers. Built:
+
+- [x] `DISPLAY_DIRECTION_B` config (a 2nd `schedule.json` direction key,
+      feeding arm B; `None` default = phase 1 unchanged)
+- [x] `_ArmState` — crossfade state factored out of `ApproachContract`
+      itself; the contract now always holds two (`_arm_a`, `_arm_b`)
+- [x] `_advance_arm()` — the crossfade math, now in one place, called once
+      per arm by both `render()` (phase 1, unchanged) and the new
+      `render_dual(signal_a, signal_b, phase_ms)` (phase 2)
+- [x] `_render_dispatch()` in `main.py` — picks `render` vs `render_dual`
+      (`signal_b is not None and hasattr(contract, "render_dual")`); every
+      other contract and phase-1 configs completely unaffected
+- [x] No index-collision handling needed — arm A/B occupy disjoint ranges by
+      construction (`_arm_target`); only the anchor can coincide, and it's
+      always painted last
+- [x] Uneven `NUM_LEDS` (no clean centre): confirmed **not** a code problem —
+      `ANCHOR_INDEX`/arm lengths are independent knobs already; recommended
+      letting arms differ by 1 LED rather than building a wide-anchor mode
+- [x] 9 new tests (`tests/test_approach_dual.py`) — both arms land correctly,
+      independent crossfade timing (one arm's transition doesn't perturb the
+      other's), only-primary-per-arm scope, anchor priority/no-collision,
+      dispatch logic. 88 tests total, all passing
+- [ ] **Not yet validated on real hardware** — host tests only so far
+- [ ] Deferred to iteration 2: N trains per arm (config-driven nesting, not
+      just one)
+
 ### Deferred to later sessions
 
-- [ ] Phase 2: bidirectional layout (`ANCHOR_INDEX=10`, both arms active),
-      dual-train interaction tuning — same code path, config-only change per
-      `docs/contracts/approach-contract.md`
 - [ ] Line-color palette / metro-line static color scheme
 - [ ] IMU tap/shake interaction layer (see Open decisions — planned as a
       *runtime* interaction layer, not a provisioning mechanism)

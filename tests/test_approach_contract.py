@@ -149,7 +149,7 @@ def test_transition_ms_zero_snaps_instantly(load_main):
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
-    assert contract._active_index == 10
+    assert contract._arm_a.active_index == 10
     assert m.np.buf[m._physical(10)] == full  # already full — no fade-in frame
 
 
@@ -211,7 +211,7 @@ def test_crossfade_progress_uses_absolute_clock_not_relative(load_main):
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 50_000)
-    assert contract._transition_start == 50_000
+    assert contract._arm_a.transition_start == 50_000
     contract.render(m.LeaveSignal([10.0]), 52_000)  # +2000ms → halfway
     mid = m.np.buf[m._physical(10)]
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
