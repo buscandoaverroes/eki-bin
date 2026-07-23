@@ -216,9 +216,10 @@ falls out of clean config-driven design.
 
 ### Hardware (physical work, not firmware)
 
-- [ ] New XIAO ESP32-C3, fresh flash
-- [ ] WS2812B tape cut to **21 LEDs** (confirmed 1-LED-per-segment cut points —
-      no rounding needed)
+- [x] New XIAO ESP32-C3, fresh flash
+- [x] WS2812B tape cut to **21 LEDs** (confirmed 1-LED-per-segment cut points —
+      no rounding needed); `make led-test` confirms all 21 light. Brightness
+      bench findings (0.15–0.2 = full, 0.005 = ideal floor) in `docs/hardware.md`
 - [ ] Mount LEDs **downward-facing** first (max refraction off counter/base) —
       a mounting decision only; no `ARC_ORIGIN`/`_physical()` flip needed in
       code unless testing says otherwise
@@ -232,14 +233,18 @@ falls out of clean config-driven design.
 
 ### Firmware build order
 
-1. [ ] Alligator-clip strip to XIAO, outside bottle, home WiFi/dev `config.py`
-2. [ ] Sanity-check LED indexing on the new 21-LED length (adapt existing
-       `led-test` pattern if needed)
-3. [ ] Bring up `ApproachContract` phase-1 config (`ANCHOR_INDEX=0`,
-       `ARM_A_LEN=20`, `ARM_B_LEN=0`) — validate position mapping against known
-       `ttls` values
-4. [ ] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` — subjective, expect several
-       rounds
+1. [x] Alligator-clip strip to XIAO, outside bottle, home WiFi/dev `config.py`
+2. [x] Sanity-check LED indexing on the new 21-LED length (`make led-test`,
+       all 21 confirmed)
+3. [x] `ApproachContract` phase-1 implemented on `feature/positional-display`
+       (`ANCHOR_INDEX=0`, `ARM_A_LEN=20`, `ARM_B_LEN=0`) + 24 host tests, all
+       passing — `docs/contracts/approach-contract.md`,
+       `tests/test_approach_contract.py`. `micropython/config_friend1.py`
+       created with starting tuning values. **Still needed:** validate on the
+       actual device (host tests only so far)
+4. [ ] Iterate `FLOOR_BRIGHTNESS` / `FLOOR_COLOR` on real hardware — started
+       (`config_friend1.py` computes `FLOOR_BRIGHTNESS≈0.21` from the bench
+       floor reading, see `docs/hardware.md`), needs live confirmation
 5. [ ] Iterate `TRANSITION_MS` / gamma feel on the crossfade — subjective, test
        at actual final brightness (not full brightness — see the `0.15` Qi
        ceiling in `docs/hardware.md`)

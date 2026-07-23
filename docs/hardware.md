@@ -117,6 +117,33 @@ full-white-ish 120-LED frame, across the three sources:
 
 ---
 
+## Bring-up log — 21-LED gift-jar strip, brightness (2026-07-23)
+
+New XIAO ESP32-C3 + WS2812B tape cut to **21 LEDs** for the friend gift build
+(v1.4, `ApproachContract` — see `dev-status.md` § V1.4). `make led-test`
+confirmed all 21 light on `DATA_PIN=2`. `led_test.py`'s `BRIGHTNESS` is a flat
+linear scale with no gamma correction, so these readings are directly
+comparable to what `main.py`'s global `BRIGHTNESS` produces at `mult=1.0`:
+
+- **`0.15`–`0.2`** reads as a good "full/max" level — bright enough to read
+  clearly, not blinding. Matches the existing `0.15` Qi-safe ceiling from the
+  120-LED bring-up above, though this is a much shorter strip so the ceiling
+  here is a visual/comfort call, not a power one.
+- **`0.005`** is the sweet spot for an idle/"floor" level — `0.01` already
+  read as almost too bright. An order of magnitude below the "full" reading.
+
+**Translating to `ApproachContract`'s two-tier brightness:** `FLOOR_BRIGHTNESS`
+is a *multiplier* run through `gamma()` (`BRIGHTNESS × FLOOR_BRIGHTNESS^GAMMA`),
+not a directly-comparable absolute level like `led_test.py`'s flat scale.
+Solving for the bench-preferred `≈0.005` absolute floor at `BRIGHTNESS=0.15`,
+default `GAMMA=2.2`: `FLOOR_BRIGHTNESS ≈ 0.21` — the contract's built-in
+default of `0.05` is roughly 10× dimmer than this and was not the right
+starting point. `config_friend1.py` uses the corrected `0.21` starting value;
+still expect live retuning once mounted in the actual jar (diffusion changes
+perception).
+
+---
+
 ## NFC — ST25DV dynamic tag (v1.x "givable" phase)
 
 **Purpose:** provisioning — tap the jar with an iPhone to load a station
