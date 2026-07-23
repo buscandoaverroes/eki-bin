@@ -313,6 +313,19 @@ def test_marker_fade_floor_independent_of_floor_brightness(load_main):
 # ── registry ───────────────────────────────────────────────────────
 
 
+def test_marker_saturation_mutes_line_color(load_main):
+    m = load_main(
+        CONTRACT="approach", LINE_COLOR=(34, 139, 34), MARKER_SATURATION=0.3,
+    )
+    assert m.ACTIVE_CONTRACT.line_color == m.desaturate((34, 139, 34), 0.3)
+    assert m.ACTIVE_CONTRACT.line_color != (34, 139, 34)  # actually changed
+
+
+def test_marker_saturation_default_is_unchanged(load_main):
+    m = load_main(CONTRACT="approach", LINE_COLOR=(34, 139, 34))
+    assert m.ACTIVE_CONTRACT.line_color == (34, 139, 34)
+
+
 def test_approach_selectable_via_config(load_main):
     m = load_main(CONTRACT="approach")
     assert isinstance(m.ACTIVE_CONTRACT, m.ApproachContract)

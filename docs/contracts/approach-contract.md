@@ -179,6 +179,8 @@ ANCHOR_COLOR = (255, 200, 120)  # warm white/amber, distinct from LINE_COLOR + F
 ANCHOR_BRIGHTNESS = 1.6         # >1.0 = brighter than a normal "full" position (STATIC, linear)
 POSITION_MINUTES_PER_LED = 1
 LINE_COLOR = (34, 139, 34)      # forest green — fixed, NOT urgency-banded (see below)
+MARKER_SATURATION = 1.0         # 1.0=unchanged; lower = a genuinely MUTED
+#                                  (desaturated) LINE_COLOR — see below
 FLOOR_BRIGHTNESS = 0.15         # LINEAR multiplier (STATIC path) — idle LEDs ONLY,
 #                                  throwable to 0. NOT read by the marker's crossfade.
 FLOOR_COLOR = (80, 80, 80)      # dim neutral, NOT a dimmed LINE_COLOR
@@ -197,6 +199,22 @@ axis. Colour is freed up to mean something else: which line/train this is.
 `LINE_COLOR` is a single fixed colour, not a per-line palette system (that's
 still the deferred "line-color palettes" work below) — for the single-line
 gift build this is one config constant.
+
+**`MARKER_SATURATION`: muted, not dimmed.** A request to make the marker "a
+few notches darker" turned out to already be available — mathematically,
+scaling render brightness (`MARKER_BRIGHTNESS`) and scaling the base colour by
+the same factor are identical under the STATIC path's linear
+`BRIGHTNESS × mult` — so a separate "shade" knob operating the same way would
+be a redundant lever on the same math, not a new capability. A genuinely
+**muted** colour (like real muted signage greens) is a different transform:
+it reduces *saturation* — each channel moves toward the colour's OWN max
+channel (toward grey), not toward zero. `desaturate(color, saturation)` is
+the HSV-saturation counterpart to the existing `hue_rotate(color, degrees)`
+(HSV-hue): same "shift one HSV axis, hold the others" pattern `EchoContract`'s
+`hue_rotate` already established, just the other axis. `MARKER_SATURATION` is
+applied once, at `ApproachContract.line_color`'s class-definition time (module
+load) — not recomputed every frame, since it's a fixed transform of a fixed
+colour.
 
 ---
 

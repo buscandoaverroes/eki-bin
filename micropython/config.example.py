@@ -74,6 +74,8 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # ANCHOR_BRIGHTNESS = 1.6  # >1.0 = brighter than a normal "full" position
 # POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
 # LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded
+# MARKER_SATURATION = 1.0  # 1.0=unchanged; lower = a genuinely MUTED
+#                            (desaturated) LINE_COLOR, not just a dimmer one
 # FLOOR_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker); idle LEDs ONLY —
 #                            0 = fully off. NOT read by the marker's crossfade.

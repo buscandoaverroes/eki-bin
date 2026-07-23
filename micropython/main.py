@@ -97,6 +97,10 @@ POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
 # is freed up to mean "this line" instead of re-encoding the same signal a
 # second way (same reasoning FLOOR_COLOR-not-dimmed already uses below).
 LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
+MARKER_SATURATION = getattr(config, "MARKER_SATURATION", 1.0)  # 1.0=unchanged;
+#   lower = a genuinely MUTED (desaturated) LINE_COLOR, not just a dimmer one
+#   — see desaturate()'s docstring for why those are different transforms.
+#   Applied once at class-definition time (ApproachContract.line_color).
 FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.15)  # 0 = idle LEDs fully off.
 #   Rendered via the STATIC path (see _write_frame) — a direct linear multiplier
 #   of BRIGHTNESS, no gamma. Needs to clear ~1 output code per FLOOR_COLOR
@@ -569,6 +573,29 @@ def hue_rotate(color, degrees):
     return (int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5))
 
 
+def desaturate(color, saturation):
+    """Scale a colour's SATURATION by `saturation` (0.0 = fully gray, 1.0 =
+    unchanged), keeping hue and value the same — a genuinely MUTED variant of
+    a colour, not just a dimmer one. `hue_rotate()`'s counterpart on the other
+    HSV axis: hue_rotate keeps the same brightness/vividness and shifts which
+    colour it is; desaturate keeps the same colour/brightness and shifts how
+    vivid it is.
+
+    Distinct from just lowering a render `mult` (e.g. MARKER_BRIGHTNESS):
+    scaling brightness scales R/G/B by the same factor, which is
+    mathematically identical to picking a *dimmer* version of the same colour
+    — it can't produce a *muted* (desaturated, toward-gray) version, since
+    that requires each channel to move toward the colour's own maximum
+    channel value, not toward zero. Used for ApproachContract's LINE_COLOR
+    (MARKER_SATURATION) — see docs/contracts/approach-contract.md.
+    """
+    r, g, b = (c / 255.0 for c in color)
+    h, s, v = _rgb_to_hsv(r, g, b)
+    s *= max(0.0, saturation)
+    r, g, b = _hsv_to_rgb(h, s, v)
+    return (int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5))
+
+
 # ── D. perceptual correction  ←  YOUR PART ──────────────────────
 def gamma(mult, g=GAMMA):
     """Perceptual-brightness correction for an animation multiplier (0..1 → 0..1).
@@ -753,7 +780,8 @@ class ApproachContract(DisplayContract):
     """
 
     frame_ms = FRAME_MS
-    line_color = LINE_COLOR
+    line_color = desaturate(LINE_COLOR, MARKER_SATURATION)  # computed once at
+    #   module load — MARKER_SATURATION=1.0 (default) is a no-op identity
 
     def __init__(self):
         # Instance state, not class state: tracks the *last actually rendered*
