@@ -4,6 +4,12 @@ See docs/contracts/approach-contract.md for the design. Distinct from every
 other contract here: it carries instance state across render() calls (the
 crossfade), so several tests render the SAME contract instance multiple times
 in sequence, unlike the stateless single-shot renders elsewhere.
+
+Terminology (matches the config/docs, not arbitrary): ANCHOR = the "0"
+reference point. MARKER = every idle "tick" LED — the gaps on the
+thermometer, neither the anchor nor the train. The train itself has no
+separate brightness knob — where it currently is renders at BRIGHTNESS
+directly (mult=1.0, once settled).
 """
 
 
@@ -61,25 +67,26 @@ def test_anchor_always_lit_even_with_no_trains(load_main):
     assert m.np.buf[m._physical(0)] == m.np.buf[m._physical(0)]  # sanity
 
 
-def test_idle_leds_render_floor_not_black(load_main):
-    # GAMMA=1.0 (linear): with the default perceptual GAMMA=2.2, a FLOOR_BRIGHTNESS
-    # this low legitimately rounds to (0,0,0) without dithering carrying the
-    # fractional value across frames — see test_dither_averages_to_target. That's
-    # correct, expected low-end behaviour, not what this test is checking.
+def test_idle_leds_render_marker_not_black(load_main):
+    # GAMMA=1.0 (linear): with the default perceptual GAMMA=2.2, a
+    # MARKER_BRIGHTNESS this low legitimately rounds to (0,0,0) without
+    # dithering carrying the fractional value across frames — see
+    # test_dither_averages_to_target. That's correct, expected low-end
+    # behaviour, not what this test is checking.
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        TRANSITION_MS=0, FLOOR_BRIGHTNESS=0.05, DITHER=False, BRIGHTNESS=1.0,
+        TRANSITION_MS=0, MARKER_BRIGHTNESS=0.05, DITHER=False, BRIGHTNESS=1.0,
         GAMMA=1.0,
     )
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([]), 0)
-    # every non-anchor LED is on (floor), not dark — this contract never clear()s
+    # every non-anchor LED is on (a marker tick), not dark — never clear()s
     assert _lit(m.np) == list(range(21))
 
 
-def test_floor_color_is_not_a_dimmed_line_color(load_main):
+def test_marker_color_is_not_a_dimmed_line_color(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        TRANSITION_MS=0, LINE_COLOR=(34, 139, 34), FLOOR_COLOR=(80, 80, 80),
+        TRANSITION_MS=0, LINE_COLOR=(34, 139, 34), MARKER_COLOR=(80, 80, 80),
         DITHER=False, BRIGHTNESS=1.0,
     )
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([]), 0)
@@ -99,7 +106,7 @@ def test_primary_train_lands_at_mapped_position(load_main):
     )
 
 
-def test_train_beyond_arm_len_is_dropped_anchor_and_floor_remain(load_main):
+def test_train_beyond_arm_len_is_dropped_anchor_and_markers_remain(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=5, NUM_LEDS=8,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False, BRIGHTNESS=1.0,
@@ -121,7 +128,7 @@ def test_only_primary_ttl_used_secondary_ignored(load_main):
     assert m.np.buf[m._physical(12)] != tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
 
 
-def test_hidden_signal_shows_anchor_and_floor_only(load_main):
+def test_hidden_signal_shows_anchor_and_markers_only(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         TRANSITION_MS=0, DITHER=False, BRIGHTNESS=1.0,
@@ -161,18 +168,18 @@ def test_crossfade_new_position_ramps_up_over_transition(load_main):
     late = m.np.buf[m._physical(10)]
     full = tuple(int(c * m.BRIGHTNESS) for c in m.LINE_COLOR)
     # Total brightness (sum of channels), not a single channel: the colour is
-    # ALSO lerping FLOOR_COLOR -> LINE_COLOR across the same span, and since
-    # FLOOR_COLOR's R/B happen to be brighter than LINE_COLOR's, a single
+    # ALSO lerping MARKER_COLOR -> LINE_COLOR across the same span, and since
+    # MARKER_COLOR's R/B happen to be brighter than LINE_COLOR's, a single
     # channel isn't guaranteed to rise monotonically even though the pixel as
-    # a whole is getting brighter (see MARKER_FADE_FLOOR's doc comment).
+    # a whole is getting brighter (see LINE_FADE_FLOOR's doc comment).
     assert sum(early) < sum(mid) < sum(late) == sum(full)
 
 
-def test_crossfade_old_position_ramps_down_toward_floor(load_main):
+def test_crossfade_old_position_ramps_down_toward_marker(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0, FLOOR_BRIGHTNESS=0.05,
+        BRIGHTNESS=1.0, GAMMA=1.0, MARKER_BRIGHTNESS=0.05,
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)
@@ -187,10 +194,10 @@ def test_crossfade_old_position_ramps_down_toward_floor(load_main):
     # Total brightness — see the comment in the ramps-up test above.
     assert sum(old_at_start) > sum(old_mid) > sum(old_end)
     # Once fully settled, index 10 is drawn with NOTHING (fading_index cleared)
-    # — it's genuinely idle again, so it falls back to the plain floor baseline
-    # (FLOOR_BRIGHTNESS/FLOOR_COLOR), not MARKER_FADE_FLOOR.
-    floor_level = tuple(int(c * m.BRIGHTNESS * m.FLOOR_BRIGHTNESS) for c in m.FLOOR_COLOR)
-    assert old_end == floor_level
+    # — it's genuinely idle again, so it falls back to the plain marker
+    # baseline (MARKER_BRIGHTNESS/MARKER_COLOR), not LINE_FADE_FLOOR.
+    marker_level = tuple(int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR)
+    assert old_end == marker_level
 
 
 def test_crossfade_progress_uses_absolute_clock_not_relative(load_main):
@@ -237,37 +244,47 @@ def test_anchor_wins_when_train_lands_on_anchor_index(load_main):
     assert m.np.buf[m._physical(0)] == _anchor_level(m)
 
 
-def test_marker_brightness_independent_of_floor_brightness(load_main):
-    # The bug this guards: FLOOR_BRIGHTNESS used to double as the crossfade's
-    # dim endpoint too, so retuning the ambient floor level also silently
-    # changed the marker's fade dynamic range. MARKER_FADE_FLOOR/
-    # MARKER_BRIGHTNESS must be independently tunable — changing
-    # FLOOR_BRIGHTNESS alone must not move the settled marker's brightness.
+# ── the three independent brightness knobs ──────────────────────────
+
+
+def test_train_brightness_is_just_global_brightness_not_a_separate_knob(load_main):
+    # Design decision: unlike ANCHOR_BRIGHTNESS and MARKER_BRIGHTNESS, the
+    # train has NO brightness knob of its own — "where the train is" renders
+    # at BRIGHTNESS directly (mult=1.0), full stop. Confirms that invariant.
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
-        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
-        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0, FLOOR_BRIGHTNESS=0.05,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False, BRIGHTNESS=0.5,
     )
     m.ACTIVE_CONTRACT.render(m.LeaveSignal([5.0]), 0)
-    dim_floor = m.np.buf[m._physical(5)]
+    assert m.np.buf[m._physical(5)] == tuple(int(c * 0.5) for c in m.LINE_COLOR)
 
-    m2 = load_main(
+
+def test_marker_brightness_independent_of_anchor_and_train(load_main):
+    # The bug this guards: brightness constants used to be coupled (an idle
+    # tick's ambient level doubling as the crossfade's dim endpoint), so
+    # retuning one silently moved the other. MARKER_BRIGHTNESS must be
+    # freely tunable without moving the anchor or the settled train at all.
+    dim = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
-        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0, FLOOR_BRIGHTNESS=0.90,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=0.05,
     )
-    m2.ACTIVE_CONTRACT.render(m2.LeaveSignal([5.0]), 0)
-    bright_floor = m2.np.buf[m2._physical(5)]
+    dim.ACTIVE_CONTRACT.render(dim.LeaveSignal([5.0]), 0)
 
-    assert dim_floor == bright_floor  # marker unaffected by the floor change
+    bright = load_main(
+        CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
+        POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=0.90,
+    )
+    bright.ACTIVE_CONTRACT.render(bright.LeaveSignal([5.0]), 0)
+
+    assert dim.np.buf[dim._physical(0)] == bright.np.buf[bright._physical(0)]  # anchor
+    assert dim.np.buf[dim._physical(5)] == bright.np.buf[bright._physical(5)]  # train
 
 
-def test_marker_brightness_actually_changes_the_settled_marker(load_main):
-    # Directly verifies MARKER_BRIGHTNESS moves the ONE lit train LED (settled,
-    # TRANSITION_MS=0 so no animation is in play) — not the 19 floor LEDs,
-    # which never read MARKER_BRIGHTNESS at all (that's FLOOR_BRIGHTNESS's job,
-    # a fully separate LED). A common mix-up: expecting MARKER_BRIGHTNESS to
-    # dim the whole strip rather than just the single moving dot.
+def test_marker_brightness_actually_changes_the_marker_ticks(load_main):
+    # Directly verifies MARKER_BRIGHTNESS moves the 19 idle tick LEDs (not the
+    # anchor, not the train) — the mirror image of the test above.
     dim = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
@@ -278,52 +295,52 @@ def test_marker_brightness_actually_changes_the_settled_marker(load_main):
     bright = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0, DITHER=False,
-        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=1.0,
+        BRIGHTNESS=1.0, MARKER_BRIGHTNESS=0.9,
     )
     bright.ACTIVE_CONTRACT.render(bright.LeaveSignal([5.0]), 0)
 
-    # The marker LED (index 5) is dimmer...
-    assert sum(dim.np.buf[dim._physical(5)]) < sum(bright.np.buf[bright._physical(5)])
-    # ...but every floor LED is completely unaffected by the change.
     for i in range(1, 21):
-        if i == 5:
+        if i == 5:  # the train, unaffected — checked in the test above
             continue
-        assert dim.np.buf[dim._physical(i)] == bright.np.buf[bright._physical(i)]
+        assert sum(dim.np.buf[dim._physical(i)]) < sum(bright.np.buf[bright._physical(i)])
 
 
-def test_marker_fade_floor_independent_of_floor_brightness(load_main):
+def test_line_fade_floor_independent_of_marker_brightness(load_main):
     m = load_main(
         CONTRACT="approach", ANCHOR_INDEX=0, ARM_A_LEN=20, NUM_LEDS=21,
         POSITION_MINUTES_PER_LED=1, TRANSITION_MS=4000, DITHER=False,
-        BRIGHTNESS=1.0, GAMMA=1.0, MARKER_FADE_FLOOR=0.5, FLOOR_BRIGHTNESS=0.01,
+        BRIGHTNESS=1.0, GAMMA=1.0, LINE_FADE_FLOOR=0.5, MARKER_BRIGHTNESS=0.01,
     )
     contract = m.ACTIVE_CONTRACT
     contract.render(m.LeaveSignal([10.0]), 0)  # transition just started, progress=0
     at_start = sum(m.np.buf[m._physical(10)])
-    # At progress=0 the marker's brightness mult is exactly MARKER_FADE_FLOOR,
-    # nowhere near the near-off FLOOR_BRIGHTNESS=0.01 — confirms the two
+    # At progress=0 the train's brightness mult is exactly LINE_FADE_FLOOR,
+    # nowhere near the near-off MARKER_BRIGHTNESS=0.01 — confirms the two
     # constants are reading from separate knobs, not the same one.
     assert at_start > 0
-    floor_only = sum(
-        int(c * m.BRIGHTNESS * m.FLOOR_BRIGHTNESS) for c in m.FLOOR_COLOR
+    marker_only = sum(
+        int(c * m.BRIGHTNESS * m.MARKER_BRIGHTNESS) for c in m.MARKER_COLOR
     )
-    assert at_start > floor_only * 5  # comfortably above the near-off floor level
+    assert at_start > marker_only * 5  # comfortably above the near-off marker level
 
 
-# ── registry ───────────────────────────────────────────────────────
+# ── colour (LINE_SATURATION) ─────────────────────────────────────────
 
 
-def test_marker_saturation_mutes_line_color(load_main):
+def test_line_saturation_mutes_line_color(load_main):
     m = load_main(
-        CONTRACT="approach", LINE_COLOR=(34, 139, 34), MARKER_SATURATION=0.3,
+        CONTRACT="approach", LINE_COLOR=(34, 139, 34), LINE_SATURATION=0.3,
     )
     assert m.ACTIVE_CONTRACT.line_color == m.desaturate((34, 139, 34), 0.3)
     assert m.ACTIVE_CONTRACT.line_color != (34, 139, 34)  # actually changed
 
 
-def test_marker_saturation_default_is_unchanged(load_main):
+def test_line_saturation_default_is_unchanged(load_main):
     m = load_main(CONTRACT="approach", LINE_COLOR=(34, 139, 34))
     assert m.ACTIVE_CONTRACT.line_color == (34, 139, 34)
+
+
+# ── registry ───────────────────────────────────────────────────────
 
 
 def test_approach_selectable_via_config(load_main):

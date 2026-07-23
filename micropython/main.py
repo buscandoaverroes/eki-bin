@@ -84,8 +84,8 @@ ANCHOR_INDEX = getattr(config, "ANCHOR_INDEX", 0)
 ARM_A_LEN = getattr(config, "ARM_A_LEN", NUM_LEDS - 1)
 ARM_B_LEN = getattr(config, "ARM_B_LEN", 0)
 ANCHOR_COLOR = getattr(config, "ANCHOR_COLOR", (255, 200, 120))  # warm white/amber —
-#   distinct from both LINE_COLOR and FLOOR_COLOR so the station marker never
-#   reads as "a very close train" or "an empty slot".
+#   distinct from both LINE_COLOR and MARKER_COLOR so the anchor never
+#   reads as "a very close train" or "an empty tick".
 ANCHOR_BRIGHTNESS = getattr(config, "ANCHOR_BRIGHTNESS", 1.6)  # relative to a normal
 #   "full" position (mult=1.0) — >1.0 makes the anchor genuinely brighter than
 #   the BRIGHTNESS ceiling everything else tops out at, not just relying on
@@ -95,32 +95,32 @@ POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
 # The train's own colour is fixed, NOT urgency-banded like PALETTE: in this
 # paradigm distance-to-anchor already encodes urgency continuously, so colour
 # is freed up to mean "this line" instead of re-encoding the same signal a
-# second way (same reasoning FLOOR_COLOR-not-dimmed already uses below).
+# second way (same reasoning MARKER_COLOR-not-dimmed already uses below).
 LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
-MARKER_SATURATION = getattr(config, "MARKER_SATURATION", 1.0)  # 1.0=unchanged;
+LINE_SATURATION = getattr(config, "LINE_SATURATION", 1.0)  # 1.0=unchanged;
 #   lower = a genuinely MUTED (desaturated) LINE_COLOR, not just a dimmer one
 #   — see desaturate()'s docstring for why those are different transforms.
 #   Applied once at class-definition time (ApproachContract.line_color).
-FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.15)  # 0 = idle LEDs fully off.
-#   Rendered via the STATIC path (see _write_frame) — a direct linear multiplier
-#   of BRIGHTNESS, no gamma. Needs to clear ~1 output code per FLOOR_COLOR
-#   channel or the floor truncates invisibly to black. ONLY affects genuinely
-#   idle LEDs — deliberately NOT reused by the marker's crossfade (see
-#   MARKER_BRIGHTNESS/MARKER_FADE_FLOOR below): tuning the ambient floor level
-#   used to also drag the crossfade's dynamic range along with it, since both
-#   read this same constant — first real-hardware retuning found that coupling
-#   actively fighting itself, so the two are now fully independent knobs.
-FLOOR_COLOR = getattr(config, "FLOOR_COLOR", (80, 80, 80))  # dim neutral — NOT a
-#   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Floor / idle state)
-MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 1.0)  # settled marker's
-#   own mult (STATIC path, linear) — independent of both FLOOR_BRIGHTNESS and
-#   the global BRIGHTNESS ceiling (which it's still multiplied by, same as
-#   every other mult in the system; "independent" means "its own separate
-#   knob", not "bypasses BRIGHTNESS entirely" like ANCHOR_BRIGHTNESS also is).
-MARKER_FADE_FLOOR = getattr(config, "MARKER_FADE_FLOOR", 0.3)  # dim end of the
-#   crossfade envelope (ANIMATED path) — how dim an appearing/disappearing
-#   marker gets at the extremes of its OWN fade, unrelated to how dim a truly
-#   idle LED (FLOOR_BRIGHTNESS) renders.
+# Where the train currently is renders at BRIGHTNESS directly (mult=1.0,
+# STATIC path, once settled) — no separate "train brightness" knob. Three
+# independent brightness surfaces total: ANCHOR_BRIGHTNESS (the "0"),
+# MARKER_BRIGHTNESS (the idle ticks, below), and BRIGHTNESS itself (the
+# train). Simpler than an earlier draft that also gave the train its own
+# scalar on top of BRIGHTNESS — that was one knob too many.
+LINE_FADE_FLOOR = getattr(config, "LINE_FADE_FLOOR", 0.3)  # dim end of the
+#   train's OWN crossfade envelope (ANIMATED path only) — how dim an
+#   appearing/disappearing train gets at the extremes of its fade. Unrelated
+#   to how dim a truly idle tick (MARKER_BRIGHTNESS) renders — the two used
+#   to share one constant, which meant tuning the idle look also dragged the
+#   crossfade's dynamic range along with it; they're independent on purpose.
+MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.15)  # LINEAR multiplier
+#   of BRIGHTNESS for the idle "tick" LEDs — every position that ISN'T the
+#   anchor or the train right now (the gaps on the thermometer). Rendered via
+#   the STATIC path (see _write_frame) — direct linear, no gamma. Needs to
+#   clear ~1 output code per MARKER_COLOR channel or it truncates invisibly
+#   to black. 0 = idle LEDs fully off.
+MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
+#   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
 
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
@@ -581,13 +581,13 @@ def desaturate(color, saturation):
     colour it is; desaturate keeps the same colour/brightness and shifts how
     vivid it is.
 
-    Distinct from just lowering a render `mult` (e.g. MARKER_BRIGHTNESS):
-    scaling brightness scales R/G/B by the same factor, which is
-    mathematically identical to picking a *dimmer* version of the same colour
-    — it can't produce a *muted* (desaturated, toward-gray) version, since
-    that requires each channel to move toward the colour's own maximum
-    channel value, not toward zero. Used for ApproachContract's LINE_COLOR
-    (MARKER_SATURATION) — see docs/contracts/approach-contract.md.
+    Distinct from just lowering a render `mult` (brightness): scaling
+    brightness scales R/G/B by the same factor, which is mathematically
+    identical to picking a *dimmer* version of the same colour — it can't
+    produce a *muted* (desaturated, toward-gray) version, since that requires
+    each channel to move toward the colour's own maximum channel value, not
+    toward zero. Used for ApproachContract's LINE_COLOR (LINE_SATURATION) —
+    see docs/contracts/approach-contract.md.
     """
     r, g, b = (c / 255.0 for c in color)
     h, s, v = _rgb_to_hsv(r, g, b)
@@ -770,18 +770,22 @@ class ApproachContract(DisplayContract):
     machinery (_arm_target) is already direction-generic, only the render()
     call site would need to also target arm "b" for a second signal.
 
-    Every idle LED (not the anchor, not the primary's current/previous
-    position) renders at FLOOR_BRIGHTNESS/FLOOR_COLOR — deliberately a
-    different colour, not a dimmed LINE_COLOR, so an empty slot can't be
-    mistaken for "a very distant train" (see the concept doc's Floor section).
-    The marker's own crossfade brightness (MARKER_BRIGHTNESS/MARKER_FADE_FLOOR)
-    is a fully separate axis from FLOOR_BRIGHTNESS — tuning the idle floor no
-    longer drags the marker's fade dynamics along with it.
+    Three independent brightness surfaces, matching how this actually reads
+    to a viewer: ANCHOR_BRIGHTNESS (the "0"), MARKER_BRIGHTNESS/MARKER_COLOR
+    (the idle "tick" LEDs — every position that isn't the anchor or the train
+    right now), and BRIGHTNESS itself (where the train is — no separate knob,
+    it's just the global ceiling, mult=1.0, once settled). MARKER_COLOR is
+    deliberately a different colour from LINE_COLOR, not a dimmed version of
+    it, so an idle tick can't be mistaken for "a very distant train" (see the
+    concept doc's Marker ticks section). The train's OWN crossfade dim-point
+    (LINE_FADE_FLOOR) is a fully separate axis from MARKER_BRIGHTNESS —
+    tuning the idle ticks no longer drags the train's fade dynamics along
+    with it.
     """
 
     frame_ms = FRAME_MS
-    line_color = desaturate(LINE_COLOR, MARKER_SATURATION)  # computed once at
-    #   module load — MARKER_SATURATION=1.0 (default) is a no-op identity
+    line_color = desaturate(LINE_COLOR, LINE_SATURATION)  # computed once at
+    #   module load — LINE_SATURATION=1.0 (default) is a no-op identity
 
     def __init__(self):
         # Instance state, not class state: tracks the *last actually rendered*
@@ -790,7 +794,7 @@ class ApproachContract(DisplayContract):
         # pure function of (signal, phase_ms) alone.
         self._active_index = None  # current/incoming train position, or None
         self._active_color = None
-        self._fading_index = None  # previous position, ramping toward the floor
+        self._fading_index = None  # previous position, ramping toward idle
         self._fading_color = None
         self._transition_start = None  # phase_ms the current transition began
 
@@ -817,7 +821,7 @@ class ApproachContract(DisplayContract):
         #   ANIMATED vs STATIC split: only a pixel that's actually changing
         #   frame-to-frame benefits from gamma+dither; a settled one should
         #   render STATIC or risk the same low-brightness dither-flicker the
-        #   floor has (docs/contracts/approach-contract.md § Floor).
+        #   marker ticks have (docs/contracts/approach-contract.md § Marker ticks).
 
         # gamma-shape the brightness ramp (not the colour lerp — colour blending
         # doesn't suffer the same dim-end banding brightness does), same
@@ -826,21 +830,21 @@ class ApproachContract(DisplayContract):
         fade_in = gamma(progress)
         fade_out = gamma(1.0 - progress)
 
-        # Floor is always STATIC — it never changes frame-to-frame, so it never
-        # benefits from dithering, only risks flickering from it.
-        frame = [(FLOOR_COLOR, FLOOR_BRIGHTNESS, "static")] * NUM_LEDS
+        # Marker ticks are always STATIC — they never change frame-to-frame,
+        # so they never benefit from dithering, only risk flickering from it.
+        frame = [(MARKER_COLOR, MARKER_BRIGHTNESS, "static")] * NUM_LEDS
 
-        # The crossfade's own dim/bright endpoints — MARKER_FADE_FLOOR/
-        # MARKER_BRIGHTNESS, NOT FLOOR_BRIGHTNESS. A marker fading in/out
-        # blends toward FLOOR_COLOR (still "sinking into the idle look"
-        # visually) but its BRIGHTNESS range is its own, independently
-        # tunable axis — see MARKER_BRIGHTNESS/MARKER_FADE_FLOOR above.
-        marker_span = MARKER_BRIGHTNESS - MARKER_FADE_FLOOR
+        # The train's own crossfade dim/bright endpoints — LINE_FADE_FLOOR up
+        # to 1.0 (full BRIGHTNESS, the same "settled" level below), NOT
+        # MARKER_BRIGHTNESS. A train fading in/out blends toward MARKER_COLOR
+        # (still "sinking into the idle look" visually) but its BRIGHTNESS
+        # range is its own, independently tunable axis.
+        line_span = 1.0 - LINE_FADE_FLOOR
 
         if animating and self._fading_index is not None:
             frame[self._fading_index] = (
-                lerp_color(self._fading_color, FLOOR_COLOR, progress),
-                MARKER_FADE_FLOOR + marker_span * fade_out,
+                lerp_color(self._fading_color, MARKER_COLOR, progress),
+                LINE_FADE_FLOOR + line_span * fade_out,
             )  # ANIMATED: genuinely ramping down this frame
         else:
             self._fading_index = None  # settled — stop tracking, no longer drawn
@@ -848,14 +852,15 @@ class ApproachContract(DisplayContract):
         if self._active_index is not None:
             if animating:
                 frame[self._active_index] = (
-                    lerp_color(FLOOR_COLOR, self._active_color, progress),
-                    MARKER_FADE_FLOOR + marker_span * fade_in,
+                    lerp_color(MARKER_COLOR, self._active_color, progress),
+                    LINE_FADE_FLOOR + line_span * fade_in,
                 )  # ANIMATED: genuinely ramping up this frame
             else:
                 # Settled: identical every frame until the position next
                 # changes — render STATIC (see _write_frame) so it doesn't
-                # dither-flicker while just sitting there.
-                frame[self._active_index] = (self._active_color, MARKER_BRIGHTNESS, "static")
+                # dither-flicker while just sitting there. mult=1.0, i.e.
+                # exactly BRIGHTNESS — no separate "train brightness" knob.
+                frame[self._active_index] = (self._active_color, 1.0, "static")
 
         # Anchor is painted last so it always wins, even the instant a train
         # lands on ANCHOR_INDEX itself — it never participates in train logic.

@@ -70,19 +70,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # ANCHOR_INDEX = 0        # LED index of the station/anchor position
 # ARM_A_LEN = 20          # LEDs available outward from the anchor, direction A
 # ARM_B_LEN = 0           # direction B; 0 = single-direction (phase 1) layout
-# ANCHOR_COLOR = (255, 200, 120)  # always-on anchor colour
+# ANCHOR_COLOR = (255, 200, 120)  # always-on anchor ("the 0") colour
 # ANCHOR_BRIGHTNESS = 1.6  # >1.0 = brighter than a normal "full" position
 # POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
-# LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded
-# MARKER_SATURATION = 1.0  # 1.0=unchanged; lower = a genuinely MUTED
+# LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded.
+#                            Where the train currently is renders at
+#                            BRIGHTNESS directly — no separate brightness knob.
+# LINE_SATURATION = 1.0    # 1.0=unchanged; lower = a genuinely MUTED
 #                            (desaturated) LINE_COLOR, not just a dimmer one
-# FLOOR_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
-#                            avoids low-brightness flicker); idle LEDs ONLY —
-#                            0 = fully off. NOT read by the marker's crossfade.
-# FLOOR_COLOR = (80, 80, 80)      # idle-LED colour, NOT a dimmed LINE_COLOR
-# MARKER_BRIGHTNESS = 1.0  # settled marker's own mult — independent of FLOOR_BRIGHTNESS
-# MARKER_FADE_FLOOR = 0.3  # dim end of the marker's OWN crossfade — independent
-#                            of FLOOR_BRIGHTNESS (see approach-contract.md)
+# LINE_FADE_FLOOR = 0.3    # dim end of the train's OWN crossfade — independent
+#                            of MARKER_BRIGHTNESS (see approach-contract.md)
+# MARKER_BRIGHTNESS = 0.15  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
+#                            avoids low-brightness flicker) for the idle
+#                            "tick" LEDs — 0 = fully off. NOT read by the
+#                            train's crossfade.
+# MARKER_COLOR = (80, 80, 80)     # idle tick-LED colour, NOT a dimmed LINE_COLOR
 # TRANSITION_MS = 4000     # crossfade duration between position updates, ms
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
