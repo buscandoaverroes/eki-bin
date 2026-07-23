@@ -76,6 +76,27 @@ SECONDARY_BREATHE_FLOOR = getattr(config, "SECONDARY_BREATHE_FLOOR", 0.7)  # hig
 #   BreathingContract's own BREATHE_FLOOR drives; deliberately separate knobs
 #   so tuning one doesn't fight the other.
 
+# ApproachContract only — positional paradigm, see docs/contracts/approach-contract.md.
+# ANCHOR_INDEX/ARM_*_LEN are one arm-generic mechanism: phase 1 (this build) sets
+# ARM_B_LEN=0 for a single direction; phase 2 (bidirectional) is the same code
+# path with different config, not a second contract.
+ANCHOR_INDEX = getattr(config, "ANCHOR_INDEX", 0)
+ARM_A_LEN = getattr(config, "ARM_A_LEN", NUM_LEDS - 1)
+ARM_B_LEN = getattr(config, "ARM_B_LEN", 0)
+ANCHOR_COLOR = getattr(config, "ANCHOR_COLOR", (255, 200, 120))  # warm white/amber —
+#   distinct from both LINE_COLOR and FLOOR_COLOR so the station marker never
+#   reads as "a very close train" or "an empty slot".
+POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
+# The train's own colour is fixed, NOT urgency-banded like PALETTE: in this
+# paradigm distance-to-anchor already encodes urgency continuously, so colour
+# is freed up to mean "this line" instead of re-encoding the same signal a
+# second way (same reasoning FLOOR_COLOR-not-dimmed already uses below).
+LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
+FLOOR_BRIGHTNESS = getattr(config, "FLOOR_BRIGHTNESS", 0.05)  # 0 = idle LEDs fully off
+FLOOR_COLOR = getattr(config, "FLOOR_COLOR", (80, 80, 80))  # dim neutral — NOT a
+#   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Floor / idle state)
+TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
+
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
 # GPIO). Other boards have no such alias: set this to a GPIO number for that
@@ -201,6 +222,32 @@ def _physical(logical):
     return logical  # "near" (default): logical index == physical index
 
 
+def _position_offset(ttl):
+    """time-to-leave (minutes) → integer offset from the anchor (always ≥1),
+    POSITION_MINUTES_PER_LED minutes per LED — the ApproachContract analogue of
+    _arc_len, but a single step count rather than a growing arc length. (ttl is
+    guaranteed ≥0 — uncatchable was already dropped in Stage 1.)"""
+    return max(1, math.ceil(ttl / POSITION_MINUTES_PER_LED))
+
+
+def _arm_target(ttl, arm_len, direction):
+    """time-to-leave → a logical strip index along one arm of ApproachContract's
+    anchor/arm geometry, or None if the offset exceeds that arm's length —
+    dropped, the same "uncatchable" precedent time_to_leave() already applies
+    for trains inside WALK_TO_STATION_MINS: an approach contract can't show a
+    train further out than the strip's physical arm reaches, just like an arc
+    contract can't grow an arc past NUM_LEDS.
+
+    direction: "a" walks outward with increasing indices (ANCHOR_INDEX + offset,
+    phase 1's only active arm); "b" walks the other way (ANCHOR_INDEX - offset,
+    phase 2 / bidirectional). Same function either way — arm choice is a config
+    question (ARM_A_LEN vs ARM_B_LEN), not a code fork."""
+    offset = _position_offset(ttl)
+    if offset > arm_len:
+        return None
+    return ANCHOR_INDEX + offset if direction == "a" else ANCHOR_INDEX - offset
+
+
 def _heartbeat_pin(name):
     """Construct the status-heartbeat Pin, or None if disabled. Pulled out as its
     own function (rather than inline in main()) purely so it's host-testable
@@ -248,28 +295,15 @@ def _layer_hue_shift(index):
     return 0 if index == 0 else SECONDARY_HUE_SHIFT_DEG * index
 
 
-def _paint_layers(layers):
-    """Composite multiple (color, lit, mult) arcs onto the strip in ONE frame —
-    the paradigm-independent primitive `_paint` is built on. Each layer is a
-    logical-position count (`lit`) exactly like `_paint` takes; this is what
-    makes "N trains" work identically for a bar, a ring, or a randomized layout:
-    none of this function's geometry knowledge is paradigm-specific — that all
-    lives in `_physical()`, which every layer still goes through.
-
-    Layers are composited back-to-front: entries LATER in `layers` are painted
-    FIRST, so entries EARLIER in the list win where arcs overlap. In practice
-    `layers` is ordered primary-first (brightest, usually shortest), so the
-    primary always wins the overlap — this holds even in the edge case where two
-    trains happen to produce the same arc length. One np.write() regardless of
-    layer count, so temporal dithering stays coherent across frames (multiple
-    separate _paint() calls would each flush the strip, wasting writes and
-    fighting the dither residual)."""
-    frame = [None] * NUM_LEDS  # logical position → (color, mult) or None (dark)
-    for color, lit, mult in layers[::-1]:  # slicing, not reversed() — some
-        # MicroPython builds omit the reversed() builtin; slicing is universal
-        for logical in range(lit):
-            frame[logical] = (color, mult)
-
+def _write_frame(frame):
+    """Composite a resolved frame — one (color, mult) or None per LOGICAL index —
+    onto the physical strip in ONE np.write(). This is the shared tail every
+    render path converges on: gamma-corrects `mult`, dithers, and honours the
+    `_physical()` HAL seam. `_paint_layers` builds `frame` from arc-shaped
+    layers; a contract with different geometry (e.g. ApproachContract's single
+    positions, not arcs) can build `frame` directly and call this instead —
+    the compositing *math* (gamma, dither, one write) doesn't care how the
+    frame was assembled, only `_paint_layers` needs to know about arcs."""
     for logical in range(NUM_LEDS):
         phys = _physical(logical)
         entry = frame[logical]
@@ -284,6 +318,27 @@ def _paint_layers(layers):
         else:
             np[phys] = tuple(int(color[ch] * level) for ch in range(3))
     np.write()
+
+
+def _paint_layers(layers):
+    """Composite multiple (color, lit, mult) arcs into a frame — the
+    paradigm-independent primitive `_paint` is built on. Each layer is a
+    logical-position count (`lit`) exactly like `_paint` takes; this is what
+    makes "N trains" work identically for a bar, a ring, or a randomized layout:
+    none of this function's geometry knowledge is paradigm-specific — that all
+    lives in `_physical()`, which every layer still goes through.
+
+    Layers are composited back-to-front: entries LATER in `layers` are painted
+    FIRST, so entries EARLIER in the list win where arcs overlap. In practice
+    `layers` is ordered primary-first (brightest, usually shortest), so the
+    primary always wins the overlap — this holds even in the edge case where two
+    trains happen to produce the same arc length."""
+    frame = [None] * NUM_LEDS  # logical position → (color, mult) or None (dark)
+    for color, lit, mult in layers[::-1]:  # slicing, not reversed() — some
+        # MicroPython builds omit the reversed() builtin; slicing is universal
+        for logical in range(lit):
+            frame[logical] = (color, mult)
+    _write_frame(frame)
 
 
 def _paint(color, lit, mult=1.0):
@@ -610,6 +665,84 @@ class EchoContract(DisplayContract):
         _paint_layers(layers)
 
 
+class ApproachContract(DisplayContract):
+    """Positional/approach paradigm: the primary train renders as a SINGLE LED
+    that moves toward ANCHOR_INDEX as its time-to-leave shrinks, rather than an
+    arc that grows/shrinks from a fixed origin. See
+    docs/contracts/approach-contract.md for the full design rationale.
+
+    Phase 1 (this build): ARM_B_LEN=0, so only arm "a" is ever targeted. Phase 2
+    (bidirectional) reuses this exact class with different config — the arm
+    machinery (_arm_target) is already direction-generic, only the render()
+    call site would need to also target arm "b" for a second signal.
+
+    Every idle LED (not the anchor, not the primary's current/previous
+    position) renders at FLOOR_BRIGHTNESS/FLOOR_COLOR — deliberately a
+    different colour, not a dimmed LINE_COLOR, so an empty slot can't be
+    mistaken for "a very distant train" (see the concept doc's Floor section).
+    """
+
+    frame_ms = FRAME_MS
+    line_color = LINE_COLOR
+
+    def __init__(self):
+        # Instance state, not class state: tracks the *last actually rendered*
+        # position across calls, so a change in position can be detected and
+        # crossfaded — unlike every other contract here, this one is not a
+        # pure function of (signal, phase_ms) alone.
+        self._active_index = None  # current/incoming train position, or None
+        self._active_color = None
+        self._fading_index = None  # previous position, ramping toward the floor
+        self._fading_color = None
+        self._transition_start = None  # phase_ms the current transition began
+
+    def render(self, signal, phase_ms):
+        target = None
+        if signal.urgency is not HIDDEN and signal.primary is not None:
+            target = _arm_target(signal.primary, ARM_A_LEN, "a")
+
+        if target != self._active_index:
+            if self._active_index is not None:
+                self._fading_index = self._active_index
+                self._fading_color = self._active_color
+            self._active_index = target
+            self._active_color = self.line_color
+            self._transition_start = phase_ms
+
+        progress = 1.0
+        if TRANSITION_MS > 0 and self._transition_start is not None:
+            elapsed = phase_ms - self._transition_start  # phase_ms: absolute
+            #   ticks_ms(), same "no snap-back across intervals" pattern the
+            #   breathing envelopes use — see render_for_interval().
+            progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
+        # gamma-shape the brightness ramp (not the colour lerp — colour blending
+        # doesn't suffer the same dim-end banding brightness does), same
+        # perceptual-smoothness rationale gamma() already documents.
+        fade_in = gamma(progress)
+        fade_out = gamma(1.0 - progress)
+
+        frame = [(FLOOR_COLOR, FLOOR_BRIGHTNESS)] * NUM_LEDS
+
+        if progress < 1.0 and self._fading_index is not None:
+            frame[self._fading_index] = (
+                lerp_color(self._fading_color, FLOOR_COLOR, progress),
+                FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_out,
+            )
+        else:
+            self._fading_index = None  # transition settled — stop tracking it
+
+        if self._active_index is not None:
+            frame[self._active_index] = (
+                lerp_color(FLOOR_COLOR, self._active_color, progress),
+                FLOOR_BRIGHTNESS + (1.0 - FLOOR_BRIGHTNESS) * fade_in,
+            )
+
+        # Anchor is painted last so it always wins, even the instant a train
+        # lands on ANCHOR_INDEX itself — it never participates in train logic.
+        frame[ANCHOR_INDEX] = (ANCHOR_COLOR, 1.0)
+        _write_frame(frame)
+
+
 # Registry: config's CONTRACT name → class. Add new contracts here so they're
 # selectable from config.py without touching the main loop.
 CONTRACTS = {
@@ -619,6 +752,7 @@ CONTRACTS = {
     "breathing_exponent": BreathingExponentContract,
     "breathing_inverse": BreathingInverseContract,
     "echo": EchoContract,
+    "approach": ApproachContract,
 }
 ACTIVE_CONTRACT = CONTRACTS.get(CONTRACT_NAME, SandTimerContract)()
 

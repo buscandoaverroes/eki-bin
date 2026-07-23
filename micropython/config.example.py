@@ -41,6 +41,7 @@ HEARTBEAT_PIN = "LED"  # status LED. "LED" is a Pico-2W-only alias — on boards
 BRIGHTNESS = 0.15  # 0.0–1.0 global ceiling — ambient, not blinding
 CONTRACT = "breathing"  # "sandtimer" | "color" | "breathing"
 #                         | "breathing_exponent" | "breathing_inverse" | "echo"
+#                         | "approach"
 COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
@@ -62,6 +63,19 @@ BACKGROUND_BRIGHTNESS = 0.35  # 0..1; relative brightness of the 2nd train's
 SECONDARY_HUE_SHIFT_DEG = 20  # degrees per train index beyond the primary
 SECONDARY_BREATHE_PERIOD_MS = 3000  # ms per breath cycle
 SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
+
+# "approach" contract only — positional/approach paradigm, see
+# docs/contracts/approach-contract.md. A train renders as a single LED that
+# moves toward ANCHOR_INDEX as it nears, instead of a growing/shrinking arc.
+# ANCHOR_INDEX = 0        # LED index of the station/anchor position
+# ARM_A_LEN = 20          # LEDs available outward from the anchor, direction A
+# ARM_B_LEN = 0           # direction B; 0 = single-direction (phase 1) layout
+# ANCHOR_COLOR = (255, 200, 120)  # always-on anchor colour
+# POSITION_MINUTES_PER_LED = 1    # minutes-to-leave per LED of offset
+# LINE_COLOR = (34, 139, 34)      # forest green — fixed, not urgency-banded
+# FLOOR_BRIGHTNESS = 0.05  # idle-LED brightness; 0 = fully off
+# FLOOR_COLOR = (80, 80, 80)      # idle-LED colour, NOT a dimmed LINE_COLOR
+# TRANSITION_MS = 4000     # crossfade duration between position updates, ms
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24

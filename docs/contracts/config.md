@@ -31,7 +31,7 @@ it with `getattr(config, "NAME", default)`, so
 | `ARC_ORIGIN` | str | no | `"near"` | Which end the arc grows from: `"near"` = DIN end (index 0), `"far"` = the other end. Logical, not physical — flip when the strip mounts upside-down. Applied in `_physical()`, the HAL seam |
 | `HEARTBEAT_PIN` | str/int/`None` | no | `"LED"` | Status heartbeat LED. `"LED"` is a **Pico 2W–only** alias (routed via the CYW43 WiFi chip). Other boards have no such alias — set a GPIO number (see `pinouts/<board>.md`) or `None` to disable. The console heartbeat (●/○) is unaffected either way |
 | `BRIGHTNESS` | float | no | `0.15` | `0.0–1.0` global brightness ceiling |
-| `CONTRACT` | str | no | `"sandtimer"` | Active display strategy: `"sandtimer"` \| `"color"` \| `"breathing"` \| `"breathing_exponent"` \| `"breathing_inverse"` \| `"echo"` |
+| `CONTRACT` | str | no | `"sandtimer"` | Active display strategy: `"sandtimer"` \| `"color"` \| `"breathing"` \| `"breathing_exponent"` \| `"breathing_inverse"` \| `"echo"` \| `"approach"` |
 | `COLOR_SCHEME` | str | no | `"default"` | Urgency→colour palette: `"default"` \| `"sunset"` \| `"mono"` |
 | `MINUTES_PER_LED` | int | no | `1` | Arc geometry: minutes-to-leave each LED represents |
 | `URGENCY_THRESHOLDS` | tuple | no | `(2, 5)` | Minutes-to-leave band edges → `LEVEL_1` (`< 2`), `LEVEL_2` (`2–5`), `LEVEL_3` (`≥ 5`) |
@@ -45,6 +45,15 @@ it with `getattr(config, "NAME", default)`, so
 | `SECONDARY_HUE_SHIFT_DEG` | int | no | `20` | **`echo` only.** Hue rotation (degrees) per train index beyond the primary — differentiates by colour instead of brightness |
 | `SECONDARY_BREATHE_PERIOD_MS` | int | no | `3000` | **`echo` only.** Breath cycle length for trains beyond the primary |
 | `SECONDARY_BREATHE_FLOOR` | float | no | `0.7` | **`echo` only.** Deliberately high — a subtle differentiation pulse, not `BreathingContract`'s dramatic urgency breath. Separate knob so tuning one doesn't fight the other |
+| `ANCHOR_INDEX` | int | no | `0` | **`approach` only.** LED index of the station/anchor position. See `docs/contracts/approach-contract.md` |
+| `ARM_A_LEN` | int | no | `NUM_LEDS - 1` | **`approach` only.** LEDs available outward from the anchor, direction A |
+| `ARM_B_LEN` | int | no | `0` | **`approach` only.** LEDs available outward from the anchor, direction B (`0` = single-direction phase 1 layout) |
+| `ANCHOR_COLOR` | tuple | no | `(255, 200, 120)` | **`approach` only.** Always-on anchor colour — distinct from `LINE_COLOR` and `FLOOR_COLOR` |
+| `POSITION_MINUTES_PER_LED` | int | no | `1` | **`approach` only.** Minutes-to-leave each LED of offset from the anchor represents |
+| `LINE_COLOR` | tuple | no | `(34, 139, 34)` (forest green) | **`approach` only.** Fixed train colour — deliberately *not* urgency-banded, since position already encodes urgency continuously in this paradigm |
+| `FLOOR_BRIGHTNESS` | float | no | `0.05` | **`approach` only.** Brightness of idle (non-anchor, non-train) LEDs; `0` = fully off |
+| `FLOOR_COLOR` | tuple | no | `(80, 80, 80)` | **`approach` only.** Idle-LED colour — deliberately *not* a dimmed `LINE_COLOR`, so an empty slot can't read as "a very distant train" |
+| `TRANSITION_MS` | int | no | `4000` | **`approach` only.** Crossfade duration between position updates, ms; `0` = instant jump |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
 | `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight) |
 

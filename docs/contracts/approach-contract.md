@@ -81,9 +81,12 @@ is throwable to `0` for fully-off idle slots, independent of this color choice.
 
 Position updates happen once per `LOOP_INTERVAL_SECS` tick (a train moves one
 LED, or several, per update) — a hard cut between LED positions would read as a
-"jump," not an approach. `_transition(from_idx, to_idx, progress)` is a new
-primitive, composing with the existing `_paint_layers` render seam rather than
-a bespoke one-off path.
+"jump," not an approach. Implemented as instance state on `ApproachContract`
+(the last-rendered index + when it changed), not a bespoke one-off: `_paint_layers`
+was refactored to split off `_write_frame(frame)` — the shared gamma/dither/
+`np.write()` tail — so `ApproachContract` can build a frame directly (per-LED
+positions, not arc lengths) and still go through the same render seam every
+other contract uses.
 
 - Old position ramps toward `FLOOR_BRIGHTNESS`/`FLOOR_COLOR` while the new
   position ramps up to full, both driven by the same `progress` value on
@@ -107,8 +110,9 @@ than inventing new render logic:
 
 | Existing primitive | Reused for |
 |---|---|
-| `_paint_layers` | Compositing anchor + train positions + floor LEDs in one frame |
-| `gamma()` | Perceptual shaping of the crossfade ramp |
+| `_write_frame()` (split off `_paint_layers`) | Compositing anchor + train positions + floor LEDs in one frame, one `np.write()` |
+| `gamma()` | Perceptual shaping of the crossfade brightness ramp |
+| `lerp_color()` | Colour half of the crossfade (train color ↔ `FLOOR_COLOR`) |
 | absolute `ticks_ms()` phase pattern | Crossfade `progress`, same seamlessness guarantee as breathing envelopes |
 | `_physical()` HAL seam | Untouched — `ApproachContract` only changes *what* index a train maps to, not how a logical index maps to a physical LED |
 
@@ -122,12 +126,23 @@ CONTRACT = "approach"
 ANCHOR_INDEX = 0
 ARM_A_LEN = 20
 ARM_B_LEN = 0
-ANCHOR_COLOR = ...              # distinct from train color
+ANCHOR_COLOR = (255, 200, 120)  # warm white/amber, distinct from LINE_COLOR + FLOOR_COLOR
 POSITION_MINUTES_PER_LED = 1
+LINE_COLOR = (34, 139, 34)      # forest green — fixed, NOT urgency-banded (see below)
 FLOOR_BRIGHTNESS = 0.05         # throwable to 0
-FLOOR_COLOR = ...               # dim neutral, NOT a dimmed line color
-TRANSITION_MS = ...             # crossfade duration
+FLOOR_COLOR = (80, 80, 80)      # dim neutral, NOT a dimmed LINE_COLOR
+TRANSITION_MS = 4000            # crossfade duration, ms; 0 = instant jump
 ```
+
+**`LINE_COLOR`, not urgency-banded `PALETTE`:** every other contract colours the
+train by `classify(ttl)` (`URGENCY_THRESHOLDS` bands). `ApproachContract`
+deliberately doesn't — distance-to-anchor already encodes urgency continuously,
+so re-encoding the same signal in colour too would be the same "double
+encoding" problem `FLOOR_COLOR`-not-dimmed avoids above, just on the other
+axis. Colour is freed up to mean something else: which line/train this is.
+`LINE_COLOR` is a single fixed colour, not a per-line palette system (that's
+still the deferred "line-color palettes" work below) — for the single-line
+gift build this is one config constant.
 
 ---
 
