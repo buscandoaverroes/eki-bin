@@ -1,7 +1,7 @@
 # Contract: startup sequence ("boot ceremony")
 
-**Status:** design note — not yet implemented. Nothing in `main.py` reflects
-this doc yet. Written before code per the v1.4 plan (see `dev-status.md`).
+**Status:** implemented on `feature/startup-sequence`, host-tested, **not yet
+validated on real hardware**. See `dev-status.md` for status.
 
 **Resolves an open design fork:** `docs/insights.md` §5 "Startup / boot
 ceremony vs the clock paradigm" (2026-06-29) parked exactly this question —
@@ -32,11 +32,22 @@ into one: the loading animation's first frame *is* the power-on indicator.
    `connect_wifi()` + `sync_ntp()` take.
 2. **Success — "hanabi" burst.** A quick, bright pulse across the strip, then
    a slow fade — a firework, not a blink.
-3. **Handoff — crossfade into the live contract.** The burst's fade-out
-   doesn't end in black; it blends into whatever `ACTIVE_CONTRACT` would
-   already be rendering for the current schedule/time. The ceremony ends,
-   the clock paradigm takes over, and it never performs this sequence again
-   until the next power cycle.
+3. **Handoff — decay to black, then the live contract takes over.**
+   **Revised from the original plan:** rather than blending the burst's
+   fade-out directly into whatever `ACTIVE_CONTRACT` would render (a
+   brightness/colour blend between two independently-coloured frames), the
+   burst decays to black on its own, and `main()`'s ordinary loop begins
+   immediately after — no explicit crossfade logic. This is a direct
+   consequence of the CHASE-transition lesson from `feature/positional-display`
+   (`docs/contracts/approach-contract.md` § Chase transition): blending
+   between two brightness/colour states necessarily passes through
+   low-brightness intermediate values, which is exactly what caused the
+   dithering flicker that CHASE was built to eliminate. Re-introducing that
+   exact pattern here — right after fixing it elsewhere — would be a
+   regression. The burst's own decay already provides the "gentle handoff"
+   feel; a hard cut immediately after a fade-to-black doesn't read as
+   jarring. The ceremony ends, the clock paradigm takes over, and it never
+   performs this sequence again until the next power cycle.
 4. **Failure — persistent red breathe.** All LEDs, slow `breathe()`, solid
    red, **forever** — a genuine dead end, not a retry loop. Distinguishes
    "broken, needs help" from every other state at a glance, and doesn't
@@ -49,36 +60,37 @@ already-built `LeaveSignal` — but at boot time **there is no signal yet**
 (no WiFi, no NTP time, schedule not even loaded). So this can't be a
 `DisplayContract` subclass; it's fundamentally a different kind of thing —
 boot-time procedural code that needs to observe *live connection state*, not
-render a known value. **Proposal:** a standalone `run_startup_sequence()`
+render a known value. **Implemented as a standalone `run_startup_sequence()`**,
 called once at the top of `main()`, before the main loop — not a contract.
 
-**This forces a real structural change to `connect_wifi()`/`sync_ntp()`.**
-Today, `connect_wifi()` blocks in a dumb `time.sleep(1)` poll loop (up to 20s)
-with no LED output at all — see `micropython/main.py`'s current
-`connect_wifi()`. To animate *during* that wait, the connect loop has to
-interleave: render one loading-circle frame, check `wlan.isconnected()`,
-sleep a short frame interval, repeat — not sleep(1) then check. This is the
-main piece of real engineering risk here, not the animation math.
+**This forced a real structural change to `connect_wifi()`.** It used to
+block in a dumb `time.sleep(1)` poll loop (up to 20s) with no LED output at
+all. It now polls on a `FRAME_MS`-driven loop instead, drawing one
+loading-circle frame (`_draw_startup_circle`) per iteration — same ~20s
+budget, now animated throughout. This was the main piece of real engineering
+this doc anticipated; the animation math itself was nothing new.
+`sync_ntp()` is unchanged (a single blocking call, typically near-instant —
+nothing to usefully animate during it).
 
 ## Reusable primitives (nothing new at the math layer)
 
-| Need | Existing primitive |
-|---|---|
-| Loading-circle position | `phase_sawtooth(elapsed_ms, period_ms)` → LED index |
-| Hanabi rise/decay | `pulse()` or `breathe()` envelope, one-shot instead of looped |
-| Error breathe | `breathe()`, exactly as `BreathingContract` already uses it, just red + `clear()`-free (whole strip, not an arc) |
-| Crossfade into live contract | Same `progress` + `gamma()` pattern `ApproachContract`'s crossfade already established |
+| Need | Existing primitive | Used in |
+|---|---|---|
+| Loading-circle position | `phase_sawtooth(elapsed_ms, period_ms)` → LED index | `_startup_circle_index` |
+| Hanabi rise/decay | Linear rise/decay over `STARTUP_BURST_MS`/`STARTUP_FADE_MS` | `_startup_burst_mult` |
+| Error breathe | `breathe()`, exactly as `BreathingContract` already uses it, just red + whole-strip (not an arc) | `_startup_error_mult` |
+| Compositing / render seam | `_write_frame()` — STATIC for the circle (single lit LED, nothing dim), ANIMATED for the burst (genuinely changing every frame, so dithering is appropriate there) | `_draw_startup_circle`, `_play_startup_burst`, `_run_startup_failure_forever` |
 
 Consistent with this whole codebase's pattern so far: new *behavior*, not new
 *math* — compose what's there.
 
-## Proposed config (all new, all optional/`getattr`-defaulted)
+## Config
 
 ```
-STARTUP_COLOR = (255, 255, 255)   # loading-circle colour
-STARTUP_SPIN_HZ = 0.4             # revolutions/sec, ~1/3-1/2 Hz per the ask
-STARTUP_BURST_MS = 800            # hanabi rise+decay duration — GUESS, tune live
-STARTUP_FADE_MS = 1500            # burst -> live-contract crossfade duration — GUESS
+STARTUP_COLOR = (255, 255, 255)   # loading-circle + success-burst colour
+STARTUP_SPIN_HZ = 0.4             # revolutions/sec while connecting
+STARTUP_BURST_MS = 800            # success burst: rise duration, ms — GUESS, tune live
+STARTUP_FADE_MS = 1500            # success burst: decay duration, ms — GUESS, tune live
 ERROR_COLOR = (255, 0, 0)
 ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose —
 #                                    error state shouldn't inherit contract tuning
@@ -86,27 +98,30 @@ ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose �
 
 ## Testability
 
-The animation *math* (circle position mapping, burst envelope shape) is pure
-and host-testable, same as every other primitive here. The actual
-interleaved-connect-loop behavior is not — `connect_wifi()`/`sync_ntp()`
-aren't unit tested today (`main()` itself isn't), and this doc doesn't change
-that. Flag real-hardware validation as required, same as every LED behavior
-in this project.
+The animation *math* is pure and host-testable — `_startup_circle_index`,
+`_startup_burst_mult`, `_startup_error_mult`, and the one-frame renderer
+`_draw_startup_circle` all have tests in `tests/test_startup_sequence.py`
+(14 tests). The actual real-time loops — `connect_wifi()`'s animated poll,
+`_play_startup_burst()`, `_run_startup_failure_forever()`, and
+`run_startup_sequence()` itself — are **not** host-testable (real
+`time.ticks_ms()`/`sleep_ms()`, and `connect_wifi()` touches `network`),
+same limitation `render_for_interval`'s real frame loop already has.
+**Real-hardware validation is required for all of it** — nothing here has
+run on the actual device yet.
 
-## Open questions (confirm before coding)
+## Decisions (confirmed 2026-07-24, before implementation)
 
-1. **Skippable/config-gated?** A future non-WiFi build (V2, DS3231 RTC) has
-   no "connecting" phase to visualize at all — should `STARTUP_SEQUENCE`
-   be a config toggle from day one, or is that premature for a V1-only
-   feature?
-2. **Hanabi shape:** literally radiating outward from `ANCHOR_INDEX`
-   (ties into `ApproachContract`'s anchor concept, but couples the startup
-   sequence to one specific contract) vs. all LEDs flashing together
-   (contract-agnostic, works no matter what `CONTRACT` is active). Leaning
-   the latter — the startup sequence runs before any contract is "current,"
-   so it shouldn't assume `ApproachContract` semantics.
-3. **Failure recovery:** confirm "persistent red, needs a physical
-   reset/power-cycle to retry" is actually the intended behavior (vs. an
-   auto-retry loop) — the ask said "keep this for infinity," read as
-   deliberate, but worth confirming since it's a real usability choice for
-   whoever's staring at a red jar.
+1. **No config toggle for now.** `STARTUP_SEQUENCE_ENABLED` (or similar)
+   was considered for a future non-WiFi V2 build with no "connecting" phase
+   to show — decided against for now: this is a V1/WiFi-era feature, and
+   adding the toggle only when V2 actually needs it avoids growing the
+   config surface for a hypothetical that isn't built yet.
+2. **Hanabi flashes all LEDs together — not radiating from `ANCHOR_INDEX`.**
+   Confirmed contract-agnostic: the startup sequence runs before any
+   `CONTRACT` is "current," so it shouldn't assume `ApproachContract`'s
+   anchor concept exists. `_play_startup_burst()` treats every LED
+   identically.
+3. **Failure state is a genuine dead end — no auto-retry.** Confirmed: on
+   WiFi failure, `_run_startup_failure_forever()` breathes red forever and
+   only exits via a physical reset/power-cycle. "Broken, needs help" stays
+   honest rather than silently retrying in the background.

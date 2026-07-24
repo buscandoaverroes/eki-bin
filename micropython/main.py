@@ -121,6 +121,23 @@ MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — 
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
 
+# Boot ceremony — see docs/contracts/startup-sequence.md. Runs once at power-on,
+# before the main loop starts; never recurs during normal operation.
+STARTUP_COLOR = getattr(config, "STARTUP_COLOR", (255, 255, 255))  # loading-
+#   circle + success-burst colour. All LEDs together, contract-agnostic — the
+#   startup sequence runs before any CONTRACT is "current".
+STARTUP_SPIN_HZ = getattr(config, "STARTUP_SPIN_HZ", 0.4)  # loading-circle
+#   revolutions/sec while connecting (WiFi + NTP)
+STARTUP_BURST_MS = getattr(config, "STARTUP_BURST_MS", 800)  # success burst:
+#   rise duration, ms
+STARTUP_FADE_MS = getattr(config, "STARTUP_FADE_MS", 1500)  # success burst:
+#   decay duration, ms, after which the main loop takes over
+ERROR_COLOR = getattr(config, "ERROR_COLOR", (255, 0, 0))  # persistent
+#   failure state — see run_startup_sequence(). All LEDs, forever, until reset.
+ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
+#   deliberately separate from BREATHE_PERIOD_MS — retuning a contract's
+#   breathing feel should never touch the failure state's.
+
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
 # GPIO). Other boards have no such alias: set this to a GPIO number for that
@@ -1028,19 +1045,124 @@ def next_departures(schedule, now, count=3):
 
 
 # ─────────────────────────────────────────────────────────────
+# Startup sequence ("boot ceremony") — docs/contracts/startup-sequence.md
+# Runs once at power-on, before the main loop; never recurs during normal
+# operation. Not a DisplayContract — at boot there's no LeaveSignal yet (no
+# WiFi, no NTP time, schedule not even loaded), so this is boot-time
+# procedural code that observes LIVE connection state, not a pure render of
+# an already-known value.
+# ─────────────────────────────────────────────────────────────
+def _startup_circle_index(elapsed_ms):
+    """PURE: elapsed ms of the loading-circle spin → which LED is lit, at
+    STARTUP_SPIN_HZ revolutions/sec. Host-testable in isolation from the real
+    connect_wifi() poll loop below, which isn't (real time.ticks_ms())."""
+    period_ms = 1000.0 / STARTUP_SPIN_HZ
+    return int(phase_sawtooth(elapsed_ms, period_ms) * NUM_LEDS) % NUM_LEDS
+
+
+def _draw_startup_circle(elapsed_ms):
+    """One frame of the loading-circle spin: a single lit LED, everything
+    else off. No dim intermediate value at all (fully on or fully off) —
+    STATIC path (see _write_frame), no dithering needed."""
+    frame = [None] * NUM_LEDS
+    frame[_startup_circle_index(elapsed_ms)] = (STARTUP_COLOR, 1.0, "static")
+    _write_frame(frame)
+
+
+def _startup_burst_mult(elapsed_ms):
+    """PURE: elapsed ms into the success burst → brightness mult (0..1).
+    Rises linearly over STARTUP_BURST_MS, then decays linearly over
+    STARTUP_FADE_MS. Host-testable; the real-time loop that calls this
+    (_play_startup_burst) isn't — same split render_for_interval/
+    _render_dispatch already established."""
+    if STARTUP_BURST_MS > 0 and elapsed_ms < STARTUP_BURST_MS:
+        return elapsed_ms / STARTUP_BURST_MS
+    decay_elapsed = elapsed_ms - STARTUP_BURST_MS
+    if STARTUP_FADE_MS <= 0 or decay_elapsed >= STARTUP_FADE_MS:
+        return 0.0
+    return 1.0 - (decay_elapsed / STARTUP_FADE_MS)
+
+
+def _play_startup_burst():
+    """The 'hanabi' success cue: all LEDs together (contract-agnostic — no
+    CONTRACT is "current" yet), a quick bright rise then a slow decay. This
+    genuinely changes every frame, unlike a settled/idle pixel, so the
+    ANIMATED path (gamma + dither, via a 2-tuple frame entry) is the right
+    one here — dithering only causes trouble on a value that ISN'T changing
+    (see docs/contracts/approach-contract.md § Marker ticks); a decaying
+    pulse has something to average against. Ends by clearing the strip —
+    the main loop's first real frame follows immediately after."""
+    start = time.ticks_ms()
+    total_ms = STARTUP_BURST_MS + STARTUP_FADE_MS
+    while True:
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        if elapsed >= total_ms:
+            break
+        mult = _startup_burst_mult(elapsed)
+        _write_frame([(STARTUP_COLOR, mult)] * NUM_LEDS)
+        time.sleep_ms(FRAME_MS)
+    clear()
+
+
+def _startup_error_mult(elapsed_ms):
+    """PURE: elapsed ms → brightness mult for the persistent failure breathe.
+    Thin wrapper over the existing breathe() envelope, its own dedicated
+    period (ERROR_BREATHE_PERIOD_MS, not BREATHE_PERIOD_MS)."""
+    return breathe(elapsed_ms, ERROR_BREATHE_PERIOD_MS, floor=0.15)
+
+
+def _run_startup_failure_forever():
+    """Persistent red breathe — a genuine DEAD END, not a retry loop, by
+    design (see docs/contracts/startup-sequence.md § Failure recovery).
+    Distinguishes "broken, needs help" from every other state at a glance,
+    and doesn't pretend to work when it can't. Needs a physical reset/
+    power-cycle to leave this state; never returns on its own."""
+    print("  ✗ Startup failed — check config.py / WiFi. Reset to retry.")
+    start = time.ticks_ms()
+    while True:
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        _write_frame([(ERROR_COLOR, _startup_error_mult(elapsed))] * NUM_LEDS)
+        time.sleep_ms(FRAME_MS)
+
+
+def run_startup_sequence():
+    """The whole boot ceremony. On success: connecting spin, then the
+    success burst, then returns — the main loop takes over immediately
+    after. On WiFi failure: _run_startup_failure_forever(), which NEVER
+    RETURNS (see its docstring) — this function correspondingly never
+    returns either, in that case."""
+    if not connect_wifi():
+        _run_startup_failure_forever()
+    if not sync_ntp():
+        print("  Warning: time may be wrong.")
+    _play_startup_burst()
+
+
+# ─────────────────────────────────────────────────────────────
 # WiFi + NTP
 # [→ Rust] embassy_net + CYW43 driver / replaced entirely by DS3231 in V2
 # ─────────────────────────────────────────────────────────────
 def connect_wifi():
+    """Connect to WiFi, animating the loading-circle spin (see
+    _draw_startup_circle) while polling — replaced a blocking `sleep(1)`
+    poll loop that drew nothing at all, the main piece of real engineering
+    the boot ceremony needed (the animation math itself was nothing new)."""
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(WIFI_SSID, WIFI_PASS)
     print("  Connecting to WiFi", end="")
-    for _ in range(20):
-        if wlan.isconnected():
+    start = time.ticks_ms()
+    dots_printed = 0
+    while time.ticks_diff(time.ticks_ms(), start) < 20000:  # same ~20s budget
+        if wlan.isconnected():                              # the old 20x sleep(1) had
             break
-        print(".", end="")
-        time.sleep(1)
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        _draw_startup_circle(elapsed)
+        whole_seconds = elapsed // 1000
+        if whole_seconds > dots_printed:
+            dots_printed = whole_seconds
+            print(".", end="")
+        time.sleep_ms(FRAME_MS)
     print()
     if wlan.isconnected():
         print(f"  ✓ Connected  IP: {wlan.ifconfig()[0]}")
@@ -1112,18 +1234,16 @@ def main():
         f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
     )
 
-    if not connect_wifi():
-        print("Halting: no WiFi → cannot sync time in V1.")
-        return
-    if not sync_ntp():
-        print("Warning: time may be wrong.")
-
-    print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
-
-    DIVIDER = "─" * 50
-    loop_count = 0
-
     try:
+        run_startup_sequence()  # boot ceremony — never returns on WiFi
+        #   failure (persistent red breathe instead), so everything below
+        #   only ever runs after a successful connect + burst.
+
+        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+
+        DIVIDER = "─" * 50
+        loop_count = 0
+
         while True:
             heartbeat = not heartbeat
             if led:
