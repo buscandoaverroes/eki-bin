@@ -302,6 +302,55 @@ just gets a list of slots instead of a single one.
 itself could coincide with an arm's target, and the anchor is always painted
 last regardless of how many arms are active, so it always wins.
 
+## Physical orientation: which side is arm A vs arm B
+
+Bidirectional raises a question single-direction never had to answer: given
+the anchor sits in the middle, **which physical end of the strip is arm A
+and which is arm B?** This is config *and wiring* dependent — not derivable
+from the firmware alone.
+
+**The one fact only your soldering determines:** physical LED index `0` is
+whichever end you wired the data line (DIN) into. Nothing in software
+changes this — `ANCHOR_INDEX`, `ARC_ORIGIN`, etc. all build on top of it,
+none of them redefine it.
+
+**What the firmware controls on top of that:** `_physical(logical)` maps a
+*logical* index (what the render code computes) to that *physical* LED
+number:
+
+```python
+def _physical(logical):
+    if ARC_ORIGIN == "far":
+        return NUM_LEDS - 1 - logical
+    return logical
+```
+
+`ARC_ORIGIN` isn't "unused for a symmetric bidirectional layout" (an earlier
+config comment claimed exactly that, and was wrong — corrected 2026-07-24)
+— it decides which physical side each arm lands on. Worked example, matching
+the actual gift-jar config (`NUM_LEDS=21`, `ANCHOR_INDEX=10`,
+`ARM_A_LEN=ARM_B_LEN=10`, `ARC_ORIGIN="far"` → `physical = 20 - logical`):
+
+| | Logical range | Physical range |
+|---|---|---|
+| Anchor | 10 | 10 (dead centre — self-symmetric, unaffected by `ARC_ORIGIN`) |
+| Arm A (`DISPLAY_DIRECTION`) | 11–20 | **0–9 — the DIN end** |
+| Arm B (`DISPLAY_DIRECTION_B`) | 0–9 | **11–20 — the far end** |
+
+Flipping `ARC_ORIGIN` to `"near"` (`physical = logical`) swaps that
+assignment — arm A moves to the far end, arm B to the DIN end. The anchor
+never moves (its logical index is symmetric under the flip whenever
+`ANCHOR_INDEX` is the strip's exact centre).
+
+**Verify on the actual jar, don't just trust the arithmetic against your real
+soldering:** power up with only one direction showing a catchable train and
+watch which physical end lights — the console already prints `ring: …` (arm
+A) and `ring B: …` (arm B) lines to correlate against what you see. Once
+confirmed, it's worth recording the result as a comment next to
+`ARC_ORIGIN` in whichever `config.py` you're using — this is config+wiring
+knowledge that's easy to forget and impossible to re-derive from the code
+alone.
+
 ---
 
 ## N trains per arm (iteration 2)
