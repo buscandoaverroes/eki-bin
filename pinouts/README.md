@@ -1,8 +1,8 @@
 # pinouts/
 
-One file per board: physical pin diagram, GPIO-vs-position mapping, and exactly
-what's wired to what **in this project**. This is the single source of truth for
-"which pin goes where" — `docs/hardware.md` covers parts/components/voltage
+Physical pin diagrams, GPIO-vs-position mappings, and exactly what's wired to
+what **in this project**. This is the single source of truth for "which pin
+goes where" — `docs/hardware.md` covers parts/components/voltage
 compatibility, not pin assignments; this directory owns those.
 
 Why this exists: the project now spans more than one board (Pico 2W, XIAO
@@ -10,12 +10,26 @@ ESP32-C3, eventually others). Pin facts that live only in `config.py` defaults
 or scattered comments drift silently the moment a second board shows up —
 this directory is where they're supposed to live instead.
 
+## Two kinds of file
+
+- **Board files** (one per board) — a single board's own pins: physical
+  diagram, GPIO numbers, what's broken out where. The board's pinout doesn't
+  change across builds, so these are long-lived and board-scoped.
+- **System files** (one per meaningfully-distinct build) — how a specific
+  build's *parts connect to each other* (MCU → LED strip → power source,
+  etc.), on top of whatever the board file already establishes. Add a new
+  system file when a build's part set meaningfully changes (different MCU, a
+  second LED run, a sensor added) — don't grow one system file to cover every
+  build variant, and don't duplicate a board's own pin facts into it (link
+  to the board file instead).
+
 ## Files
 
-| File | Board | Status |
+| File | Scope | Status |
 |---|---|---|
-| [pico2w.md](pico2w.md) | Raspberry Pi Pico 2W | ✅ Verified — wired and running (V1) |
-| [xiao_esp32c3.md](xiao_esp32c3.md) | Seeed XIAO ESP32-C3 | ✅ Verified — wired and running (v1.2 checkpoint passed 2026-07-05) |
+| [pico2w.md](pico2w.md) | Board — Raspberry Pi Pico 2W | ✅ Verified — wired and running (V1) |
+| [xiao_esp32c3.md](xiao_esp32c3.md) | Board — Seeed XIAO ESP32-C3 | ✅ Verified — wired and running (v1.2 checkpoint passed 2026-07-05) |
+| [v1.4-gift-jar-system.md](v1.4-gift-jar-system.md) | System — XIAO + 21-LED strip + Qi/USB-C power | ⬜ Proposed — one pad position needs a physical confirm |
 
 ## Conventions
 
@@ -36,7 +50,18 @@ this directory is where they're supposed to live instead.
 
 ## Adding a new board
 
-Copy the shape of an existing file: parts-in-hand context (or link to
+Copy the shape of an existing board file: parts-in-hand context (or link to
 `docs/hardware.md`), an ASCII physical-pin diagram, a wiring table for this
 project's connections (with GPIO numbers), and a "reserved for later" table if
 relevant. Add a row to the table above.
+
+## Adding a new system
+
+Copy the shape of [v1.4-gift-jar-system.md](v1.4-gift-jar-system.md): a short
+parts list (linking to the relevant board file(s) and `docs/hardware.md`, not
+repeating their content), a diagram of how the parts connect to *each other*
+(power source → MCU → peripheral, not the MCU's own internal pin layout —
+that's the board file's job), and a wiring table. Name it after the build
+version it documents (`v1.x-<short-description>.md`), add a row to the table
+above, and flag anything not yet physically confirmed the same way board
+files do.
