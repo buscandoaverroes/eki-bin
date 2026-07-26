@@ -3,7 +3,12 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.4 — ApproachContract gift build (branch `feature/positional-display`)
+## Current phase: v1.4 — boot ceremony (branch `feature/startup-sequence`)
+
+> `feature/positional-display` (ApproachContract — see below) is merged to
+> `dev`. Current branch builds the startup/boot sequence design doc'd in
+> `docs/contracts/startup-sequence.md` — implemented, host-tested,
+> **not yet validated on real hardware**.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -306,18 +311,58 @@ falls out of clean config-driven design.
 9. [ ] *(Not this pass)* Physical fit test: Qi coil in bottle vs. wired
        fallback — mechanical, independent of firmware work above
 
-### Startup sequence ("boot ceremony") — planned, design doc only
+### Startup sequence ("boot ceremony") ✅ implemented, not yet on hardware
 
-Full design: `docs/contracts/startup-sequence.md`. Resolves the open fork in
-`docs/insights.md` §5 (does a boot animation break the clock illusion?) —
-decided **yes, bounded and one-time**: loading-circle spin during WiFi/NTP →
-"hanabi" burst on success → crossfade into the live contract, or a
-persistent red breathe on failure. Not started — real engineering risk is
-restructuring `connect_wifi()`'s blocking poll loop to interleave animation
-frames, not the animation math itself (all reuses existing primitives). Three
-open questions before coding, listed in the doc (skippable/config-gated?
-hanabi shape contract-agnostic or anchor-relative? failure recovery — reset
-required, or auto-retry?).
+Branch: `feature/startup-sequence` (off `dev`, after `feature/positional-display`
+merged). Full design: `docs/contracts/startup-sequence.md`. Resolves the open
+fork in `docs/insights.md` §5 (does a boot animation break the clock
+illusion?) — decided **yes, bounded and one-time**.
+
+Three open questions from the design doc confirmed before coding:
+1. No config toggle for now (V1/WiFi-era feature; add one when V2 actually
+   needs it)
+2. Hanabi burst flashes all LEDs together, not radiating from
+   `ANCHOR_INDEX` — contract-agnostic, since no `CONTRACT` is "current" yet
+   at boot
+3. Failure state is a genuine dead end — persistent red breathe, no
+   auto-retry, needs a physical reset
+
+Built:
+
+- [x] `run_startup_sequence()` — the boot ceremony entry point, called once
+      at the top of `main()`, before the main loop. Not a `DisplayContract`
+      (no `LeaveSignal` exists yet at boot) — standalone procedural code
+- [x] `connect_wifi()` restructured: was a blocking `sleep(1)` poll loop
+      with zero LED output; now polls on a `FRAME_MS` cadence, drawing one
+      loading-circle frame per iteration (`_draw_startup_circle`) — same
+      ~20s connect budget, now animated throughout. This was the real
+      engineering risk the design doc flagged; the animation math itself
+      was nothing new
+- [x] **Revised the "crossfade into the live contract" handoff mid-build:**
+      the original plan blended the burst's fade-out directly into
+      `ACTIVE_CONTRACT`'s render — but that's exactly the brightness/colour
+      blend pattern that caused CHASE's dithering flicker on
+      `feature/positional-display`. Re-introducing it here, right after
+      fixing it there, would be a regression. Burst now decays to black on
+      its own; the main loop's first real frame follows immediately after,
+      no explicit crossfade logic
+- [x] `_play_startup_burst()` — success burst, all LEDs together, ANIMATED
+      render path (genuinely changing every frame, so dithering is
+      appropriate — unlike an idle/settled pixel)
+- [x] `_run_startup_failure_forever()` — persistent red breathe, own
+      `ERROR_BREATHE_PERIOD_MS` (not `BREATHE_PERIOD_MS`), never returns
+- [x] `main()`'s `try/except KeyboardInterrupt` widened to wrap
+      `run_startup_sequence()` too, so Ctrl+C during REPL testing of the
+      boot ceremony (including the failure state) still exits cleanly
+- [x] 14 new tests (`tests/test_startup_sequence.py`) — all the pure math
+      (circle position, burst rise/decay curve, error breathe) is
+      host-tested; the real-time loops (`connect_wifi()`'s poll,
+      `_play_startup_burst()`, `_run_startup_failure_forever()`) are not,
+      same limitation `render_for_interval`'s frame loop already has. 109
+      tests total, all passing
+- [ ] **Not yet validated on real hardware** — nothing here has run on the
+      actual device yet; `STARTUP_BURST_MS`/`STARTUP_FADE_MS`/
+      `STARTUP_SPIN_HZ` are all untested guesses, tune live
 
 ### Phase 2 — bidirectional (iteration 1: one train per arm) ✅ implemented
 

@@ -96,6 +96,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # above — trains beyond the primary are hue-shifted, never dimmed (same
 # reasoning as "echo" above, and everything CHASE already does).
 
+# ── Boot ceremony — see docs/contracts/startup-sequence.md ─────────
+# Runs once at power-on, before the main loop; never recurs during normal
+# operation. All LEDs together, contract-agnostic (no CONTRACT is "current"
+# yet at boot time).
+# STARTUP_COLOR = (255, 255, 255)  # loading-circle + success-burst colour
+# STARTUP_SPIN_HZ = 0.4     # loading-circle revolutions/sec while connecting
+# STARTUP_BURST_MS = 800    # success burst: rise duration, ms
+# STARTUP_FADE_MS = 1500    # success burst: decay duration, ms — then the
+#                              main loop takes over (no crossfade blend —
+#                              would reintroduce the low-brightness dithering
+#                              CHASE was built to eliminate, see the doc)
+# ERROR_COLOR = (255, 0, 0)         # WiFi-connect failure: persistent red,
+#                                     forever, until reset — no auto-retry
+# ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose
+
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24
 QUIET_END_HOUR = 5

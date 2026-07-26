@@ -57,6 +57,12 @@ it with `getattr(config, "NAME", default)`, so
 | `MARKER_BRIGHTNESS` | float | no | `0.15` | **`approach` only.** LINEAR multiplier of `BRIGHTNESS` for the idle "tick" LEDs — every position that isn't the anchor or the train right now. Rendered STATIC (no gamma, no dither; see `docs/contracts/approach-contract.md` § Marker ticks), so pick a value that clears ~1 output code per `MARKER_COLOR` channel or it truncates invisibly to black. `0` = fully off. A train is never dimmer than `BRIGHTNESS` itself, so this never applies to it |
 | `MARKER_COLOR` | tuple | no | `(80, 80, 80)` | **`approach` only.** Idle tick-LED colour — deliberately *not* a dimmed `LINE_COLOR`, so an empty tick can't read as "a very distant train" |
 | `TRANSITION_MS` | int | no | `4000` | **`approach` only.** Chase-transition duration between position updates, ms; `0` = instant single-frame switch |
+| `STARTUP_COLOR` | tuple | no | `(255, 255, 255)` | Boot-ceremony loading-circle + success-burst colour. All LEDs together, contract-agnostic — see `docs/contracts/startup-sequence.md` |
+| `STARTUP_SPIN_HZ` | float | no | `0.4` | Loading-circle revolutions/sec while connecting (WiFi + NTP) |
+| `STARTUP_BURST_MS` | int | no | `800` | Success-burst rise duration, ms |
+| `STARTUP_FADE_MS` | int | no | `1500` | Success-burst decay duration, ms — after which the main loop takes over (no crossfade; see the doc's Handoff section) |
+| `ERROR_COLOR` | tuple | no | `(255, 0, 0)` | Persistent failure state (WiFi connect fails) — all LEDs, forever, until reset |
+| `ERROR_BREATHE_PERIOD_MS` | int | no | `4000` | Failure-state breathe period — deliberately separate from `BREATHE_PERIOD_MS` |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
 | `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight) |
 
