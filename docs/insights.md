@@ -118,6 +118,16 @@ is hidden by the medium.
   bring-up log). 2–3 pre-shift colour presets ("bins") could compensate for
   (or lean into) a given bottle's cast. Not built — parked until colour
   fidelity through glass matters again, e.g. a different/less-tinted bottle.
+- **Multiple eki-bins as a shelf display.** Floated during Qi bring-up
+  (2026-07-25): several jars, each independently configured for a different
+  favourite line/station, sitting dark and decorative on a shelf — placing
+  *one* on the Qi pad both powers it and selects it as "the line I'm
+  watching today," and removing it from the pad is a more natural "off"
+  gesture than a switch or unplug. Directly validates the wake/sleep design
+  in `docs/contracts/wake-interaction.md` as a real interaction model, not
+  just a power-saving trick — not something to build now, no code implication
+  beyond what that doc already covers, just a product-vision note worth
+  keeping.
 
 ---
 
@@ -163,6 +173,12 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
 - Too bright **even in the brown bottle**.
 - We already have Unix time → modulate brightness by **sunrise/sunset**.
 - Later: **IMU "shake to adjust brightness"** if glare is the main complaint.
+  **Grown into a full design (2026-07-25)**, motivated by real Qi bring-up
+  findings (thermal cutoff on long runs; "off 80% of the time" as the actual
+  desired aesthetic, not a compromise) — see
+  `docs/contracts/wake-interaction.md`: a bounded wake window per tap/boot,
+  single vs. double tap doing different things, and the boot ceremony's
+  burst reused as a "waking up" cue rather than rebuilt.
 - Be prudent about *when* it glows at all: if **no train within "N-LED" reach**,
   go dark — no reason to shine at 3 a.m. This is smarter than fixed quiet hours
   (the schedule itself defines the on/off envelope).

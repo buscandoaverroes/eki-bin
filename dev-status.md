@@ -3,12 +3,15 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.4 — boot ceremony (branch `feature/startup-sequence`)
+## Current phase: v1.4 — wake/sleep interaction layer (branch `feature/wake-interaction-layer`)
 
-> `feature/positional-display` (ApproachContract — see below) is merged to
-> `dev`. Current branch builds the startup/boot sequence design doc'd in
-> `docs/contracts/startup-sequence.md` — implemented, host-tested,
-> **not yet validated on real hardware**.
+> `feature/positional-display` and `feature/startup-sequence` are both merged
+> to `dev`. Current branch is a **design doc only** —
+> `docs/contracts/wake-interaction.md` — for an IMU tap-driven wake/sleep
+> cycle, motivated by real Qi-bring-up findings (thermal cutoff on long runs;
+> "off 80% of the time" as the actual desired look). **No IMU is physically
+> wired yet**, so nothing here is implemented or testable beyond the design
+> itself; see the doc's Open questions before coding starts.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -465,11 +468,46 @@ byte-identical.
       tests total, all passing
 - [ ] **Not yet validated on real hardware** — host tests only so far
 
+### Wake/sleep interaction layer (IMU tap gestures) — design doc only
+
+Branch: `feature/wake-interaction-layer`. Full design:
+`docs/contracts/wake-interaction.md`. Not the simple "tap extends the
+timer" idea first floated — that turned out to be too simple on reflection
+(a tap while awake needs to do something *else*, and extending needs its
+own gesture plus a confirmation cue, or a missed extend is indistinguishable
+from a registered one).
+
+- **Sensor picked:** AE-LSM6DSV16X (Akizuki g130950) — the breakout board,
+  not the bare LGA14L chip (g130032, same sensor, not hand-solderable).
+  I2C on D4/SDA (GPIO6) + D5/SCL (GPIO7), same bus already earmarked for a
+  future DS3231 RTC. Only GND is shared with the LED strip's wiring —
+  bundled into one solder joint, no contention with SDA/SCL/3V3
+- **Two states:** AWAKE (countdown running, contract renders normally) and
+  ASLEEP (all LEDs off). Boot always enters AWAKE — placing the jar on a Qi
+  pad *is* an intentional wake trigger, same logic as a deliberate tap
+- **State-dependent gestures:** ASLEEP + any tap → wake (replays
+  `_play_startup_burst()` as-is, no new ceremony code needed). AWAKE +
+  single tap → a pluggable "secondary action" (proposed default: cycle
+  `BRIGHTNESS_PRESETS`). AWAKE + double tap → extend the countdown +
+  a confirmation flash
+- **Real, named cost:** distinguishing single vs. double tap needs a
+  `DOUBLE_TAP_WINDOW_MS` disambiguation window, so a single tap can't fire
+  until that window elapses — trades away the ~50ms "instant" feel a
+  bare single-gesture design would have had, in exchange for two gestures
+  on one sensor
+- **Concurrency:** confirmed no RTOS/threading needed — the same
+  `FRAME_MS`-paced cooperative loop the boot ceremony's animated contracts
+  already run on just gets a second consumer (tap classification). XIAO
+  ESP32-C3 is single-core anyway, so an RTOS would only be time-slicing one
+  core, same real-world result as the existing loop pattern
+- [ ] **Not started** — no IMU physically wired yet, four open questions in
+      the doc need answers before coding (quiet-hours-vs-tap precedence,
+      hard-cut-vs-fade on sleep, confirm the brightness-cycle default,
+      `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` need real bench numbers)
+
 ### Deferred to later sessions
 
 - [ ] Line-color palette / metro-line static color scheme
-- [ ] IMU tap/shake interaction layer (see Open decisions — planned as a
-      *runtime* interaction layer, not a provisioning mechanism)
 - [ ] NFC / any provisioning mechanism (see Open decisions — under
       reconsideration, not blocking this build)
 - [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
