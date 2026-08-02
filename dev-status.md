@@ -3,15 +3,16 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.4 — wake/sleep interaction layer (branch `feature/wake-interaction-layer`)
+## Current phase: v1.4 — wake/sleep interaction layer (branch `feature/wake-interaction-layer`, local only)
 
 > `feature/positional-display` and `feature/startup-sequence` are both merged
-> to `dev`. Current branch is a **design doc only** —
-> `docs/contracts/wake-interaction.md` — for an IMU tap-driven wake/sleep
-> cycle, motivated by real Qi-bring-up findings (thermal cutoff on long runs;
-> "off 80% of the time" as the actual desired look). **No IMU is physically
-> wired yet**, so nothing here is implemented or testable beyond the design
-> itself; see the doc's Open questions before coding starts.
+> to `dev`. Current branch **implements** the wake/sleep + LED status-message
+> designs (`docs/contracts/wake-interaction.md`,
+> `docs/contracts/led-status-messages.md`) — 136 tests passing, but **not yet
+> pushed** (kept local per instruction) and **not yet on real hardware**. No
+> IMU is physically wired, so the actual sensor read is a stub; gated behind
+> `WAKE_INTERACTION_ENABLED` (default `False`) so this can't affect any
+> existing deployment until a real sensor exists to back it up.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -468,14 +469,14 @@ byte-identical.
       tests total, all passing
 - [ ] **Not yet validated on real hardware** — host tests only so far
 
-### Wake/sleep interaction layer (IMU tap gestures) — design doc only
+### Wake/sleep interaction layer (IMU tap gestures) ✅ implemented, local only
 
-Branch: `feature/wake-interaction-layer`. Full design:
-`docs/contracts/wake-interaction.md`. Not the simple "tap extends the
-timer" idea first floated — that turned out to be too simple on reflection
-(a tap while awake needs to do something *else*, and extending needs its
-own gesture plus a confirmation cue, or a missed extend is indistinguishable
-from a registered one).
+Branch: `feature/wake-interaction-layer` (not pushed, per instruction).
+Full design: `docs/contracts/wake-interaction.md`. Not the simple "tap
+extends the timer" idea first floated — that turned out to be too simple on
+reflection (a tap while awake needs to do something *else*, and extending
+needs its own gesture plus a confirmation cue, or a missed extend is
+indistinguishable from a registered one).
 
 - **Sensor picked:** AE-LSM6DSV16X (Akizuki g130950) — the breakout board,
   not the bare LGA14L chip (g130032, same sensor, not hand-solderable).
@@ -486,31 +487,42 @@ from a registered one).
   ASLEEP (all LEDs off). Boot always enters AWAKE — placing the jar on a Qi
   pad *is* an intentional wake trigger, same logic as a deliberate tap
 - **State-dependent gestures:** ASLEEP + any tap → wake (replays
-  `_play_startup_burst()` as-is, no new ceremony code needed). AWAKE +
-  single tap → a pluggable "secondary action" (proposed default: cycle
-  `BRIGHTNESS_PRESETS`). AWAKE + double tap → extend the countdown +
-  a confirmation flash
+  `_play_startup_burst()` as-is). AWAKE + single tap → `_run_secondary_action()`
+  (default: `_cycle_brightness()` through `BRIGHTNESS_PRESETS`). AWAKE +
+  double tap → extend the countdown + a confirmation overlay
 - **Real, named cost:** distinguishing single vs. double tap needs a
   `DOUBLE_TAP_WINDOW_MS` disambiguation window, so a single tap can't fire
   until that window elapses — trades away the ~50ms "instant" feel a
   bare single-gesture design would have had, in exchange for two gestures
   on one sensor
-- **Concurrency:** confirmed no RTOS/threading needed — the same
-  `FRAME_MS`-paced cooperative loop the boot ceremony's animated contracts
-  already run on just gets a second consumer (tap classification). XIAO
-  ESP32-C3 is single-core anyway, so an RTOS would only be time-slicing one
-  core, same real-world result as the existing loop pattern
-- **Open questions resolved (2026-07-25):** sleep transition = instant cut
-  to black (a "goodnight" fade explicitly parked as future UX, not blocking);
-  `SECONDARY_ACTION` confirmed = cycle `BRIGHTNESS_PRESETS`;
-  `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` remain genuinely open pending real
-  hardware, ship a flagged guess when implementation starts. The
-  quiet-hours-vs-tap question turned into its own doc — see next
-- [ ] **Not started** — no IMU physically wired yet; blocked on
-      `docs/contracts/led-status-messages.md`'s open questions too, since
-      quiet-hours tap handling now depends on that vocabulary
+- **Concurrency:** confirmed no RTOS/threading needed — implemented as
+  `_run_interactive_loop()`, a cooperative super-loop (one `FRAME_MS` tick,
+  several elapsed-time-gated tasks). XIAO ESP32-C3 is single-core anyway, so
+  an RTOS would only be time-slicing one core, same real-world result
+- **Safety gate added during implementation, not in the original design:**
+  `WAKE_INTERACTION_ENABLED` (default `False`). With `_imu_tap_detected()`
+  still stubbed (always `False` — no IMU wired), enabling this
+  unconditionally would leave the display permanently ASLEEP after
+  `WAKE_MINUTES` with no way to wake it again — a real regression for
+  `config_friend1.py` and any other IMU-less deployment. `main()` now
+  branches: `False` runs `_run_classic_loop()` (the *original* loop, moved
+  but byte-for-byte unchanged); `True` runs the new
+  `_run_interactive_loop()`. Every existing deployment is unaffected by
+  default
+- [x] `_TapClassifier`, `_WakeState`, `_StatusMessage`, `_classify_wake_response`,
+      `_all_signals_hidden`, `_cycle_brightness`/`_run_secondary_action` — all
+      pure, all host-tested (27 tests, `tests/test_wake_interaction.py`)
+- [x] **Deviation from the original doc:** the extend confirmation was
+      specified as an ANIMATED `pulse()`/`breathe()`; implemented instead as
+      the same non-blocking `_StatusMessage` overlay the two new status
+      messages use (one shared mechanism, and a blocking animated pulse
+      would stall tap classification for its duration)
+- [ ] **Not yet on real hardware** — no IMU physically wired;
+      `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` are untested guesses pending a
+      real sensor
+- [ ] **Not pushed to `dev`/`main`** — kept local per instruction
 
-### LED status messages (errors + acknowledgments) — design doc only
+### LED status messages (errors + acknowledgments) ✅ implemented, local only
 
 Full design: `docs/contracts/led-status-messages.md`. Spun out of the
 wake-interaction doc's quiet-hours question, which turned out to need a
@@ -526,19 +538,23 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
 - **Wake-to-no-data acknowledgment** — if a wake ceremony resolves and every
   active direction is genuinely `HIDDEN` (no catchable trains), a tap
   shouldn't feel like it did nothing — same `STATUS_LED_INDEX` mechanism, a
-  different colour
-- **Schedule-load failure (new scope, flagged for confirmation)** — today a
-  missing/corrupt `schedule.json` crashes with a console print and zero LED
-  indication; proposed fix generalizes the existing persistent-failure loop
-  to take a colour parameter, so a schedule failure gets its own distinct
-  persistent colour instead of no visual signal at all
+  different colour. Confirmed to repeat every time, not just once
+- **Schedule-load failure** — confirmed in scope: a missing/corrupt
+  `schedule.json` used to crash with a console print and zero LED
+  indication; `load_schedule()` now also catches malformed JSON
+  (`ValueError`, a pre-existing gap — only `OSError`/missing-file was
+  handled before), and `main()` routes either failure into
+  `_run_startup_failure_forever(SCHEDULE_ERROR_COLOR)` — the same
+  persistent-breathe mechanism WiFi failure already used, now generalized
+  to take a colour. Confirmed: error on failure, no indicator needed on
+  success
 - Stated as an explicit design rule, not just for this doc: never blend
   between states (STATIC or the established ANIMATED path only) — the third
   time this session a low-brightness blend has caused a real bug, worth
   promoting to a standing rule rather than re-deriving per-feature
-- [ ] **Not started** — three open questions in the doc (placeholder
-      colours, does the no-data ack repeat every tap or just once, confirm
-      the schedule-load-failure scope addition)
+- [x] Colours shipped as proposed, confirmed to iterate on real glass rather
+      than in the abstract
+- [ ] **Not yet on real hardware**; **not pushed to `dev`/`main`**
 
 ### Deferred to later sessions
 

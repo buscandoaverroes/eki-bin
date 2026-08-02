@@ -1,10 +1,15 @@
 # Wake / sleep interaction layer (IMU tap gestures)
 
-**Status:** design note — not yet implemented. No IMU is physically wired
-yet, so there's nothing to test against regardless; written now per request,
-ahead of the hardware. Extends the boot ceremony
-(`docs/contracts/startup-sequence.md`) and continues the parked "IMU shake to
-adjust brightness" idea (`docs/insights.md` §5).
+**Status:** implemented on `feature/wake-interaction-layer`, host-tested,
+**not yet on real hardware and not yet enabled by default.** No IMU is
+physically wired, so `_imu_tap_detected()` is a stub that always returns
+`False` — every class/function around it is real, working, tested code;
+only the actual sensor read is a placeholder. Gated behind
+`WAKE_INTERACTION_ENABLED` (default `False`, see § Safety gate below) so
+existing deployments (e.g. `config_friend1.py`, no IMU) are completely
+unaffected. Extends the boot ceremony (`docs/contracts/startup-sequence.md`)
+and continues the parked "IMU shake to adjust brightness" idea
+(`docs/insights.md` §5).
 
 **Motivated by real observations from Qi bring-up (2026-07-25), not
 speculation:**
@@ -111,10 +116,23 @@ touching the tap-classification state machine at all.
 
 Silently extending the countdown with zero feedback is indistinguishable
 from the double-tap not registering at all — worth a distinct, deliberate
-cue: one quick bright pulse (reusing `pulse()`/`breathe()`, ANIMATED path,
-since it's genuinely changing frame-to-frame) in `STARTUP_COLOR` — ties "more
-time" back to the boot ceremony's own colour language rather than
-introducing a fourth colour concept.
+cue in `EXTEND_CONFIRM_COLOR` (defaults to `STARTUP_COLOR` — ties "more time"
+back to the boot ceremony's own colour language rather than introducing a
+fourth colour concept).
+
+**Implementation deviation from the original proposal, worth naming:** this
+doc originally proposed an ANIMATED `pulse()`/`breathe()` envelope for the
+confirmation. What actually got built is the same non-blocking `_StatusMessage`
+overlay `led-status-messages.md`'s quiet-hours and no-data acknowledgments
+use — a solid STATIC-path single LED held for `EXTEND_CONFIRM_MS`, not an
+animated pulse. Two reasons: (1) one shared mechanism for every brief
+acknowledgment (quiet-tap, no-data, extend) is simpler to reason about and
+test than three; (2) a *blocking* animated pulse would stall tap
+classification and the schedule-refresh check for its duration, the same
+problem the boot burst already accepts (briefly, at boot/wake — a much
+rarer event) but not worth accepting on every double-tap. `EXTEND_CONFIRM_MS`
+(default `600`) is a new config knob this introduced, not in the original
+proposal below.
 
 ## Wake ceremony (ASLEEP → AWAKE) reuses the boot ceremony, doesn't rebuild it
 
@@ -128,56 +146,88 @@ just the burst, not the full three-stage boot sequence.
 
 Not a `DisplayContract` — same reasoning as the boot ceremony: this is
 cross-cutting state that *gates* whichever contract is active, not a
-rendering strategy itself. Composes with the existing `is_quiet()` gate at
-the same decision point in `main()`'s loop: "should the display render right
-now?" becomes `not is_quiet(now) and awake`. Two independent reasons to be
-dark, unified at one check.
+rendering strategy itself.
 
-Requires the same restructuring the boot ceremony already needed: IMU
-polling has to run on a fast, `FRAME_MS`-paced tick, independent of the slow
-`LOOP_INTERVAL_SECS` schedule-refresh cadence — a cooperative super-loop
-(elapsed-time-gated tasks in one loop), not an RTOS or threads, per the
-concurrency discussion this design followed from. This doc doesn't introduce
-a *new* concurrency requirement — it's the same fast tick the boot ceremony
-and animated contracts already run on, now with a second consumer (tap
-classification) reading from it.
+**Implemented as a second, separate main-loop function, not a modification of
+the existing one.** `main()` now branches on `WAKE_INTERACTION_ENABLED`:
+`False` (default) runs `_run_classic_loop()` — the *original* loop, moved
+but byte-for-byte unchanged; `True` runs the new `_run_interactive_loop()`.
+This was a deliberate safety choice beyond what this doc originally
+specified — see § Safety gate below.
+
+`_run_interactive_loop()` is the cooperative super-loop the concurrency
+discussion settled on: one `FRAME_MS`-paced tick drives a slow, elapsed-time-
+gated schedule refresh (~`LOOP_INTERVAL_SECS`) AND tap classification AND
+rendering, all in the same loop — no RTOS, no threads. "Should the display
+render right now?" composes `is_quiet()`'s existing gate with the new
+`_WakeState.awake` flag: quiet hours and asleep are two independent reasons
+to render dark, checked together each tick.
+
+## Implemented pieces
+
+| Concept (from this doc) | Actual name in `main.py` |
+|---|---|
+| Tap classifier | `_TapClassifier` (class; `.advance(now_ms, tap_edge)` → `"single"`/`"double"`/`None`) |
+| Wake state | `_WakeState` (class; `.wake()`, `.sleep()`, `.is_expired()`) |
+| Status-message overlay (shared with `led-status-messages.md`) | `_StatusMessage` (class; `.show()`, `.active()`) |
+| Precedence dispatch | `_classify_wake_response(is_quiet_now, tap_event, currently_awake)` |
+| No-data check | `_all_signals_hidden(signal, signal_b)` |
+| Secondary action (default) | `_cycle_brightness()`, dispatched via `_run_secondary_action()` |
+| Real sensor read | `_imu_tap_detected()` — **stub, always returns `False`** |
+
+## Safety gate: `WAKE_INTERACTION_ENABLED`
+
+Not in the original design — added during implementation once it became
+clear this feature can make things *worse* than doing nothing, unlike the
+boot ceremony (which was explicitly decided not to need a toggle). With
+`_imu_tap_detected()` stubbed to always return `False`, enabling this
+unconditionally would mean: boot wakes the display as designed, the
+`WAKE_MINUTES` countdown runs down exactly as designed, and then the display
+goes `ASLEEP` **forever**, because nothing can ever wake it again. For
+`config_friend1.py` (no IMU wired), that's a real regression — a jar that
+goes permanently dark after 30 minutes with no recourse but a power-cycle.
+`WAKE_INTERACTION_ENABLED` (default `False`) keeps every existing deployment
+on the untouched classic loop until a real sensor read exists to back it up.
 
 ## Reusable primitives (nothing new at the math layer, again)
 
 | Need | Existing primitive |
 |---|---|
-| Wake-from-sleep cue | `_play_startup_burst()`, as-is |
-| Confirmation pulse | `pulse()` / `breathe()` |
-| "Should the display be dark right now" gate | Extends `is_quiet()`'s existing gate |
-| Fast tick for IMU polling | The same `FRAME_MS`-paced loop `render_for_interval` already runs for animated contracts |
+| Wake-from-sleep cue | `_play_startup_burst()`, as-is (blocking, ~2.3s) |
+| Brief acknowledgments (extend, and the two in `led-status-messages.md`) | `_StatusMessage` — one shared, non-blocking mechanism (see the Confirmation flash section's deviation note above) |
+| "Should the display be dark right now" gate | `is_quiet()` composed with `_WakeState.awake` |
+| Fast tick for IMU polling + rendering | `_run_interactive_loop()`'s own `FRAME_MS`-paced loop |
 
-## Proposed config
+## Implemented config
 
 ```
+WAKE_INTERACTION_ENABLED = False        # safety gate — see above; must be
+                                          #   True to use any of this at all
 WAKE_MINUTES = 30              # active-display window after any wake/extend trigger
 DOUBLE_TAP_WINDOW_MS = 400     # max gap between two taps to count as a double-tap
                                 #   — GUESS, needs tuning against the real sensor
-TAP_THRESHOLD = ...            # accelerometer magnitude threshold for "a tap
-                                #   happened" — cannot be sanely guessed without
-                                #   the physical IMU; do not hardcode a default
-                                #   until bench-tested
+TAP_THRESHOLD = 2.0            # accelerometer magnitude threshold for "a tap
+                                #   happened" — UNTESTED GUESS; _imu_tap_detected()
+                                #   doesn't even read this yet (still stubbed)
 SECONDARY_ACTION = "brightness_cycle"   # pluggable — what a single tap while
                                           #   AWAKE does
 BRIGHTNESS_PRESETS = (0.15, 0.35, 0.6)  # default SECONDARY_ACTION's levels
 EXTEND_CONFIRM_COLOR = STARTUP_COLOR    # reuse — ties "more time" to the boot
                                           #   ceremony's own colour language
+EXTEND_CONFIRM_MS = 600                 # new — see the deviation note above
 ```
 
 ## Testability
 
-Tap **classification** (single vs. double, given a stream of timestamped raw
-tap events) is pure and host-testable — same "separate the decision logic
-from the real-time loop" split `_render_dispatch`/`_startup_burst_mult`
-already established. Wake-state transitions (AWAKE/ASLEEP, countdown expiry)
-are similarly testable as a pure function of `(now, last_wake_at,
-WAKE_MINUTES)`. Reading the actual IMU over I2C is **not** host-testable —
-same hardware-I/O limitation every other real-time piece in this codebase
-already has (`connect_wifi()`'s poll, `_play_startup_burst()`, etc.).
+`_TapClassifier`, `_WakeState`, `_StatusMessage`, `_classify_wake_response`,
+`_all_signals_hidden`, and `_cycle_brightness`/`_run_secondary_action` are
+all pure and host-tested (27 tests, `tests/test_wake_interaction.py`) — same
+"separate the decision logic from the real-time loop" split
+`_render_dispatch`/`_startup_burst_mult` already established. Reading the
+actual IMU over I2C is **not** host-testable — same hardware-I/O limitation
+every other real-time piece in this codebase already has (`connect_wifi()`'s
+poll, `_play_startup_burst()`, etc.) — and neither is
+`_run_interactive_loop()` itself, for the same reason.
 
 ## Decisions (confirmed 2026-07-25)
 

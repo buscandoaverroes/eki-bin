@@ -111,6 +111,34 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                                     forever, until reset — no auto-retry
 # ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose
 
+# ── Wake/sleep interaction layer — docs/contracts/wake-interaction.md ──
+# OFF BY DEFAULT. No IMU is physically wired yet — _imu_tap_detected() is a
+# stub that always returns False, so enabling this with no real sensor read
+# would put the display permanently ASLEEP after WAKE_MINUTES with no way
+# to wake it again. Leave this False until a real IMU is wired and
+# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS have real bench numbers.
+# WAKE_INTERACTION_ENABLED = False
+# WAKE_MINUTES = 30            # active-display window after any wake/extend
+# DOUBLE_TAP_WINDOW_MS = 400   # GUESS — tune against the real sensor
+# TAP_THRESHOLD = 2.0          # UNTESTED GUESS — not even read by the stub yet
+# SECONDARY_ACTION = "brightness_cycle"   # single tap while AWAKE
+# BRIGHTNESS_PRESETS = (0.15, 0.35, 0.6)  # SECONDARY_ACTION's levels
+# EXTEND_CONFIRM_COLOR = STARTUP_COLOR    # double-tap-while-AWAKE confirmation
+# EXTEND_CONFIRM_MS = 600
+
+# ── LED status messages — docs/contracts/led-status-messages.md ────────
+# Shared vocabulary for brief acknowledgments + distinguishable failure
+# colours. STATUS_LED_INDEX deliberately does NOT reuse ApproachContract's
+# ANCHOR_INDEX — this stays contract-agnostic.
+# STATUS_LED_INDEX = NUM_LEDS // 2
+# QUIET_TAP_COLOR = (128, 0, 200)   # purple — tap during quiet hours
+# QUIET_TAP_DURATION_MS = 2500
+# NO_DATA_COLOR = (200, 160, 0)     # gold — woke up to nothing catchable
+# NO_DATA_DURATION_MS = 2500
+# SCHEDULE_ERROR_COLOR = (200, 0, 120)  # distinct from ERROR_COLOR (red) —
+#                                          a missing/corrupt schedule.json is
+#                                          a different failure than WiFi/NTP
+
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 QUIET_START_HOUR = 24
 QUIET_END_HOUR = 5

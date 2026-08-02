@@ -63,6 +63,20 @@ it with `getattr(config, "NAME", default)`, so
 | `STARTUP_FADE_MS` | int | no | `1500` | Success-burst decay duration, ms — after which the main loop takes over (no crossfade; see the doc's Handoff section) |
 | `ERROR_COLOR` | tuple | no | `(255, 0, 0)` | Persistent failure state (WiFi connect fails) — all LEDs, forever, until reset |
 | `ERROR_BREATHE_PERIOD_MS` | int | no | `4000` | Failure-state breathe period — deliberately separate from `BREATHE_PERIOD_MS` |
+| `WAKE_INTERACTION_ENABLED` | bool | no | `False` | **Safety gate** — see `docs/contracts/wake-interaction.md`. No IMU wired yet; enabling with the sensor still stubbed puts the display permanently ASLEEP after `WAKE_MINUTES` with no way to wake it. Leave `False` until a real sensor read exists |
+| `WAKE_MINUTES` | int | no | `30` | Active-display window after any wake/extend trigger |
+| `DOUBLE_TAP_WINDOW_MS` | int | no | `400` | Max gap between two taps to count as a double-tap — GUESS, tune against real sensor data |
+| `TAP_THRESHOLD` | float | no | `2.0` | Accelerometer magnitude threshold for "a tap happened" — UNTESTED GUESS, not read by the current stub |
+| `SECONDARY_ACTION` | str | no | `"brightness_cycle"` | What a single tap while AWAKE does — pluggable, only one action implemented |
+| `BRIGHTNESS_PRESETS` | tuple | no | `(0.15, 0.35, 0.6)` | Levels `SECONDARY_ACTION="brightness_cycle"` cycles through |
+| `EXTEND_CONFIRM_COLOR` | tuple | no | `STARTUP_COLOR` | Double-tap-while-AWAKE confirmation colour |
+| `EXTEND_CONFIRM_MS` | int | no | `600` | Duration of the extend confirmation |
+| `STATUS_LED_INDEX` | int | no | `NUM_LEDS // 2` | Shared "middle-ish" position for brief acknowledgments — see `docs/contracts/led-status-messages.md`. Deliberately not `ANCHOR_INDEX`, stays contract-agnostic |
+| `QUIET_TAP_COLOR` | tuple | no | `(128, 0, 200)` | Acknowledgment colour for a tap during quiet hours (purple) |
+| `QUIET_TAP_DURATION_MS` | int | no | `2500` | Duration of the quiet-hours acknowledgment |
+| `NO_DATA_COLOR` | tuple | no | `(200, 160, 0)` | Acknowledgment colour for waking up to no catchable trains (gold) |
+| `NO_DATA_DURATION_MS` | int | no | `2500` | Duration of the no-data acknowledgment |
+| `SCHEDULE_ERROR_COLOR` | tuple | no | `(200, 0, 120)` | Persistent failure colour for a missing/corrupt `schedule.json` — distinct from `ERROR_COLOR` (WiFi/NTP failure) |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
 | `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight) |
 

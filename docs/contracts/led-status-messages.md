@@ -1,10 +1,13 @@
 # LED status messages — a shared vocabulary
 
-**Status:** design note — not yet implemented. Spun out of
+**Status:** implemented on `feature/wake-interaction-layer`, host-tested,
+**not yet on real hardware.** Spun out of
 `docs/contracts/wake-interaction.md`'s Open question #1 (quiet hours vs. a
 deliberate tap), which turned out to need more than a yes/no — a proper
 vocabulary for anything the LEDs say that isn't a `DisplayContract`'s normal
-per-tick rendering.
+per-tick rendering. All three "Decisions" below (colours, no-data-repeats-
+every-time, schedule-load-failure in scope) were confirmed before
+implementation and are reflected in the code as shipped.
 
 **What already exists, informally, before this doc:** the boot ceremony
 (`docs/contracts/startup-sequence.md`) already has two message-like states —
@@ -49,9 +52,9 @@ discussing tap gestures:
 | Connect failure *(existing)* | WiFi/NTP connect fails | Persistent breathe, whole strip | `ERROR_COLOR` (red) | Forever, needs reset | Yes, terminal |
 | **Schedule-load failure (new)** | `load_schedule()` can't read/parse `schedule.json` | Persistent breathe, whole strip — same mechanism as connect failure, generalized to take a colour | `SCHEDULE_ERROR_COLOR` (distinct from `ERROR_COLOR`) | Forever, needs reset | Yes, terminal |
 | Wake-from-sleep *(from wake-interaction.md)* | Any tap while ASLEEP, not quiet hours | Reuses `_play_startup_burst()` as-is | `STARTUP_COLOR` | ~2.3s | Yes, then hands off to normal render |
-| Extend confirmation *(from wake-interaction.md)* | Double-tap while AWAKE | Quick pulse, whole strip | `STARTUP_COLOR` (reused) | ~0.5–1s | No — brief overlay |
-| **Quiet-hours tap acknowledgment (new)** | Any tap while `is_quiet(now)` | Single LED, `STATUS_LED_INDEX` | `QUIET_TAP_COLOR` (purple) | A few seconds, then dark again | No — display stays otherwise dark throughout |
-| **Wake-to-no-data acknowledgment (new)** | A wake ceremony completes but every active direction's signal is `HIDDEN` | Single LED, `STATUS_LED_INDEX` | `NO_DATA_COLOR` | A few seconds, then settles into the (correct) anchor/marker-only view | No — brief, then normal render |
+| Extend confirmation *(from wake-interaction.md)* | Double-tap while AWAKE | `_StatusMessage` overlay — see Shared mechanism below | `EXTEND_CONFIRM_COLOR` (`STARTUP_COLOR` by default) | `EXTEND_CONFIRM_MS` (600ms) | No — brief overlay |
+| **Quiet-hours tap acknowledgment (new)** | Any tap while `is_quiet(now)` | `_StatusMessage` overlay, single LED at `STATUS_LED_INDEX` | `QUIET_TAP_COLOR` (purple) | `QUIET_TAP_DURATION_MS` (2500ms), then dark again | No — display stays otherwise dark throughout |
+| **Wake-to-no-data acknowledgment (new)** | A wake ceremony completes but every active direction's signal is `HIDDEN` | `_StatusMessage` overlay, single LED at `STATUS_LED_INDEX` | `NO_DATA_COLOR` (gold) | `NO_DATA_DURATION_MS` (2500ms), then settles into the (correct) anchor/marker-only view | No — brief, then normal render |
 
 ## `STATUS_LED_INDEX`: one shared position, deliberately not `ANCHOR_INDEX`
 
@@ -95,27 +98,30 @@ Directly answers `wake-interaction.md`'s Open question #1:
 
 ## Shared mechanism
 
-One reusable primitive backs both new single-LED acknowledgments:
+One reusable primitive backs all three brief acknowledgments (quiet-tap,
+no-data, extend) — implemented as a small **non-blocking** class, not a
+blocking flash function as originally sketched, specifically so it doesn't
+stall tap classification or the schedule-refresh check for its duration:
 
 ```python
-def _flash_status_led(index, color, duration_ms):
-    """Hold ONE LED at `color`, full brightness, STATIC path (see
-    _write_frame) for `duration_ms`, everything else off, then return —
-    caller decides what renders next. No gamma, no dither: a single LED at
+class _StatusMessage:
+    """Set once via show(now_ms, color, duration_ms); the normal fast-tick
+    loop checks active(now_ms) each render step and paints ONE LED at
+    STATUS_LED_INDEX, full brightness, STATIC path (no gamma, no dither —
     a fixed colour for a fixed duration has no low-brightness intermediate
-    value to worry about, same reasoning every STATIC entry in this
-    codebase already uses."""
+    value to worry about) for as long as it's active, then falls through to
+    whatever would normally render."""
 ```
 
-`_run_startup_failure_forever()` generalizes to accept a colour parameter
-(currently hardcoded to `ERROR_COLOR`) so the new schedule-load failure path
-can call the exact same persistent-breathe loop with `SCHEDULE_ERROR_COLOR`
-instead of duplicating it.
+`_run_startup_failure_forever()` was generalized to accept a colour
+parameter (`color=None` defaults to `ERROR_COLOR`) so the new schedule-load
+failure path calls the exact same persistent-breathe loop with
+`SCHEDULE_ERROR_COLOR` instead of duplicating it.
 
-## Proposed config
+## Implemented config
 
-Colours below are proposals to react to, not decisions — pick different
-ones freely, nothing else in this design depends on the specific hues:
+Colours below were confirmed as good starting defaults, not final — real
+tuning happens on the actual glass (see the Decisions below):
 
 ```
 STATUS_LED_INDEX = NUM_LEDS // 2   # shared "middle-ish" position, contract-agnostic
@@ -131,25 +137,25 @@ SCHEDULE_ERROR_COLOR = (200, 0, 120)  # distinct from ERROR_COLOR (red) — a
 
 ## Testability
 
-"Which message should play" is a pure decision — given `(is_quiet, tap_type,
-current_wake_state, all_signals_hidden)`, there's exactly one right answer —
-so that dispatch logic is host-testable, same "separate the decision from
-the real-time loop" split every other real-time piece in this codebase
-already uses. The actual flash/breathe loops (`_flash_status_led`, the
-generalized failure loop) are not — real `time.ticks_ms()`/`sleep_ms()`,
-same limitation as `_play_startup_burst()` and `connect_wifi()`.
+"Which message should play" is a pure decision (`_classify_wake_response`,
+`_all_signals_hidden` — both in `wake-interaction.md`'s implemented-pieces
+table) — host-tested alongside the rest of the interaction layer in
+`tests/test_wake_interaction.py`. `_StatusMessage.show()`/`.active()` are
+likewise pure and tested (no real clock needed — plain ms integers in,
+bool/state out). The actual persistent-failure breathe loop
+(`_run_startup_failure_forever()`) is not host-testable — real
+`time.ticks_ms()`/`sleep_ms()`, same limitation `_play_startup_burst()` and
+`connect_wifi()` already have, and it never was tested even before this
+colour-parameter generalization.
 
-## Open questions
+## Decisions (confirmed 2026-07-25)
 
-1. **Colours above are placeholders** — react to them, don't treat them as
-   final.
-2. **Does the no-data acknowledgment repeat on every tap into an empty
-   state, or only once per wake attempt?** Proposed: every time — simplest,
-   no extra state to track, and a tap into silence should always
-   acknowledge, not just the first time.
-3. **Schedule-load failure is new scope beyond what wake-interaction.md
-   asked for** — it fell out of formalizing the catalog (the gap was
-   already there: today a missing/corrupt `schedule.json` crashes with a
-   console print and zero LED indication). Worth confirming this is wanted
-   now rather than a separate follow-up, since it's a small, self-contained
-   addition once `_run_startup_failure_forever()` takes a colour parameter.
+1. **Colours confirmed as proposed** — the real test is on actual glass, not
+   in the abstract; iterate once this is on hardware rather than
+   bikeshedding hex values now.
+2. **No-data acknowledgment repeats every time**, not just on the first
+   occurrence — confirmed as proposed, simplest, no extra state to track.
+3. **Schedule-load failure confirmed in scope**: should show an error if the
+   load fails, but needs no indicator at all if it loads fine (matching
+   every other successful, silent path in this codebase — success doesn't
+   need its own announcement, only failure does).

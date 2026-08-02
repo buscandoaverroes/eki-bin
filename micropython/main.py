@@ -138,6 +138,43 @@ ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 #   deliberately separate from BREATHE_PERIOD_MS — retuning a contract's
 #   breathing feel should never touch the failure state's.
 
+# Wake/sleep interaction layer — docs/contracts/wake-interaction.md. OFF by
+# default: WAKE_INTERACTION_ENABLED=False means the display behaves exactly
+# as before (always "awake", no countdown) — safe for every existing
+# deployment (e.g. config_friend1.py) that has no IMU wired. Flipping it on
+# with no real _imu_tap_detected() implementation (still stubbed — see below)
+# would put the display permanently ASLEEP after WAKE_MINUTES with no way to
+# wake it again, so this must stay opt-in until a real sensor read exists.
+WAKE_INTERACTION_ENABLED = getattr(config, "WAKE_INTERACTION_ENABLED", False)
+WAKE_MINUTES = getattr(config, "WAKE_MINUTES", 30)  # active-display window
+#   after any wake/extend trigger
+DOUBLE_TAP_WINDOW_MS = getattr(config, "DOUBLE_TAP_WINDOW_MS", 400)  # max gap
+#   between two taps to count as a double-tap — GUESS, tune against real
+#   sensor data once the IMU is wired
+TAP_THRESHOLD = getattr(config, "TAP_THRESHOLD", 2.0)  # accelerometer
+#   magnitude delta for "a tap happened" — UNTESTED GUESS, no IMU wired yet;
+#   _imu_tap_detected() doesn't even use this yet (still stubbed), kept here
+#   so the real implementation has an obvious knob to read
+SECONDARY_ACTION = getattr(config, "SECONDARY_ACTION", "brightness_cycle")  #
+#   pluggable — what a single tap while AWAKE does (see _run_secondary_action)
+BRIGHTNESS_PRESETS = getattr(config, "BRIGHTNESS_PRESETS", (0.15, 0.35, 0.6))
+EXTEND_CONFIRM_COLOR = getattr(config, "EXTEND_CONFIRM_COLOR", STARTUP_COLOR)
+EXTEND_CONFIRM_MS = getattr(config, "EXTEND_CONFIRM_MS", 600)
+
+# LED status messages — docs/contracts/led-status-messages.md. Shared
+# "middle-ish" position for brief single-LED acknowledgments, deliberately
+# NOT ApproachContract's ANCHOR_INDEX (which defaults to 0, not the middle,
+# under every other CONTRACT) — this vocabulary works the same regardless of
+# which CONTRACT is active.
+STATUS_LED_INDEX = getattr(config, "STATUS_LED_INDEX", NUM_LEDS // 2)
+QUIET_TAP_COLOR = getattr(config, "QUIET_TAP_COLOR", (128, 0, 200))  # purple
+QUIET_TAP_DURATION_MS = getattr(config, "QUIET_TAP_DURATION_MS", 2500)
+NO_DATA_COLOR = getattr(config, "NO_DATA_COLOR", (200, 160, 0))  # gold/amber
+NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
+SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
+#   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
+#   cause should look like a different failure, not the same red for anything
+
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
 # GPIO). Other boards have no such alias: set this to a GPIO number for that
@@ -986,7 +1023,10 @@ def load_schedule(filename):
     """
     Load schedule.json from device filesystem.
     Returns the full parsed dict (station, weekday, weekend).
-    Halts with a clear message if file is missing or malformed.
+    Raises (OSError: missing file; ValueError: malformed JSON) rather than
+    halting itself — the caller decides what "failed to load" looks like on
+    the LEDs (see main()'s call site and
+    docs/contracts/led-status-messages.md's schedule-load-failure entry).
     """
     try:
         with open(filename) as f:
@@ -994,6 +1034,10 @@ def load_schedule(filename):
     except OSError:
         print(f"✗ Schedule file not found: {filename}")
         print("  Upload it with: make upload")
+        raise
+    except ValueError:
+        print(f"✗ Schedule file malformed (bad JSON): {filename}")
+        print("  Regenerate it with: make schedule && make upload")
         raise
 
 
@@ -1111,17 +1155,23 @@ def _startup_error_mult(elapsed_ms):
     return breathe(elapsed_ms, ERROR_BREATHE_PERIOD_MS, floor=0.15)
 
 
-def _run_startup_failure_forever():
-    """Persistent red breathe — a genuine DEAD END, not a retry loop, by
-    design (see docs/contracts/startup-sequence.md § Failure recovery).
+def _run_startup_failure_forever(color=None):
+    """Persistent breathe — a genuine DEAD END, not a retry loop, by design
+    (see docs/contracts/startup-sequence.md § Failure recovery).
     Distinguishes "broken, needs help" from every other state at a glance,
     and doesn't pretend to work when it can't. Needs a physical reset/
-    power-cycle to leave this state; never returns on its own."""
-    print("  ✗ Startup failed — check config.py / WiFi. Reset to retry.")
+    power-cycle to leave this state; never returns on its own.
+
+    `color` defaults to ERROR_COLOR (WiFi/NTP connect failure) — pass
+    SCHEDULE_ERROR_COLOR for a schedule-load failure instead. Different
+    failure CAUSES get visually distinct colours on purpose, so whoever's
+    looking at a dead jar with no laptop handy can tell which one happened
+    — see docs/contracts/led-status-messages.md."""
+    color = ERROR_COLOR if color is None else color
     start = time.ticks_ms()
     while True:
         elapsed = time.ticks_diff(time.ticks_ms(), start)
-        _write_frame([(ERROR_COLOR, _startup_error_mult(elapsed))] * NUM_LEDS)
+        _write_frame([(color, _startup_error_mult(elapsed))] * NUM_LEDS)
         time.sleep_ms(FRAME_MS)
 
 
@@ -1132,10 +1182,159 @@ def run_startup_sequence():
     RETURNS (see its docstring) — this function correspondingly never
     returns either, in that case."""
     if not connect_wifi():
-        _run_startup_failure_forever()
+        print("  ✗ WiFi failed — check config.py. Reset to retry.")
+        _run_startup_failure_forever(ERROR_COLOR)
     if not sync_ntp():
         print("  Warning: time may be wrong.")
     _play_startup_burst()
+
+
+# ─────────────────────────────────────────────────────────────
+# Wake/sleep interaction layer — docs/contracts/wake-interaction.md
+# LED status messages — docs/contracts/led-status-messages.md
+# Gated by WAKE_INTERACTION_ENABLED (see its docstring above) — every class
+# and function below is inert unless main() actually drives it.
+# ─────────────────────────────────────────────────────────────
+def _imu_tap_detected():
+    """Whether a NEW tap edge occurred since the last call. STUBBED — no IMU
+    is physically wired yet (see docs/contracts/wake-interaction.md). Always
+    returns False, so the rest of the interaction layer runs correctly (and
+    is fully testable) with the display simply never receiving a tap, rather
+    than crashing or fabricating sensor data. Replace with a real
+    LSM6DSV16X I2C read once the sensor is wired — TAP_THRESHOLD needs real
+    bench tuning at that point too; it isn't used by this stub."""
+    return False
+
+
+class _TapClassifier:
+    """Turns a stream of discrete tap-edge events into "single"/"double"
+    classifications, using DOUBLE_TAP_WINDOW_MS to disambiguate. PURE
+    decision logic — see wake-interaction.md's "why single vs double needs
+    its own state machine" section. Only classifies an already-detected
+    edge; _imu_tap_detected() (real sensor I/O, not host-testable) is a
+    separate concern."""
+
+    def __init__(self):
+        self._pending_since = None  # ms an unresolved first tap arrived, or None
+
+    def advance(self, now_ms, tap_edge):
+        """Call once per poll tick with whether a NEW tap edge occurred this
+        tick. Returns "single", "double", or None (nothing to report yet)."""
+        if self._pending_since is not None:
+            if tap_edge:
+                self._pending_since = None
+                return "double"
+            if now_ms - self._pending_since >= DOUBLE_TAP_WINDOW_MS:
+                self._pending_since = None
+                return "single"
+            return None
+        if tap_edge:
+            self._pending_since = now_ms
+        return None
+
+
+class _WakeState:
+    """AWAKE/ASLEEP state for the whole display — one instance, unlike
+    ApproachContract's per-train state, since this gates EVERYTHING, not one
+    contract's own rendering. See wake-interaction.md's state machine."""
+
+    def __init__(self):
+        self.awake = True  # boot always enters AWAKE — see run_startup_sequence()
+        self.wake_until = None  # set by wake(); None until the first wake() call
+
+    def wake(self, now_ms):
+        """Enter (or re-enter) AWAKE, resetting the countdown to
+        WAKE_MINUTES from now. Used for boot, wake-from-sleep, AND extend —
+        the same operation whether the display was already awake or not."""
+        self.awake = True
+        self.wake_until = now_ms + WAKE_MINUTES * 60_000
+
+    def sleep(self):
+        self.awake = False
+        self.wake_until = None
+
+    def is_expired(self, now_ms):
+        """True once the countdown has run out — caller (main()) is
+        responsible for actually calling sleep() and clearing the strip;
+        this only reports the fact."""
+        return self.awake and self.wake_until is not None and now_ms >= self.wake_until
+
+
+class _StatusMessage:
+    """A brief single-LED acknowledgment (see
+    docs/contracts/led-status-messages.md) — non-blocking by design: set
+    once via show(), then rendered by the normal fast-tick loop until it
+    expires, rather than its own blocking sleep loop (which would stall tap
+    classification and schedule refresh for its whole duration)."""
+
+    def __init__(self):
+        self.color = None
+        self.expires_at = None
+
+    def show(self, now_ms, color, duration_ms):
+        self.color = color
+        self.expires_at = now_ms + duration_ms
+
+    def active(self, now_ms):
+        return self.expires_at is not None and now_ms < self.expires_at
+
+
+def _classify_wake_response(is_quiet_now, tap_event, currently_awake):
+    """PURE: given quiet-hours state, a classified tap event, and whether
+    the display is currently awake, decide what should happen. Does NOT
+    decide the no-data acknowledgment — that depends on the live signal(s),
+    resolved separately right after a wake ceremony completes (see main()).
+    Precedence matches docs/contracts/led-status-messages.md exactly: quiet
+    hours is checked before gesture classification, and quiet hours always
+    wins on whether the display lights up — a tap during quiet hours is
+    never ignored outright, it just gets the smaller message."""
+    if tap_event is None:
+        return None
+    if is_quiet_now:
+        return "quiet_tap_ack"  # ANY tap during quiet hours, no exceptions
+    if not currently_awake:
+        return "wake_ceremony"  # ASLEEP + any tap = wake, no ambiguity
+    if tap_event == "double":
+        return "extend"
+    return "secondary_action"  # AWAKE + single tap
+
+
+def _all_signals_hidden(signal, signal_b):
+    """True if every active direction's LeaveSignal is HIDDEN (no catchable
+    trains) — the trigger for the wake-to-no-data acknowledgment."""
+    if signal.urgency is not HIDDEN:
+        return False
+    if signal_b is not None and signal_b.urgency is not HIDDEN:
+        return False
+    return True
+
+
+def _cycle_brightness():
+    """Advance BRIGHTNESS to the next value in BRIGHTNESS_PRESETS, wrapping
+    around — the default SECONDARY_ACTION (a single tap while AWAKE). The
+    visible brightness change IS the confirmation; no separate flash needed
+    (see wake-interaction.md). Mutates the module-level BRIGHTNESS global
+    directly — every render path already reads it fresh each frame (it was
+    never a frozen import-time constant in practice, just never mutated
+    until now), so nothing else needs to change to pick this up."""
+    global BRIGHTNESS
+    try:
+        next_index = (BRIGHTNESS_PRESETS.index(BRIGHTNESS) + 1) % len(BRIGHTNESS_PRESETS)
+    except ValueError:
+        next_index = 0  # current BRIGHTNESS isn't one of the presets — start over
+    BRIGHTNESS = BRIGHTNESS_PRESETS[next_index]
+    return BRIGHTNESS
+
+
+def _run_secondary_action():
+    """Dispatch whatever SECONDARY_ACTION is configured. Only
+    "brightness_cycle" exists today; deliberately pluggable rather than
+    hardcoded to one behaviour (see wake-interaction.md) — an unrecognised
+    SECONDARY_ACTION is a silent no-op, matching this codebase's
+    getattr-default tolerance elsewhere (e.g. _render_dispatch's hasattr
+    guard for render_dual)."""
+    if SECONDARY_ACTION == "brightness_cycle":
+        _cycle_brightness()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1219,32 +1418,119 @@ def render_for_interval(contract, signal, seconds, signal_b=None):
         time.sleep_ms(contract.frame_ms)
 
 
-def main():
-    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+def _run_classic_loop(schedule_data, led):
+    """The original main loop, unchanged: schedule refresh once every
+    LOOP_INTERVAL_SECS, contract renders for the interval via
+    render_for_interval(). Used whenever WAKE_INTERACTION_ENABLED is False
+    (the default) — every deployment without an IMU wired (e.g.
+    config_friend1.py) keeps behaving exactly as it always has, byte for
+    byte. See _run_interactive_loop for the wake/sleep + status-message
+    version."""
     heartbeat = False
+    DIVIDER = "─" * 50
+    loop_count = 0
 
-    print("\n══ eki-bin ═══════════════════════════════════════")
+    while True:
+        heartbeat = not heartbeat
+        if led:
+            led.value(heartbeat)
+        loop_count += 1
+        hb = "●" if heartbeat else "○"
 
-    schedule_data = load_schedule(SCHEDULE_FILE)
-    print(
-        f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
-        f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+        now, weekday = local_time()
+        period = current_period(weekday)
+        directions = schedule_data.get(period, {})
 
-        f"  N trains: {N_TRAINS} "
-        f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
-    )
+        print(DIVIDER)
+        print(
+            f"  {hb}  {fmt_time(now)} JST   {period}   {schedule_data['station']}   #{loop_count}"
+        )
+        print(DIVIDER)
 
-    try:
-        run_startup_sequence()  # boot ceremony — never returns on WiFi
-        #   failure (persistent red breathe instead), so everything below
-        #   only ever runs after a successful connect + burst.
+        if not directions:
+            print(
+                f"  No schedule for {period!r} — run: make schedule && make upload"
+            )
+        else:
+            for direction, departures in directions.items():
+                upcoming = next_departures(departures, now)
+                marker = "  ← ring" if direction == DISPLAY_DIRECTION else ""
+                print(f"\n  {direction}{marker}")
+                if not upcoming:
+                    print("    —  no more trains today")
+                    continue
+                for i, until in enumerate(upcoming):
+                    arrow = "→" if i == 0 else " "
+                    print(
+                        f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
+                    )
 
-        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+        # ── Drive the LED ring ───────────────────────────────────
+        # One ring → one direction (no magnetometer in V1) — or two, for
+        # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
+        # Build the abstract signal(s), then let whichever contract is
+        # active interpret them.
+        signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
+        if signal.ttls:
+            leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
+            print(f"\n  ring: leave in [{leaves}] min  →  {signal.urgency.name}")
+        else:
+            print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
 
-        DIVIDER = "─" * 50
-        loop_count = 0
+        signal_b = None
+        if DISPLAY_DIRECTION_B is not None:
+            signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+            if signal_b.ttls:
+                leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+            else:
+                print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
-        while True:
+        # Night → dark + sleep. Otherwise the contract renders for the interval
+        # (static returns at once → we sleep; animated runs its own frame loop).
+        if is_quiet(now):
+            print("  (quiet hours — display off)")
+            clear()
+            time.sleep(LOOP_INTERVAL_SECS)
+        else:
+            render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
+            if ACTIVE_CONTRACT.frame_ms is None:
+                time.sleep(LOOP_INTERVAL_SECS)
+
+
+def _run_interactive_loop(schedule_data, led):
+    """Wake/sleep interaction layer + LED status messages — active only
+    when WAKE_INTERACTION_ENABLED is True. See
+    docs/contracts/wake-interaction.md and
+    docs/contracts/led-status-messages.md.
+
+    Structurally different from _run_classic_loop: ONE fast (FRAME_MS-paced)
+    tick drives everything — schedule refresh (slow, elapsed-time-gated),
+    tap classification, wake/message dispatch, and rendering — rather than
+    one iteration per LOOP_INTERVAL_SECS. This is the cooperative
+    "super-loop" pattern the wake-interaction design doc's concurrency
+    section settled on: no RTOS, no threads, just several time-gated tasks
+    sharing one tick."""
+    heartbeat = False
+    DIVIDER = "─" * 50
+    loop_count = 0
+
+    wake_state = _WakeState()
+    wake_state.wake(time.ticks_ms())  # boot = the first wake trigger
+    tap_classifier = _TapClassifier()
+    status_message = _StatusMessage()
+
+    last_refresh = None
+    now = 0
+    signal = LeaveSignal([])
+    signal_b = None
+
+    while True:
+        tick_now = time.ticks_ms()
+
+        # ── slow task: schedule refresh, ~LOOP_INTERVAL_SECS ──────────
+        if last_refresh is None or time.ticks_diff(tick_now, last_refresh) >= LOOP_INTERVAL_SECS * 1000:
+            last_refresh = tick_now
             heartbeat = not heartbeat
             if led:
                 led.value(heartbeat)
@@ -1279,11 +1565,6 @@ def main():
                             f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
                         )
 
-            # ── Drive the LED ring ───────────────────────────────────
-            # One ring → one direction (no magnetometer in V1) — or two, for
-            # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
-            # Build the abstract signal(s), then let whichever contract is
-            # active interpret them.
             signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
             if signal.ttls:
                 leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
@@ -1300,16 +1581,76 @@ def main():
                 else:
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
-            # Night → dark + sleep. Otherwise the contract renders for the interval
-            # (static returns at once → we sleep; animated runs its own frame loop).
-            if is_quiet(now):
-                print("  (quiet hours — display off)")
-                clear()
-                time.sleep(LOOP_INTERVAL_SECS)
-            else:
-                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
-                if ACTIVE_CONTRACT.frame_ms is None:
-                    time.sleep(LOOP_INTERVAL_SECS)
+        # ── fast task: tap classification + wake/message dispatch ─────
+        quiet_now = is_quiet(now)
+        tap_event = tap_classifier.advance(tick_now, _imu_tap_detected())
+        response = _classify_wake_response(quiet_now, tap_event, wake_state.awake)
+
+        if response == "quiet_tap_ack":
+            status_message.show(tick_now, QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS)
+        elif response == "wake_ceremony":
+            wake_state.wake(tick_now)
+            _play_startup_burst()  # blocking, ~2.3s — reused as-is, see the doc
+            tick_now = time.ticks_ms()  # stale after the blocking burst above
+            if _all_signals_hidden(signal, signal_b):
+                status_message.show(tick_now, NO_DATA_COLOR, NO_DATA_DURATION_MS)
+        elif response == "extend":
+            wake_state.wake(tick_now)
+            status_message.show(tick_now, EXTEND_CONFIRM_COLOR, EXTEND_CONFIRM_MS)
+        elif response == "secondary_action":
+            _run_secondary_action()
+
+        if wake_state.is_expired(tick_now):
+            wake_state.sleep()
+
+        # ── render ──────────────────────────────────────────────────
+        if status_message.active(tick_now):
+            frame = [None] * NUM_LEDS
+            frame[STATUS_LED_INDEX] = (status_message.color, 1.0, "static")
+            _write_frame(frame)
+        elif quiet_now or not wake_state.awake:
+            clear()
+        else:
+            _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+
+        time.sleep_ms(FRAME_MS)
+
+
+def main():
+    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+
+    print("\n══ eki-bin ═══════════════════════════════════════")
+
+    try:
+        schedule_data = load_schedule(SCHEDULE_FILE)
+    except (OSError, ValueError):
+        # Different failure CAUSE, different colour — see
+        # docs/contracts/led-status-messages.md. A missing/corrupt
+        # schedule.json used to crash here with a console print and no LED
+        # indication at all; now gets the same persistent-failure treatment
+        # WiFi/NTP failure already had, just its own colour.
+        print("  ✗ Schedule failed to load. Reset to retry.")
+        _run_startup_failure_forever(SCHEDULE_ERROR_COLOR)  # never returns
+
+    print(
+        f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
+        f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+
+        f"  N trains: {N_TRAINS} "
+        f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
+    )
+
+    try:
+        run_startup_sequence()  # boot ceremony — never returns on WiFi
+        #   failure (persistent red breathe instead), so everything below
+        #   only ever runs after a successful connect + burst.
+
+        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+
+        if WAKE_INTERACTION_ENABLED:
+            _run_interactive_loop(schedule_data, led)
+        else:
+            _run_classic_loop(schedule_data, led)
     except KeyboardInterrupt:
         pass
     finally:
