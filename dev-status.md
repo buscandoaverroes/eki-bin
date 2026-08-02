@@ -500,10 +500,45 @@ from a registered one).
   already run on just gets a second consumer (tap classification). XIAO
   ESP32-C3 is single-core anyway, so an RTOS would only be time-slicing one
   core, same real-world result as the existing loop pattern
-- [ ] **Not started** — no IMU physically wired yet, four open questions in
-      the doc need answers before coding (quiet-hours-vs-tap precedence,
-      hard-cut-vs-fade on sleep, confirm the brightness-cycle default,
-      `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` need real bench numbers)
+- **Open questions resolved (2026-07-25):** sleep transition = instant cut
+  to black (a "goodnight" fade explicitly parked as future UX, not blocking);
+  `SECONDARY_ACTION` confirmed = cycle `BRIGHTNESS_PRESETS`;
+  `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` remain genuinely open pending real
+  hardware, ship a flagged guess when implementation starts. The
+  quiet-hours-vs-tap question turned into its own doc — see next
+- [ ] **Not started** — no IMU physically wired yet; blocked on
+      `docs/contracts/led-status-messages.md`'s open questions too, since
+      quiet-hours tap handling now depends on that vocabulary
+
+### LED status messages (errors + acknowledgments) — design doc only
+
+Full design: `docs/contracts/led-status-messages.md`. Spun out of the
+wake-interaction doc's quiet-hours question, which turned out to need a
+proper shared vocabulary rather than a yes/no — formalizes the existing
+boot-ceremony/connect-failure pattern and extends it to three new cases:
+
+- **Quiet-hours tap acknowledgment** — a tap during quiet hours never fully
+  wakes the display (quiet hours always wins on whether it lights up), but
+  isn't ignored either: one purple LED at `STATUS_LED_INDEX` (a new,
+  deliberately contract-agnostic "middle-ish" position — `NUM_LEDS // 2`,
+  NOT `ApproachContract`'s `ANCHOR_INDEX`, so this vocabulary works under any
+  `CONTRACT`) for a few seconds, then dark again
+- **Wake-to-no-data acknowledgment** — if a wake ceremony resolves and every
+  active direction is genuinely `HIDDEN` (no catchable trains), a tap
+  shouldn't feel like it did nothing — same `STATUS_LED_INDEX` mechanism, a
+  different colour
+- **Schedule-load failure (new scope, flagged for confirmation)** — today a
+  missing/corrupt `schedule.json` crashes with a console print and zero LED
+  indication; proposed fix generalizes the existing persistent-failure loop
+  to take a colour parameter, so a schedule failure gets its own distinct
+  persistent colour instead of no visual signal at all
+- Stated as an explicit design rule, not just for this doc: never blend
+  between states (STATIC or the established ANIMATED path only) — the third
+  time this session a low-brightness blend has caused a real bug, worth
+  promoting to a standing rule rather than re-deriving per-feature
+- [ ] **Not started** — three open questions in the doc (placeholder
+      colours, does the no-data ack repeat every tap or just once, confirm
+      the schedule-load-failure scope addition)
 
 ### Deferred to later sessions
 

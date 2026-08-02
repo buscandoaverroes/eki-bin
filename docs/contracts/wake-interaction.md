@@ -179,22 +179,24 @@ WAKE_MINUTES)`. Reading the actual IMU over I2C is **not** host-testable —
 same hardware-I/O limitation every other real-time piece in this codebase
 already has (`connect_wifi()`'s poll, `_play_startup_burst()`, etc.).
 
-## Open questions (confirm before implementing)
+## Decisions (confirmed 2026-07-25)
 
-1. **Quiet hours vs. a deliberate tap.** If someone taps at 2am (inside
-   `QUIET_START_HOUR`–`QUIET_END_HOUR`), should the tap override quiet hours
-   (they clearly want it lit right now), or does quiet hours always win
-   regardless of intent?
-2. **Going to sleep: hard cut, or a "goodnight" fade?** Countdown expiry is
-   proposed above as an instant `clear()` (matches `is_quiet()`'s existing
-   behaviour). A gentle dim-down over the last ~30–60s might read better —
-   but a naive brightness lerp is exactly the low-brightness-blend pattern
-   CHASE was built to eliminate, so this would need the same STATIC-path
-   discipline (e.g. dimming in a few large, discrete steps rather than a
-   continuous fade), not a straightforward crossfade.
-3. **`SECONDARY_ACTION`'s actual behaviour.** Brightness-cycle is proposed as
-   the simplest, lowest-risk default — confirm, or pick a different first
-   action.
-4. **`TAP_THRESHOLD` / `DOUBLE_TAP_WINDOW_MS`.** Both need real bench numbers
-   from the physical LSM6DSV16X once it's wired — no sane default exists
-   without hardware in hand.
+1. ~~Quiet hours vs. a deliberate tap.~~ **Resolved, and grew into its own
+   doc:** quiet hours always wins (the display never fully wakes during
+   quiet hours), but a tap during quiet hours isn't ignored either — it gets
+   a small, deliberate acknowledgment. This turned out to need a shared
+   vocabulary alongside the existing WiFi-failure error state and a new
+   "woke up to no data" case — see
+   **`docs/contracts/led-status-messages.md`**, which this doc now defers to
+   for anything that isn't the AWAKE/ASLEEP render itself.
+2. **Going to sleep: instant cut to black**, matching `is_quiet()`'s existing
+   behaviour. A "goodnight" fade was considered and explicitly deferred —
+   parked as a future UX area, not because it's a bad idea, but because a
+   naive brightness lerp risks the exact low-brightness-blend pattern CHASE
+   was built to eliminate, and it doesn't block anything else here.
+3. **`SECONDARY_ACTION` confirmed: cycle `BRIGHTNESS_PRESETS`.** No change
+   from the proposed default.
+4. **`TAP_THRESHOLD` / `DOUBLE_TAP_WINDOW_MS`** — still genuinely open, no
+   sane default exists without the physical LSM6DSV16X in hand. Ship a
+   clearly-flagged guess when implementation starts, same treatment
+   `STARTUP_BURST_MS`/`STARTUP_FADE_MS` got.

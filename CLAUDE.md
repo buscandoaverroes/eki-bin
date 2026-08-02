@@ -62,6 +62,7 @@ When writing Rust code in this repo, take a teaching role:
 | Positional/approach display paradigm (new, in progress) | `docs/contracts/approach-contract.md` |
 | Boot/startup LED sequence (implemented, not yet on hardware) | `docs/contracts/startup-sequence.md` |
 | IMU tap wake/sleep interaction (design only, no IMU wired yet) | `docs/contracts/wake-interaction.md` |
+| LED status-message vocabulary (errors, acknowledgments — design only) | `docs/contracts/led-status-messages.md` |
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons on real hardware | `micropython/led_sandbox.py` |
