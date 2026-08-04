@@ -291,3 +291,250 @@ ST25DV tag. It doesn't work — and the *reason* is a reusable trap worth keepin
 - **Consequence:** a minimal first-party app became unavoidable — not a failure of
   the no-app principle, just the reality of this tag class on iOS. Decision +
   tag data contract: `docs/nfc-provisioning.md`.
+
+---
+
+## 8. Tap-gesture tuning: hardware-informed limits, not assumed ones (2026-08-04)
+
+**Setup:** built `micropython/vibration_sandbox.py` (batch data collection —
+position × tap-count reps, streamed to flash as JSON Lines) and
+`scripts/analyze_taps.py` (peak magnitude / ring-down / hysteresis-based tap
+counting on the host) to answer "what tap gestures can this hardware actually
+support" empirically, instead of assuming `docs/contracts/wake-interaction.md`'s
+original single-vs-double-tap design would just work. This sandbox is what
+will inform that contract's still-stubbed `_imu_tap_detected()`.
+
+Muji glass jar, blue-tack mount, 240Hz sampling, 60 clean reps (10 per
+position×tap-count combo, controlled technique — pad only, bottle secured
+without a bracing hand):
+
+| Signal | Result |
+|---|---|
+| Position (neck vs. body), best single threshold | **98.3%** (~390mg cutoff) |
+| 1-tap | **100%** |
+| 2-tap | 70% overall — **80% at neck, 60% at body** |
+| 3-tap | 40% overall — 50% at neck, 30% at body |
+
+**Headline takeaway:** position (neck vs. body) is a far more reliable signal
+than tap-count beyond one tap. The original design leans on the *weaker* of
+the two axes (single vs. double tap). "Single tap at neck" vs. "single tap at
+body" would likely be both simpler to implement (no timing-based counting)
+and more reliable (98%+ vs. 70%) than double-tap. Not yet decided whether to
+redesign around this — see open questions below.
+
+**Why 2-/3-tap degrade:** looks like an algorithm limit so far, not a hard
+sensor one. The hysteresis-based peak counter can't split two strikes that
+happen close enough together that the signal never drops back below
+threshold between them. Ring-down itself is fast (4-10ms), and successful
+2-tap reps cluster at 232-327ms spacing — so real taps spaced like that
+should be resolvable in principle. Not yet confirmed whether faster failures
+are a fixable detection gap or a human motor-control floor.
+
+**Methodology notes** (matter for reading the numbers above):
+- Absolute peak magnitudes are ~3-5x larger at 240Hz than an earlier 60Hz
+  pass on the *same* bottle — finer sampling catches a fast transient's true
+  peak that 60Hz was under-sampling. **Thresholds are ODR-dependent — don't
+  mix data collected at different sample rates.**
+- Tap technique (nail vs. pad, whether a hand braced the bottle) measurably
+  moves position separability — an uncontrolled-technique run on this same
+  jar showed neck/body ranges overlapping; only the controlled-technique run
+  above hit 98.3%.
+
+**Open questions (mid-investigation — testing a wine bottle next):**
+- **How much generalizes across bottles?** Glass mass/thickness/geometry
+  plausibly shifts the *absolute* mg thresholds per bottle (this jar's
+  ~390mg cutoff probably won't transfer). The *relative* pattern (neck >
+  body — less material near the neck to absorb the shock) might generalize
+  even if the absolute numbers don't. A second, physically different bottle
+  is the first real data point on this either way.
+- **Where does calibration happen?** If thresholds are bottle-specific,
+  something has to set them per unit: **(a) dev-time** — the maker runs this
+  same sandbox once per physical jar, bakes the result into that unit's
+  `config.py` (fits the existing ~19-knob config philosophy, zero runtime
+  complexity); **(b) runtime** — the device self-calibrates from a few taps
+  on first boot (robust to bottle swaps/drift, but needs a real on-device
+  calibration UX with no laptop in the loop). Leaning toward (a) for V1.5
+  given the scale (a handful of gift units, not a product line) — (b) reads
+  more like a V2/Rust-era feature, and would be a natural use for the
+  LSM6DSV16X's onboard MLC/FSM (deliberately unused so far — see
+  `docs/hardware.md`).
+- **Would ML "solve" the heterogeneity?** Skeptical on principle: a model
+  trained on raw absolute features inherits the same bottle-specificity
+  hardcoded thresholds have — it has no more physics knowledge than the data
+  it's given. The more promising lever is *feature engineering* (e.g.
+  normalizing peak magnitude against a same-session reference tap, so it's a
+  ratio rather than a raw mg value), independent of whether the final
+  classifier is a threshold or a trained model. Whether a normalized feature
+  actually generalizes across bottles is itself an empirical question the
+  multi-bottle testing will answer — not something to assume either way.
+
+**Update (2026-08-04, later same day) — the classifier earns its keep once
+the features are right.** Rebuilt the matrix based on the findings above:
+dropped 3-tap (consistently the worst result everywhere), kept neck (best
+position separator despite being the worst tap-count position), added
+**shoulder** (the neck/body transition — angled tap vector, hypothesized to
+excite less rocking) and **base** (grounded contact point, same reasoning).
+Built `scripts/prepare_tap_dataset.py` (raw signal → engineered-feature CSV:
+energy, duration, spacing regularity, etc. — deliberately *not* reusing
+`detected_taps`, since training on that would just teach a model to imitate
+the hysteresis algorithm's mistakes) and `scripts/train_tap_classifier.py`
+(cross-validated comparison against the hand-tuned baselines).
+
+Chianti bottle, 240 clean reps (60 per position, 120 per tap-count), 5-fold CV:
+
+| Question | Hand-tuned baseline | Trained classifier (random forest) |
+|---|---|---|
+| Tap count (1 vs. 2) | ~55% (hysteresis peak-counter) | **91-92%** |
+| Position (4-way: neck/shoulder/body/base) | ~73-100% pairwise, weakest at neck-vs-shoulder | **85%** (single 4-way model) |
+
+Tap-count result is the headline: the classifier didn't just edge out the
+threshold approach, it solved a problem the threshold genuinely can't —
+distinguishing "one tap plus rocking echo" from "two real taps" needs
+*multiple* signal properties considered together (spacing regularity, total
+energy, crossing count), which a single hysteresis threshold has no way to
+combine. Feature importances confirm this isn't black-box magic: the top
+features are exactly the physics-motivated ones (`spacing_mean_ms`,
+`spacing_stdev_ms`, `energy`) designed specifically around the rocking
+discovery above — **the feature engineering did the real work; the
+classifier's contribution was combining several such features into one
+decision, which a threshold structurally cannot do.** This refines rather
+than contradicts the earlier "ML isn't a shortcut" take: on muji (clean,
+non-rocking, single dominant feature) the simple threshold still *beat* the
+classifier (98.3% vs. 95-97%) — the classifier only earns its complexity
+when the underlying signal genuinely needs more than one feature to explain,
+which rocking-prone bottles apparently do and calm ones don't.
+
+Position-by-tap-count breakdown, same session — extends the original "is
+1-tap reliable" question with data the earlier 2-position matrix didn't
+have:
+
+| | 1-tap | 2-tap |
+|---|---|---|
+| base | **100%** | 73% |
+| shoulder | 83% | 60% |
+| body | 47% | 33% |
+| neck | 23% | 23% |
+
+Clean physical ordering (base > shoulder > body > neck) matching distance
+from the grounded contact point. Base and shoulder clear the 80-90%
+reliability bar for 1-tap; neck and body don't, and 2-tap doesn't clear it
+anywhere (though base at 73% narrows the gap a lot). Note: **neck is the
+best-*separated* position but the worst for tap-count *reliability*** — the
+two properties don't track together, so "pick the most distinctive-looking
+position" isn't the same question as "pick a position where tap detection
+actually works."
+
+**Cross-bottle generalization test — added `--train-bottle`/`--test-bottle`
+to `train_tap_classifier.py` (train on one bottle entirely, test on another
+entirely, no pooling/shuffling across — stricter than k-fold on pooled data,
+which can leak bottle identity across folds).** Trained on chianti-3 (240
+reps), tested on muji's original session, restricted to the positions/tap-
+counts both bottles actually share (neck/body, 1-2 taps); confirmed first
+that both sessions ran at the same effective sample rate (~215Hz) so this
+isn't just the earlier ODR-mismatch problem resurfacing:
+
+| Target | Cross-bottle accuracy (train chianti-3 → test muji) |
+|---|---|
+| Position (neck/body) | **0%** — worse than random guessing |
+| Tap count (1 vs. 2) | **85%** (random forest) |
+
+This is a real, decisive answer to the "universal vs. per-bottle" question,
+not just a hint, and it splits cleanly along feature *type*, not target
+difficulty: **position relies on amplitude features (peak magnitude,
+energy), which are bound to a specific bottle's glass mass/geometry — a
+boundary learned on chianti's scale is meaningless on muji's (muji's
+absolute magnitudes run 3-5x higher at the same position, entirely
+different range). Tap-count relies mostly on timing features (spacing
+regularity) — how fast a human physically taps twice doesn't depend on the
+bottle's physical response, so it survives the bottle swap.** Practical
+read: amplitude-based classification (position) needs per-bottle
+calibration, no way around it; timing-based classification (tap-count) may
+not, or may need much less. Worth testing directly once a matching
+shoulder/base muji session exists — this test so far only covers the two
+positions/tap-counts the two bottles happened to already share.
+
+**Follow-up (same day) — a dedicated shoulder+base, 1-tap-only, n=80/side
+session landed, and it complicates the shoulder/base pairing specifically,
+while strongly confirming tap-count reliability:**
+
+- **Tap presence: 157/160 = 98.1%.** Rock solid at scale — the base/shoulder
+  choice for reliable single-tap detection holds up completely.
+- **Shoulder-vs-base separability dropped from 96.7% (chianti-3, n=60/side)
+  to 71.2% (chianti-4, n=80/side) on the same bottle.** Checked whether this
+  was small-sample luck or real drift by comparing the two sessions' raw
+  numbers directly: shoulder mean 265mg→193mg, base mean 65mg→115mg — the
+  ordering held (shoulder > base, both sessions) but the *gap* narrowed
+  substantially. That's genuine session-to-session variability in the
+  physical measurement, not a sampling artifact — matches the pattern
+  already seen with the neck/body 3-tap flip between the two earlier
+  chianti sessions (§8 above). **Pooling both sessions gives ~81.4%**,
+  probably the more honest current estimate than either session alone.
+- Tried normalizing each capture's peak magnitude against that session's own
+  median before pooling, hoping to cancel out the drift — **didn't help**
+  (still 81.4%). Should have seen that coming: a per-session linear rescale
+  doesn't change a distribution's *relative* overlap, so it can't move a
+  best-threshold split. The drift isn't a simple scale/offset the two
+  sessions disagree on — more likely genuine variability in exact tap
+  location/technique within "shoulder" and "base" as target zones, which
+  normalization can't fix.
+- **Practical implication:** shoulder-vs-base, at ~81% pooled, is currently
+  a weaker position pair than neck-vs-body (100%), neck-vs-base (93%),
+  shoulder-vs-body (100%), or body-vs-base (91%) — though those are each
+  still only a single session's read, and this same finding says single-
+  session reads can't be trusted at face value. **Open question, not yet
+  answered:** whether those other pairs hold up as well as shoulder/base
+  didn't once tested across multiple independent sessions the same way.
+
+---
+
+## 9. Tap/gesture envelope — final synthesis (2026-08-04)
+
+§8 above is the full field log — a sandbox toolchain
+(`micropython/vibration_sandbox.py`, `imu_test.py`, `handling_test.py`,
+`orientation_test.py`, plus host-side `scripts/analyze_taps.py` /
+`prepare_tap_dataset.py` / `train_tap_classifier.py`) built and run across
+~15 sessions and two physically different bottles (muji jar, chianti wine
+bottle) to answer "what can this hardware actually support" empirically
+instead of assuming the original wake-interaction.md design would just
+work. This section is the decision-ready summary. The design built on it
+lives in **`docs/contracts/gesture-envelope.md`**.
+
+**The winners:**
+
+| Modality | Reliability | Recognizer | Hardware dependency |
+|---|---|---|---|
+| Flip/orientation (upright/horizontal/upside-down) | Visually unambiguous, steady-state | Hardcoded: dominant axis + sign | Wired power only — Qi breaks on flip |
+| Tap presence @ base | 98% (167/170) | Hardcoded: peak-magnitude threshold | none |
+| Tap presence @ shoulder | 95% (161/170) | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. soft tap | 91-94% | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. hard handling | 100% via `spacing_stdev_ms` (magnitude alone caps ~80%) | Hardcoded threshold, but on a *shape* feature, not magnitude | none |
+| Position: shoulder vs. base | ~81.5% pooled across 3 sessions (71-97% range per session) | Hardcoded ≈ trained classifier — no ML benefit found | optional/toggle, per-bottle calibrated |
+
+**What didn't pan out — kept here so it isn't silently re-attempted:**
+- Tap presence @ neck (23%) and @ body (51%), un-held — ruled out.
+- 2-tap and 3-tap counting — never cleared a usable reliability bar at any
+  position on either bottle; replaced by gesture-*type* (tap/flick) instead
+  of tap-*count* as the second signal dimension.
+- `grab_and_tap` — an n=10 pilot showed 51%→90% reliability at body,
+  genuinely exciting; **did not replicate at n=30 across all 4 positions**
+  (neck improved 23%→63% but still weak; shoulder, body, and base all got
+  *worse*; position-discrimination *within* grab_and_tap collapsed further
+  than free-tap's). A trained classifier didn't rescue it either (75% vs.
+  free-tap's 85% for position). Root cause unconfirmed — likely the same
+  session-to-session technique drift seen elsewhere, not a settled physical
+  effect. Parked, not built on, until the inconsistency is understood.
+  One piece *did* generalize: separating a deliberate held-tap from
+  accidental handling via `energy` scored 90-98% regardless of position —
+  reusable as a general noise-rejection technique even though the specific
+  gesture didn't pan out.
+
+**The recurring methodology lesson, worth stating once, plainly, since it
+showed up at least four separate times in §8:** a small sample (n=10) in
+this investigation *consistently* looked better than it turned out to be
+at scale — shoulder-vs-base separability alone swung 96.7% (n=60) → 71.2%
+(n=80) → 81.7% (n=60) across three independent sessions on the same
+bottle, and `grab_and_tap`'s exciting n=10 pilot reversed at n=30. **Treat
+anything validated at n<30 or in a single session as a hypothesis, not a
+result** — this cost real rework more than once here, and the fix each
+time was the same: collect more, pool across sessions, and only trust
+numbers that hold up when re-checked.

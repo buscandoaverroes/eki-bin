@@ -1,5 +1,14 @@
 # Wake / sleep interaction layer (IMU tap gestures)
 
+**⚠ Partially superseded by `docs/contracts/gesture-envelope.md`.** Real
+sandbox data (`docs/insights.md` §8-9) found tap-*position* and
+gesture-*type* far more reliable than the tap-*count* axis this doc is
+built on — `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` and single-vs-double
+classification below are superseded. The state machine, safety-gate
+pattern, and `_StatusMessage` reuse are still correct and carried forward
+as-is. Kept here as the historical record of what was designed before real
+sensor data existed, not as the current plan.
+
 **Status:** implemented on `feature/wake-interaction-layer`, host-tested,
 **not yet on real hardware and not yet enabled by default.** No IMU is
 physically wired, so `_imu_tap_detected()` is a stub that always returns
