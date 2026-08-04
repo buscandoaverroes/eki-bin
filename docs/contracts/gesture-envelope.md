@@ -7,7 +7,8 @@ envelope — HAL, feature extraction, recognizer, scrollwheel — via
 §10 for the confirmed-working gesture mapping. Evidence-based throughout —
 every threshold is backed by real data in `docs/insights.md` §8-9, gathered
 via the sandbox toolchain (`micropython/vibration_sandbox.py` /
-`imu_test.py` / `handling_test.py` / `orientation_test.py`), not assumed.
+`imu_test.py` / `handling_test.py` / `orientation_test.py` /
+`gesture_sandbox.py`), not assumed.
 **Not yet done:** real menu content (still placeholder), LED-wired
 integration into the ambient display loop.
 
@@ -228,6 +229,19 @@ envelope is implemented and mechanically confirmed working via
 `GESTURE_DEBUG_ENABLED`.
 
 ## 10. Implemented mapping (current, terminal-tested)
+
+Two tools now exist for exercising this, with different purposes.
+`GESTURE_DEBUG_ENABLED` + `make screen` runs the exact shipped code path in
+`main.py` — the thing that matters is that this works, not that it's fast
+to iterate on. `micropython/gesture_sandbox.py` (`import main`, same
+led_sandbox.py pattern) reuses the real recognizer functions but keeps
+trigger/capture *timing* locally tunable and prints the full feature dict
+on every capture, not just the final classification — built specifically
+because tuning timing by repeatedly editing `main.py` risks reintroducing
+bugs into code that's supposed to be stable (see the dropped `return`
+bug two rounds ago), and because `main.py`'s validated recognizer numbers
+were never actually measured against its own trigger's timing — only
+against the sandbox tools' human-armed, 240Hz-sampled captures.
 
 Confirmed working via `GESTURE_DEBUG_ENABLED` + `make screen`, Pico 2W +
 IMU only, no LEDs or WiFi:
