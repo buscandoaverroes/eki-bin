@@ -208,7 +208,7 @@ def test_menu_starts_inactive(load_main):
     m = load_main()
     menu = m._GestureMenu(("A", "B", "C"))
     assert menu.active is False
-    assert menu.scroll(1) is None  # no-op, doesn't raise
+    assert menu.scroll(0, 1) is None  # no-op, doesn't raise
     assert menu.select() is None
 
 
@@ -224,13 +224,13 @@ def test_menu_scroll_wraps_around(load_main):
     m = load_main()
     menu = m._GestureMenu(("A", "B", "C"))
     menu.wake(0)
-    menu.scroll(1)
+    menu.scroll(100, 1)
     assert menu.cursor == 1
-    menu.scroll(1)
+    menu.scroll(200, 1)
     assert menu.cursor == 2
-    menu.scroll(1)  # wraps past the end
+    menu.scroll(300, 1)  # wraps past the end
     assert menu.cursor == 0
-    menu.scroll(-1)  # wraps the other direction
+    menu.scroll(400, -1)  # wraps the other direction
     assert menu.cursor == 2
 
 
@@ -238,7 +238,7 @@ def test_menu_select_returns_option_and_exits(load_main):
     m = load_main()
     menu = m._GestureMenu(("A", "B", "C"))
     menu.wake(0)
-    menu.scroll(1)  # cursor -> 1, "B"
+    menu.scroll(100, 1)  # cursor -> 1, "B"
     assert menu.select() == "B"
     assert menu.active is False
 
@@ -247,10 +247,27 @@ def test_menu_wake_while_active_resets_cursor(load_main):
     m = load_main()
     menu = m._GestureMenu(("A", "B", "C"))
     menu.wake(0)
-    menu.scroll(1)
+    menu.scroll(100, 1)
     menu.wake(500)  # re-wake — resets, doesn't error or accumulate
     assert menu.cursor == 0
     assert menu.entered_at == 500
+
+
+def test_menu_scroll_refreshes_idle_timeout(load_main):
+    """The behavior fixed after real-hardware testing surfaced it: scroll
+    must refresh entered_at, or a long browsing session can time out
+    mid-browse even while the user is actively scrolling — see
+    gesture-envelope.md's Implemented mapping section for why this is
+    deliberately different from _WakeState's non-refreshing WAKE_MINUTES."""
+    m = load_main(GESTURE_MODE_TIMEOUT_MS=15_000)
+    menu = m._GestureMenu(("A", "B", "C"))
+    menu.wake(0)
+    assert menu.is_expired(14_000) is False
+    menu.scroll(14_000, 1)  # activity just before the original deadline
+    assert menu.entered_at == 14_000
+    assert menu.is_expired(15_000) is False  # would have expired without the refresh
+    assert menu.is_expired(28_999) is False
+    assert menu.is_expired(29_000) is True  # 15s after the LAST scroll, not the wake
 
 
 def test_menu_is_expired_after_timeout(load_main):

@@ -1,9 +1,15 @@
 # Gesture envelope & interaction contract (IMU-driven)
 
-**Status: Design.** Evidence-based — every claim below is backed by real
-data in `docs/insights.md` §8-9, gathered via the sandbox toolchain
-(`micropython/vibration_sandbox.py` / `imu_test.py` / `handling_test.py` /
-`orientation_test.py`), not assumed. Not yet implemented in `main.py`.
+**Status: Implemented (Layers 1-4 + terminal debug loop), mechanically
+validated on real hardware.** `GESTURE_DEBUG_ENABLED` runs the whole
+envelope — HAL, feature extraction, recognizer, scrollwheel — via
+`make screen`, printing state transitions instead of touching LEDs; see
+§10 for the confirmed-working gesture mapping. Evidence-based throughout —
+every threshold is backed by real data in `docs/insights.md` §8-9, gathered
+via the sandbox toolchain (`micropython/vibration_sandbox.py` /
+`imu_test.py` / `handling_test.py` / `orientation_test.py`), not assumed.
+**Not yet done:** real menu content (still placeholder), LED-wired
+integration into the ambient display loop.
 
 **Supersedes part of `docs/contracts/wake-interaction.md`, reuses the rest.**
 That doc's tap-*count* axis (single vs. double tap, `TAP_THRESHOLD` /
@@ -127,15 +133,17 @@ sandbox tooling already built, baked into that physical unit's own
 philosophy, zero runtime complexity.
 
 ```python
-TAP_MAGNITUDE_THRESHOLD_MG = ...          # per-bottle, from vibration_sandbox.py
-FLICK_SPACING_STDEV_THRESHOLD_MS = ...    # per-bottle
-POSITION_THRESHOLD_MG = ...               # per-bottle, only read if
+TAP_TRIGGER_THRESHOLD_MG = 50             # cheap gate only, see §10
+FLICK_MAGNITUDE_THRESHOLD_MG = 140
+FLICK_SPACING_STDEV_THRESHOLD_MS = 5      # per-bottle
+POSITION_THRESHOLD_MG = 151               # per-bottle, only read if
                                             #   GESTURE_POSITION_ENABLED
 ```
 
-None of these have real values yet — they need to come from running the
-sandbox tooling against the actual bottle being flashed, the same way
-`config_friend1.py`'s display knobs were hand-tuned per jar.
+These are now real, derived-from-data values (chianti bottle, pooled
+sandbox sessions) — not placeholders. Still per-bottle, though: re-derive
+with `vibration_sandbox.py` + `scripts/analyze_taps.py` before flashing a
+different physical unit, the same way display knobs get hand-tuned per jar.
 
 ## 6. Abstract gesture vocabulary — the events, not the actions
 
@@ -200,10 +208,56 @@ mapping. Settling the mechanism doesn't require settling the menu content.
 
 - `grab_and_tap` is parked per `docs/insights.md` §9 — not in this
   envelope until its session-to-session inconsistency is understood.
-- No real threshold *values* exist yet — §5's config knobs need actual
-  numbers from running the sandbox tooling against a specific physical
-  bottle before this can be implemented, not just designed.
-- Feature extraction (§3) needs porting from host Python
-  (`prepare_tap_dataset.py`) to MicroPython — mechanical, not yet done.
-- The menu/scrollwheel option list (§7) is unspecified — a product
-  decision, not a hardware one.
+- The menu/scrollwheel option list (§7/§10) is still placeholder
+  (`("Item 1", "Item 2", "Item 3")`) — a product decision, not a hardware
+  one, deliberately unresolved so the mechanism could be validated first.
+- LED wiring: `GESTURE_MODE`'s cursor position, entry/exit
+  acknowledgments, etc. aren't rendered anywhere yet — `main.py` only
+  prints them today (§10). Integrating with the ambient display loop
+  (`_run_interactive_loop` or a successor) is the next real step.
+- The capture window (`_capture_gesture_window`) is a fixed
+  `_GESTURE_WINDOW_MS` duration, not adaptive settling-detection like the
+  sandbox tools' human-gated stop — a known simplification, revisit if
+  recognizer accuracy in practice doesn't match the sandbox numbers.
+
+**Resolved since the design was first written:** real threshold values now
+exist (derived from the pooled chianti sandbox data, §5/§10 — no longer a
+placeholder); feature extraction (§3) is ported to MicroPython and
+cross-checked for numerical parity against real capture files; the whole
+envelope is implemented and mechanically confirmed working via
+`GESTURE_DEBUG_ENABLED`.
+
+## 10. Implemented mapping (current, terminal-tested)
+
+Confirmed working via `GESTURE_DEBUG_ENABLED` + `make screen`, Pico 2W +
+IMU only, no LEDs or WiFi:
+
+| Your gesture | Gesture mode state | Result |
+|---|---|---|
+| **Tap** (shoulder or base) | inactive | **WAKE** — enters gesture mode, cursor → first item |
+| **Flick** (hard strike) | inactive | **WAKE** — same as tap, either gesture works |
+| **Tap at shoulder** | active | **SCROLL forward** (+1) |
+| **Tap at base** | active | **SCROLL backward** (−1) |
+| **Flick** | active | **SELECT** — confirms the item under the cursor, exits gesture mode |
+| *(idle for `GESTURE_MODE_TIMEOUT_MS`)* | active | **TIMEOUT** — exits gesture mode, nothing selected |
+
+Orientation runs on its own track, independent of the menu — it just
+prints whenever the resting state changes (upright/horizontal/upside_down)
+per §6's `ORIENTATION_CHANGED`, and doesn't wake, scroll, or select
+anything today. If `GESTURE_POSITION_ENABLED` is off, every tap scrolls
+forward regardless of where you tap (`_scroll_direction`'s stated fallback
+in §6 already covered this).
+
+**Timeout refreshes on scroll, found and fixed during real-hardware
+testing.** The first implementation only set the idle-timeout clock at
+`WAKE` and never touched it again — a long browsing session (several
+scrolls, taking your time between them) could time out mid-browse purely
+because the *session* ran past `GESTURE_MODE_TIMEOUT_MS`, not because the
+*user* went idle. Fixed so `scroll()` refreshes the clock on every valid
+interaction. Deliberately different from `_WakeState`'s `WAKE_MINUTES`
+countdown, which does **not** auto-refresh — that's a power-budget
+decision (the ambient display shouldn't silently stay lit indefinitely),
+and extending it needs its own deliberate gesture (double-tap = EXTEND).
+`GESTURE_MODE_TIMEOUT_MS` is an idle timeout on an active interaction, not
+a power budget — the two timers look similar but answer different
+questions, and conflating them was the bug.

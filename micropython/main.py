@@ -1515,12 +1515,21 @@ class _GestureMenu:
         self.cursor = 0
         self.entered_at = now_ms
 
-    def scroll(self, direction):
+    def scroll(self, now_ms, direction):
         """direction: +1 or -1. No-op if not active. Wraps around the
-        option list rather than clamping — a scrollwheel, not a slider."""
+        option list rather than clamping — a scrollwheel, not a slider.
+        Refreshes the idle timeout (now_ms) — deliberately different from
+        _WakeState's WAKE_MINUTES countdown, which does NOT auto-refresh
+        (that's a power-budget decision, extending it needs its own
+        deliberate double-tap gesture). GESTURE_MODE_TIMEOUT_MS is an idle
+        timeout on an active interaction, not a power budget — a
+        scrollwheel that can time out mid-browse just because the session
+        ran long has no upside, same as an ATM or screensaver idle timer
+        resets on activity, not on a fixed session clock."""
         if not self.active:
             return
         self.cursor = (self.cursor + direction) % len(self.options)
+        self.entered_at = now_ms
 
     def select(self):
         """Returns the selected option's label, or None if not active.
@@ -1680,7 +1689,7 @@ def _run_gesture_debug_loop():
                         print(f"  [SELECT] {selected}")
                     elif response == "scroll":
                         direction = _scroll_direction(position)
-                        menu.scroll(direction)
+                        menu.scroll(now_ms, direction)
                         arrow = "+" if direction > 0 else "-"
                         print(f"  [SCROLL {arrow}] cursor: {menu.options[menu.cursor]}")
 
