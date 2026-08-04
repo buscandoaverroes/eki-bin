@@ -61,6 +61,26 @@ GP6  (pin  9) ─────────── DIN
 
 **`config.py` values**: `LED_PIN = 6`
 
+## Wiring — AE-LSM6DSV16X (IMU)
+
+**Status: ⬜ Proposed** — in hand, not yet physically wired. First bring-up
+target (over the XIAO) since this board's already on the breadboard.
+Parts/register reference: `docs/hardware.md`. Smoke test:
+`micropython/imu_test.py` (`make imu-test`).
+
+`GP0`/`GP1` is I²C0 on this board — fixed by the RP2350's silicon, not an
+arbitrary choice (see the "Pins reserved for V2" table below, which already
+had this reserved before the sensor itself was picked).
+
+| Pico 2W | Physical pin | GPIO | → | AE-LSM6DSV16X |
+|---|---|---|---|---|
+| 3V3(OUT) | 36 | — | → | VCC |
+| GND | 38 | — | → | GND |
+| GP0 | 1 | `0` | → | SDA |
+| GP1 | 2 | `1` | → | SCL |
+
+`imu_test.py`'s constants: `SDA_PIN = 0`, `SCL_PIN = 1`, `I2C_ID = 0`.
+
 ## Status heartbeat
 
 `HEARTBEAT_PIN = "LED"` — a Pico-2W-only alias routed through the onboard CYW43
@@ -73,7 +93,7 @@ WiFi chip, **not** a plain GPIO. This is the *only* board where the string
 
 | GPIO | Purpose |
 |---|---|
-| GP0/1 | I2C0 SDA/SCL → DS3231 RTC, MPU-6050 IMU |
+| GP0/1 | I2C0 SDA/SCL → DS3231 RTC, LSM6DSV16X IMU (in hand — see the wiring section above; "MPU-6050" here was an early V2-planning placeholder, corrected once the actual part was picked) |
 | GP2/3 | I2C1 SDA/SCL → QMC5883L magnetometer |
 | GP4/5 | SPI → PN532 NFC module |
 | GP10/11/12/13 | SPI → e-ink display (Waveshare 2.9") |

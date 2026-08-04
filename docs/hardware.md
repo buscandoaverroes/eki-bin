@@ -222,3 +222,72 @@ tag reads fine — another reason cork is the chosen first closure.
 > The firmware **settings hot-reload** design and the **iOS app** (the phone-side
 > writer) are firmware/UX, not hardware — they live in `docs/nfc-provisioning.md`,
 > along with the tag data contract both sides share.
+
+---
+
+## IMU — LSM6DSV16X (wake/sleep interaction layer)
+
+**Purpose:** tap detection for the wake/sleep interaction layer — see
+`docs/contracts/wake-interaction.md`. **In hand as of 2026-08-03**; not yet
+wired to a board. Firmware side (`_imu_tap_detected()` in `main.py`) is
+still a stub — see the bring-up sketch below, `micropython/imu_test.py`, for
+the first real I²C contact with the chip.
+
+**Part:** ST **LSM6DSV16X** — 6-axis (3-axis accelerometer + 3-axis
+gyroscope, no magnetometer). Bought as Akizuki's **AE-LSM6DSV16X** breakout
+board (g130950), *not* the bare LGA14L chip (g130032, same silicon,
+3×2.5mm, not hand-solderable — see `docs/contracts/wake-interaction.md`'s
+"IMU brainstorm" origin for that comparison). Breakout is 24.5×17mm,
+through-hole headers + a Qwiic-compliant connector; arrived with both a
+Qwiic-style clip/jumper cable **and** loose header pins to solder if
+preferred. I²C, SPI, and MIPI I3C capable — this project uses I²C only,
+same bus already earmarked for a future DS3231 RTC and shared (so far) with
+nothing else currently wired.
+
+Notable but **deliberately unused so far**: the chip has an onboard Machine
+Learning Core / Finite State Machine that can do gesture/tap recognition
+*inside the sensor itself*, independent of the host MCU. `wake-interaction.md`
+explicitly chose plain polled reads + software threshold logic over this for
+the first pass — simpler, and this project isn't chasing deep-sleep battery
+life where the MLC/FSM's power savings would actually matter. Worth
+revisiting if either of those change.
+
+**Reference links:**
+- Board (Akizuki): <https://akizukidenshi.com/catalog/g/g130950/>
+- Bare chip, for comparison (not what was bought): <https://akizukidenshi.com/catalog/g/g130032/>
+- ST product page: <https://www.st.com/en/mems-and-sensors/lsm6dsv16x.html>
+- ST's own register-level driver source (used to verify every hex value
+  below — not guessed): <https://github.com/STMicroelectronics/lsm6dsv16x-pid/blob/master/lsm6dsv16x_reg.h>
+
+**Register facts** (verified against the driver source above, not the
+Akizuki product page — it doesn't state these):
+- WHO_AM_I register `0x0F`, expected value `0x70`
+- 7-bit I²C address is **`0x6A`** (SA0/SDO strapped low) or **`0x6B`**
+  (strapped high) — the breakout brings SA0 out as a solder pad, and
+  Akizuki's page doesn't say which way it defaults, so `imu_test.py` scans
+  the bus rather than assuming one
+- `CTRL1` register `0x10`: lower 4 bits select the accelerometer's output
+  data rate, bits 4–6 select operating mode. `0x05` = 60Hz in
+  high-performance mode (`ODR_OFF`/`0x00` = powered down)
+- Accelerometer output: 6 consecutive bytes from `0x28` (`OUTX_L_A`), X/Y/Z
+  low+high pairs, little-endian, two's-complement
+- Sensitivity at the power-on-default ±2g full scale: 0.061 mg/LSB
+  (standard across the whole ST LSM6DS family) — `imu_test.py` uses this for
+  an approximate mg readout; it never explicitly sets `FS_XL`
+
+**MicroPython driver status:** none off-the-shelf, same situation the ST25DV
+was in. `micropython/imu_test.py` is the bring-up smoke test — scans the
+bus, confirms `WHO_AM_I`, enables the accelerometer, and streams X/Y/Z so
+you can watch numbers move when you tap or tilt the board. Deliberately
+does **not** attempt tap classification itself (that's `main.py`'s job,
+still stubbed) — this script's only job is proving the chip talks.
+
+**Wiring (I²C):** not yet done. Plan: Pico 2W's `GP0`/`GP1` (already
+reserved as I²C0 in `pinouts/pico2w.md` — that table previously named the
+reserved sensor "MPU-6050", an older placeholder from early V2 planning;
+corrected to LSM6DSV16X) for the first bring-up pass, since it's already on
+the breadboard; XIAO's `D4`/`D5` (`GPIO6`/`GPIO7`, same pins already used
+for the ST25DV above) for the eventual real integration into the gift-jar
+build. The smoke test itself is board-agnostic except for two pin
+constants at the top of the file — same "SET PER BOARD" pattern
+`led_test.py` already uses.

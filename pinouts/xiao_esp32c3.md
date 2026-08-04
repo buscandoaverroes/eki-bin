@@ -55,6 +55,27 @@ stick, only the source board changes.
 
 **`config.py` values**: `LED_PIN = 2`
 
+## Wiring — AE-LSM6DSV16X (IMU)
+
+**Status: ⬜ Proposed** — not yet wired here. First bring-up is happening on
+the Pico 2W (already on the breadboard — see `pinouts/pico2w.md`); this is
+where it lands for the real gift-jar integration once that's validated.
+Parts/register reference: `docs/hardware.md`.
+
+Same I²C pins already used for the ST25DV NFC tag (`docs/hardware.md`'s NFC
+section) — same bus, multiple devices at their own addresses, no conflict.
+
+| XIAO C3 | Position (USB-C up) | GPIO | → | AE-LSM6DSV16X |
+|---|---|---|---|---|
+| 3V3 | right side | — | → | VCC |
+| GND | right side | — | → | GND |
+| D4 | left side | `6` | → | SDA |
+| D5 | left side | `7` | → | SCL |
+
+`imu_test.py`'s constants for this board: `SDA_PIN = 6`, `SCL_PIN = 7`,
+`I2C_ID = 0` (ESP32's I²C pin mapping is software-flexible, so the ID
+doesn't need to change from the Pico 2W's — only the pin numbers do).
+
 ## Status heartbeat
 
 ⚠ **Unconfirmed**: no onboard-LED GPIO verified for this specific board yet.

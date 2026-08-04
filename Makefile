@@ -5,6 +5,7 @@
 #   make flash-esp32-c3    — flash MicroPython to the XIAO ESP32-C3 (esptool + .bin)
 #   make schedule          — convert schedules/*.yaml → minutes arrays
 #   make led-test          — run the WS2812B bring-up sketch
+#   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
@@ -118,6 +119,11 @@ upload-file: _check-mpremote
 .PHONY: led-test
 led-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/led_test.py
+
+# Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
+.PHONY: imu-test
+imu-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/imu_test.py
 
 .PHONY: repl
 repl: _check-mpremote

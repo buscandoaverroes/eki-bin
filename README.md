@@ -42,7 +42,7 @@ eki-bin/
 ├── README.md                     ← you are here
 ├── CLAUDE.md                     ← guidance for Claude Code (Rust teaching directive)
 ├── dev-status.md                 ← running log: done / next / open decisions
-├── Makefile                      ← setup, flash, schedule, led-test, upload
+├── Makefile                      ← setup, flash, schedule, led-test, imu-test, upload
 ├── requirements.txt              ← host Python tools (mpremote, pyyaml)
 │
 ├── docs/
@@ -118,6 +118,14 @@ for what's wired where, kept in sync with `config.py`. Then:
 
 ```bash
 make led-test           # cycle colours + chase across all 8 LEDs
+```
+
+Bringing up the IMU (LSM6DSV16X, for the wake/sleep interaction layer — see
+`docs/contracts/wake-interaction.md`)? Wire SDA/SCL/3V3/GND per
+`docs/hardware.md` and `pinouts/<board>.md`, then:
+
+```bash
+make imu-test            # scan I2C, confirm the chip, stream accel readings
 ```
 
 ---
