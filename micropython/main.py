@@ -15,7 +15,7 @@ import time
 import config
 import network
 import ntptime
-from machine import Pin
+from machine import I2C, Pin
 from neopixel import NeoPixel
 
 # ─────────────────────────────────────────────────────────────
@@ -174,6 +174,72 @@ NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
 SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
 #   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
 #   cause should look like a different failure, not the same red for anything
+
+# Gesture envelope — docs/contracts/gesture-envelope.md. Evidence-based,
+# from real sandbox data (docs/insights.md §8-9), unlike WAKE_INTERACTION's
+# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS above (both flagged guesses when
+# written, no IMU in hand yet). Every GESTURE_*_ENABLED flag is a hardware
+# capability, off by default until something concrete backs it up — same
+# safety-gate precedent WAKE_INTERACTION_ENABLED already set.
+IMU_I2C_ID = getattr(config, "IMU_I2C_ID", 0)
+IMU_SDA_PIN = getattr(config, "IMU_SDA_PIN", 0)  # Pico 2W default — see
+IMU_SCL_PIN = getattr(config, "IMU_SCL_PIN", 1)  #   pinouts/pico2w.md
+
+GESTURE_FLIP_ENABLED = getattr(config, "GESTURE_FLIP_ENABLED", False)  #
+#   requires wired (USB) power — flipping a Qi-mounted jar breaks inductive
+#   coupling, see gesture-envelope.md §5
+GESTURE_POSITION_ENABLED = getattr(config, "GESTURE_POSITION_ENABLED", False)  #
+#   shoulder-vs-base disaggregation — ~78-81% even on a bottle it's tuned
+#   for (insights.md §8-9); off by default, opt-in per physical unit
+GESTURE_FLICK_ENABLED = getattr(config, "GESTURE_FLICK_ENABLED", True)  #
+#   best-validated signal after tap presence — on by default
+
+# Per-bottle calibrated thresholds — chianti-bottle values derived from the
+# sandbox tooling's pooled data (insights.md §8-9), NOT guesses, but also
+# NOT universal: amplitude features don't transfer across bottles (§9's
+# cross-bottle test: 0% for position). Re-derive per physical unit via
+# vibration_sandbox.py + scripts/analyze_taps.py before flashing a
+# different bottle.
+TAP_TRIGGER_THRESHOLD_MG = getattr(config, "TAP_TRIGGER_THRESHOLD_MG", 50)  #
+#   cheap first-pass gate only — deliberately permissive (real handling
+#   motion overlaps this range too, see insights.md §9's handling_test.py
+#   findings), the real discrimination happens in the recognizer layer
+#   below, not at this trigger
+FLICK_MAGNITUDE_THRESHOLD_MG = getattr(config, "FLICK_MAGNITUDE_THRESHOLD_MG", 140)
+FLICK_SPACING_STDEV_THRESHOLD_MS = getattr(config, "FLICK_SPACING_STDEV_THRESHOLD_MS", 5)
+#   flick vs. hard handling — magnitude alone caps ~80% (setdown_firm is
+#   just as hard as a deliberate flick); this shape feature is what
+#   actually separates them, see insights.md §9
+POSITION_THRESHOLD_MG = getattr(config, "POSITION_THRESHOLD_MG", 151)  #
+#   only read if GESTURE_POSITION_ENABLED
+ORIENTATION_STABLE_MG = getattr(config, "ORIENTATION_STABLE_MG", 700)  #
+#   below this, treat orientation as "mid-motion", not a resting state —
+#   matches orientation_test.py's proven STABLE_READING_MG
+ORIENTATION_MAP = getattr(config, "ORIENTATION_MAP", (
+    # (state name, dominant axis, sign) — chianti-bottle mounting, from
+    # orientation_test.py's real readings (insights.md §9): Y+ ≈ 965mg
+    # upright, Z- ≈ 950mg horizontal, Y- ≈ 870mg upside-down. Per-bottle:
+    # the IMU's mounting orientation on the glass determines this mapping,
+    # not the gesture logic — re-derive with orientation_test.py per unit.
+    ("upright", "y", 1),
+    ("horizontal", "z", -1),
+    ("upside_down", "y", -1),
+))
+
+# Scrollwheel / menu — gesture-envelope.md §7. Sketch, not a spec: the real
+# option list is a product decision, not a hardware one (§9) — validating
+# the mechanism doesn't need real content, same as wake-interaction.md
+# shipped its state machine before settling SECONDARY_ACTION's content.
+GESTURE_MENU_OPTIONS = getattr(config, "GESTURE_MENU_OPTIONS", ("Item 1", "Item 2", "Item 3"))
+GESTURE_MODE_TIMEOUT_MS = getattr(config, "GESTURE_MODE_TIMEOUT_MS", 15_000)  #
+#   bounded return to ambient — same "must not be a state you can get stuck
+#   in" philosophy WAKE_MINUTES already established
+
+# Terminal-only validation loop — deliberately its OWN flag, not
+# WAKE_INTERACTION_ENABLED: this exercises a different, newer subsystem and
+# should stay fully isolated from the existing tested loop. OFF by default,
+# same safety-gate precedent as everything else opt-in here.
+GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
 
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
@@ -1190,6 +1256,445 @@ def run_startup_sequence():
 
 
 # ─────────────────────────────────────────────────────────────
+# Gesture envelope (IMU HAL) — docs/contracts/gesture-envelope.md §2
+# The only code below that touches i2c.readfrom_mem/writeto_mem — same
+# seam the LED side already has (_paint/clear are the only code touching
+# np[i]). Register facts verified against ST's own driver source, same as
+# imu_test.py/vibration_sandbox.py — see those files' headers for the
+# reference. NOT host-testable (real I/O), same category
+# _imu_tap_detected() below already is. Lazily constructed, not built at
+# import time like `np` — this is opt-in hardware, unlike the LED strip
+# which every deployment has.
+# ─────────────────────────────────────────────────────────────
+_IMU_WHO_AM_I_REG = 0x0F
+_IMU_WHO_AM_I_EXPECTED = 0x70
+_IMU_CTRL1_REG = 0x10
+_IMU_CTRL1_240HZ_HIGH_PERF = 0x07
+_IMU_CTRL1_POWER_DOWN = 0x00
+_IMU_OUTX_L_A = 0x28
+_IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
+
+_imu_i2c = None  # lazy singleton — see _get_imu()
+_imu_addr = None
+
+
+def _imu_find_device(i2c):
+    """Scan the bus, confirm WHO_AM_I. Returns the confirmed 7-bit address,
+    or None — mirrors imu_test.py's _find_device exactly."""
+    found = i2c.scan()
+    for addr in _IMU_CANDIDATE_ADDRS:
+        if addr not in found:
+            continue
+        who = i2c.readfrom_mem(addr, _IMU_WHO_AM_I_REG, 1)[0]
+        if who == _IMU_WHO_AM_I_EXPECTED:
+            return addr
+    return None
+
+
+def _get_imu():
+    """Lazily construct + confirm the IMU, caching the result. Returns
+    (i2c, addr), or (None, None) if no sensor responds — callers must
+    handle the "not found" case, not assume hardware is present."""
+    global _imu_i2c, _imu_addr
+    if _imu_i2c is None:
+        i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN), freq=400000)
+        addr = _imu_find_device(i2c)
+        if addr is None:
+            return None, None
+        i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        _imu_i2c, _imu_addr = i2c, addr
+    return _imu_i2c, _imu_addr
+
+
+def _imu_read_accel_raw(i2c, addr):
+    """One burst read, signed int16 LSB counts — no unit conversion here
+    (see _gesture_magnitude_mg in the feature-extraction layer below),
+    matching vibration_sandbox.py's _read_accel_raw exactly."""
+    data = i2c.readfrom_mem(addr, _IMU_OUTX_L_A, 6)
+    x = int.from_bytes(data[0:2], "little")
+    y = int.from_bytes(data[2:4], "little")
+    z = int.from_bytes(data[4:6], "little")
+    return tuple(v - 65536 if v > 32767 else v for v in (x, y, z))
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (feature extraction) — gesture-envelope.md §3
+# PURE — a raw sample buffer in, an engineered-feature dict out. Same math
+# as scripts/prepare_tap_dataset.py's engineer_features(), ported from host
+# Python to MicroPython (no numpy/statistics module on either side — both
+# avoid it already). Host-tested with synthetic sample lists, same
+# "separate the decision logic from real-time I/O" split
+# _render_dispatch/_classify_wake_response already established.
+# samples: list of (t_ms, x, y, z) raw int16 LSB tuples — the HAL's
+# _imu_read_accel_raw() output, not the dict shape the host scripts use
+# (that shape only exists because JSON round-trips through dicts; on-device
+# there's no reason to pay for it).
+# ─────────────────────────────────────────────────────────────
+_GESTURE_CROSSING_FRAC = 0.3  # matches prepare_tap_dataset.py's
+#   CROSSING_THRESHOLD_FRAC exactly — see that file for why 0.3, not
+#   analyze_taps.py's stricter 0.5 (this wants to see every excursion,
+#   including rocking echoes, not just plausible "real" taps)
+_GESTURE_SETTLE_FRAC = 0.1  # matches prepare_tap_dataset.py's SETTLE_FRAC
+
+
+def _gesture_magnitude_mg(sample):
+    """0.061 mg/LSB at power-on-default full-scale (±2g) — same
+    approximation imu_test.py/vibration_sandbox.py already use."""
+    _, x, y, z = sample
+    return math.sqrt(x * x + y * y + z * z) * 0.061
+
+
+def _gesture_median(values):
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 0:
+        return (s[mid - 1] + s[mid]) / 2
+    return s[mid]
+
+
+def _gesture_mean(values):
+    return sum(values) / len(values)
+
+
+def _gesture_stdev(values):
+    """Sample standard deviation. Caller's responsibility to only call this
+    with len(values) >= 2 — same contract prepare_tap_dataset.py's
+    statistics.stdev() usage already has."""
+    m = _gesture_mean(values)
+    variance = sum((v - m) ** 2 for v in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _gesture_dominant_axis(sample):
+    _, x, y, z = sample
+    axis, value = "x", x
+    if abs(y) > abs(value):
+        axis, value = "y", y
+    if abs(z) > abs(value):
+        axis, value = "z", z
+    return axis
+
+
+def extract_gesture_features(samples):
+    """PURE: raw (t_ms, x, y, z) samples → the same feature set
+    prepare_tap_dataset.py validated (docs/insights.md §8-9). `samples`
+    must have at least 2 entries — the caller (the capture-window logic in
+    the recognizer layer) guarantees this, same as the sandbox tools always
+    captured at least one sample before returning."""
+    mags = [_gesture_magnitude_mg(s) for s in samples]
+    baseline = _gesture_median(mags)
+    deviations = [m - baseline for m in mags]
+
+    peak_dev = max(deviations)
+    peak_idx = deviations.index(peak_dev)
+    peak_t = samples[peak_idx][0]
+    duration_ms = samples[-1][0]
+
+    energy = sum(d * d for d in deviations if d > 0)
+
+    ring_down_ms = None
+    settle_dev = _GESTURE_SETTLE_FRAC * peak_dev
+    for i in range(peak_idx, len(samples)):
+        if deviations[i] < settle_dev:
+            ring_down_ms = samples[i][0] - peak_t
+            break
+
+    # peak_dev <= 0 means no real excursion at all (a perfectly flat
+    # buffer — never happens with real sensor noise, but a threshold of 0
+    # would otherwise register every sample as "above" it). No crossings,
+    # not a divide-by-zero, just nothing happened.
+    threshold = _GESTURE_CROSSING_FRAC * peak_dev
+    crossing_times = []
+    above = False
+    for i in range(len(samples) if peak_dev > 0 else 0):
+        dev = deviations[i]
+        if not above and dev >= threshold:
+            above = True
+            crossing_times.append(samples[i][0])
+        elif above and dev < threshold:
+            above = False
+    gaps = [crossing_times[i + 1] - crossing_times[i] for i in range(len(crossing_times) - 1)]
+
+    return {
+        "peak_deviation_mg": peak_dev,
+        "ring_down_ms": ring_down_ms,
+        "energy": energy,
+        "duration_ms": duration_ms,
+        "dominant_axis": _gesture_dominant_axis(samples[peak_idx]),
+        "num_crossings": len(crossing_times),
+        "spacing_mean_ms": _gesture_mean(gaps) if gaps else None,
+        "spacing_stdev_ms": _gesture_stdev(gaps) if len(gaps) > 1 else None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (recognizer) — gesture-envelope.md §4
+# PURE — classifies WHAT physically happened (tap/flick/position/
+# orientation), agnostic of current interaction state. What that means
+# (an abstract GestureEvent, state-dependent) is the scrollwheel layer's
+# job below, same split _classify_wake_response already draws for the
+# older tap-count design. Every threshold here is a bare module global,
+# same pattern _TapClassifier.advance already uses for DOUBLE_TAP_WINDOW_MS
+# — not passed as a parameter, read directly, and overridable per-test via
+# load_main(...) config overrides.
+# ─────────────────────────────────────────────────────────────
+def classify_tap_or_flick(features):
+    """"tap", "flick", or None (below the trigger floor / hard-but-not-a-
+    flick). Two-stage, and the SECOND stage is the one doing real work
+    (insights.md §9): magnitude alone only separates flick from hard
+    handling ~80% (setdown_firm is just as hard as a deliberate flick) —
+    spacing regularity is what actually tells them apart. A hard event
+    with low/absent spacing_stdev is treated as noise, not a flick."""
+    peak = features["peak_deviation_mg"]
+    if peak < TAP_TRIGGER_THRESHOLD_MG:
+        return None
+    if peak >= FLICK_MAGNITUDE_THRESHOLD_MG:
+        spacing = features["spacing_stdev_ms"]
+        if spacing is not None and spacing >= FLICK_SPACING_STDEV_THRESHOLD_MS:
+            return "flick"
+        return None
+    return "tap"
+
+
+def classify_position(features):
+    """"shoulder" or "base" — only meaningful if GESTURE_POSITION_ENABLED
+    (insights.md §9: ~78-81% pooled even on a bottle it's tuned for, an
+    optional signal, not a reliable one on its own). Returns None when the
+    capability is off, same "capability flag gates the whole path" pattern
+    GESTURE_FLIP_ENABLED uses for classify_orientation below."""
+    if not GESTURE_POSITION_ENABLED:
+        return None
+    return "shoulder" if features["peak_deviation_mg"] >= POSITION_THRESHOLD_MG else "base"
+
+
+def classify_orientation(sample):
+    """One of ORIENTATION_MAP's state names, or "unclear" (mid-motion, or
+    an axis/sign combination not in the map). A single steady-state
+    (t, x, y, z) reading, NOT a captured window — different code path from
+    classify_tap_or_flick/classify_position on purpose (gesture-envelope.md
+    §3: orientation is steady-state, not a transient to window/classify)."""
+    _, x, y, z = sample
+    values = {"x": x * 0.061, "y": y * 0.061, "z": z * 0.061}
+    axis = max(values, key=lambda a: abs(values[a]))
+    value = values[axis]
+    if abs(value) < ORIENTATION_STABLE_MG:
+        return "unclear"
+    sign = 1 if value > 0 else -1
+    for name, map_axis, map_sign in ORIENTATION_MAP:
+        if map_axis == axis and map_sign == sign:
+            return name
+    return "unclear"
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (scrollwheel) — gesture-envelope.md §7
+# The interaction state machine — what an abstract event MEANS, not what
+# physically happened (that's the recognizer above). Same split
+# _classify_wake_response already draws for the old design: "gesture A
+# doesn't always mean X" happens here, not in the recognizer.
+# ─────────────────────────────────────────────────────────────
+class _GestureMenu:
+    """The scrollwheel's own state — separate from _WakeState's
+    AWAKE/ASLEEP (this is a layer on top: GESTURE_MODE is a state you can
+    only be in while the display is otherwise AWAKE, per gesture-
+    envelope.md §7). Same class-based pure-state-mutation style
+    _WakeState/_StatusMessage already use."""
+
+    def __init__(self, options):
+        self.options = options
+        self.active = False
+        self.cursor = 0
+        self.entered_at = None
+
+    def wake(self, now_ms):
+        """Enter GESTURE_MODE at cursor 0. Idempotent — waking while
+        already active resets the cursor and the timeout, same "wake()
+        also handles re-entry" pattern _WakeState.wake() uses."""
+        self.active = True
+        self.cursor = 0
+        self.entered_at = now_ms
+
+    def scroll(self, direction):
+        """direction: +1 or -1. No-op if not active. Wraps around the
+        option list rather than clamping — a scrollwheel, not a slider."""
+        if not self.active:
+            return
+        self.cursor = (self.cursor + direction) % len(self.options)
+
+    def select(self):
+        """Returns the selected option's label, or None if not active.
+        Exits GESTURE_MODE — one-shot, not sticky, same spirit as the old
+        SECONDARY_ACTION dispatch firing once per tap."""
+        if not self.active:
+            return None
+        selected = self.options[self.cursor]
+        self.exit()
+        return selected
+
+    def exit(self):
+        self.active = False
+        self.entered_at = None
+
+    def is_expired(self, now_ms):
+        # Plain subtraction, not time.ticks_diff — same choice _WakeState
+        # and _TapClassifier already made for comparisons over this short
+        # a window (see their is_expired()/advance()).
+        return (
+            self.active
+            and self.entered_at is not None
+            and now_ms - self.entered_at >= GESTURE_MODE_TIMEOUT_MS
+        )
+
+
+def _classify_menu_response(menu_active, physical_gesture):
+    """PURE: given whether the menu is currently active and what the
+    recognizer detected this tick, decide the abstract response —
+    "wake"/"select"/"scroll"/None. Mirrors _classify_wake_response's role
+    for the old design exactly. Caller applies the resulting mutation via
+    menu.wake()/.scroll()/.select() — this function only decides, same
+    split as before."""
+    if physical_gesture is None:
+        return None
+    if not menu_active:
+        if physical_gesture in ("tap", "flick"):
+            return "wake"
+        return None
+    if physical_gesture == "flick":
+        return "select"
+    if physical_gesture == "tap":
+        return "scroll"
+    return None
+
+
+def _scroll_direction(position):
+    """tap-shoulder = up/back, tap-base = down/forward — gesture-
+    envelope.md §6's SCROLL(direction). Defaults to always-forward (+1)
+    when GESTURE_POSITION_ENABLED is off or position wasn't classified,
+    matching the design doc's stated fallback ("otherwise SCROLL fires
+    with no direction" — a scrollwheel that only goes one way is still a
+    scrollwheel, just a slower one)."""
+    if position == "base":
+        return -1
+    return 1
+
+
+_GESTURE_TRIGGER_BUFFER_LEN = 8  # rolling context for the trigger's cheap
+#   "local baseline" — small and cheap, NOT the same thing as
+#   extract_gesture_features()'s own median-of-the-whole-capture baseline
+_GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
+#   _capture_gesture_window's docstring for the honest simplification this is
+
+
+def _capture_gesture_window(i2c, addr, start_ms):
+    """Real hardware I/O — NOT host-testable, same category
+    _imu_read_accel_raw already is. Fixed-duration capture, not adaptive
+    settling-detection like the sandbox tools' human-gated stop-on-Enter —
+    a real simplification worth naming: every validated recognizer
+    threshold (insights.md §8-9) was tuned against sandbox captures that
+    could run longer when a gesture needed it. Revisit if recognizer
+    accuracy here doesn't match the sandbox numbers."""
+    samples = []
+    while True:
+        now = time.ticks_ms()
+        elapsed = now - start_ms
+        samples.append((elapsed,) + _imu_read_accel_raw(i2c, addr))
+        if elapsed >= _GESTURE_WINDOW_MS:
+            break
+        time.sleep_ms(4)  # matches vibration_sandbox.py's SAMPLE_INTERVAL_MS
+
+
+def _run_gesture_debug_loop():
+    """Terminal-only validation of the gesture envelope
+    (docs/contracts/gesture-envelope.md §7) — prints state transitions
+    instead of touching LEDs, so the scrollwheel mechanism can be exercised
+    over `make screen` before any real LED wiring exists for it. Gated by
+    GESTURE_DEBUG_ENABLED, not WAKE_INTERACTION_ENABLED — a different,
+    newer subsystem, deliberately isolated from the existing tested loop.
+
+    Trigger design, honestly simplified for this first draft: a rolling
+    buffer of recent magnitudes gives a cheap "local baseline" to compare
+    the newest sample against at FRAME_MS cadence. Real handling motion
+    crosses this too (insights.md §9's handling_test.py findings) — that's
+    expected, the recognizer layer above (not this trigger) is what
+    actually tells a gesture from noise. On trigger, captures a fixed
+    _GESTURE_WINDOW_MS window at the sandbox tools' proven 240Hz rate —
+    this blocks the loop for ~1.2s, the same accepted-tradeoff category
+    the boot burst already established (a rare, bounded stall)."""
+    i2c, addr = _get_imu()
+    if addr is None:
+        print("  ✗ No LSM6DSV16X found — check wiring (see imu_test.py)")
+        return
+
+    print("\n══ eki-bin gesture debug ═════════════════════════")
+    print(f"  IMU confirmed at {hex(addr)}")
+    print(f"  menu: {GESTURE_MENU_OPTIONS}")
+    print(
+        f"  flip: {GESTURE_FLIP_ENABLED}   position: {GESTURE_POSITION_ENABLED}"
+        f"   flick: {GESTURE_FLICK_ENABLED}"
+    )
+    print("  tap/flick to interact — Ctrl+C to stop\n")
+
+    menu = _GestureMenu(GESTURE_MENU_OPTIONS)
+    trigger_buffer = []
+    last_orientation = None
+
+    try:
+        while True:
+            now_ms = time.ticks_ms()
+            sample = (now_ms,) + _imu_read_accel_raw(i2c, addr)
+
+            if GESTURE_FLIP_ENABLED:
+                orientation = classify_orientation(sample)
+                if orientation != last_orientation and orientation != "unclear":
+                    print(f"  [ORIENTATION] {orientation}")
+                    last_orientation = orientation
+
+            mag = _gesture_magnitude_mg(sample)
+            triggered = False
+            if len(trigger_buffer) >= _GESTURE_TRIGGER_BUFFER_LEN:
+                baseline = _gesture_median(trigger_buffer)
+                triggered = abs(mag - baseline) >= TAP_TRIGGER_THRESHOLD_MG
+
+            trigger_buffer.append(mag)
+            if len(trigger_buffer) > _GESTURE_TRIGGER_BUFFER_LEN:
+                trigger_buffer.pop(0)
+
+            if triggered:
+                samples = _capture_gesture_window(i2c, addr, now_ms)
+                trigger_buffer = []  # the window already covers this stretch
+                features = extract_gesture_features(samples)
+                physical = classify_tap_or_flick(features)
+                if physical == "flick" and not GESTURE_FLICK_ENABLED:
+                    physical = None  # capability off — treat as noise
+                if physical is not None:
+                    position = classify_position(features)
+                    response = _classify_menu_response(menu.active, physical)
+                    now_ms = time.ticks_ms()  # stale after the blocking capture
+                    if response == "wake":
+                        menu.wake(now_ms)
+                        print(f"  [WAKE] gesture mode active — cursor: {menu.options[menu.cursor]}")
+                    elif response == "select":
+                        selected = menu.select()
+                        print(f"  [SELECT] {selected}")
+                    elif response == "scroll":
+                        direction = _scroll_direction(position)
+                        menu.scroll(direction)
+                        arrow = "+" if direction > 0 else "-"
+                        print(f"  [SCROLL {arrow}] cursor: {menu.options[menu.cursor]}")
+
+            if menu.is_expired(now_ms):
+                menu.exit()
+                print("  [TIMEOUT] gesture mode exited")
+
+            time.sleep_ms(FRAME_MS)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n  gesture debug stopped")
+
+
+# ─────────────────────────────────────────────────────────────
 # Wake/sleep interaction layer — docs/contracts/wake-interaction.md
 # LED status messages — docs/contracts/led-status-messages.md
 # Gated by WAKE_INTERACTION_ENABLED (see its docstring above) — every class
@@ -1617,9 +2122,21 @@ def _run_interactive_loop(schedule_data, led):
 
 
 def main():
-    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
-
     print("\n══ eki-bin ═══════════════════════════════════════")
+
+    if GESTURE_DEBUG_ENABLED:
+        # No WiFi/schedule/boot-ceremony needed — this validates the
+        # gesture envelope in isolation, same "standalone, no dependency
+        # beyond the IMU" property the sandbox tools already have. Early
+        # return, deliberately bypassing everything below rather than
+        # threading a flag through the existing schedule/WiFi/boot flow.
+        try:
+            _run_gesture_debug_loop()
+        except KeyboardInterrupt:
+            pass
+        return
+
+    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
 
     try:
         schedule_data = load_schedule(SCHEDULE_FILE)

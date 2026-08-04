@@ -86,15 +86,19 @@ def engineer_features(capture):
     # Sensitive threshold-crossing count + spacing regularity — see module
     # docstring. Not the same algorithm as analyze_taps.py's tap counter on
     # purpose: this one is meant to see everything, not just "real" taps.
+    # peak_dev <= 0 means a perfectly flat capture (never happens with real
+    # sensor noise, but guard it anyway — a threshold of 0 would otherwise
+    # register every sample as "above" it).
     threshold = CROSSING_THRESHOLD_FRAC * peak_dev
     crossing_times = []
     above = False
-    for sample, dev in zip(samples, deviations):
-        if not above and dev >= threshold:
-            above = True
-            crossing_times.append(sample["t_ms"])
-        elif above and dev < threshold:
-            above = False
+    if peak_dev > 0:
+        for sample, dev in zip(samples, deviations):
+            if not above and dev >= threshold:
+                above = True
+                crossing_times.append(sample["t_ms"])
+            elif above and dev < threshold:
+                above = False
     gaps = [b - a for a, b in zip(crossing_times, crossing_times[1:])]
 
     return {
