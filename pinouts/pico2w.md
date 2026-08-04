@@ -76,8 +76,8 @@ had this reserved before the sensor itself was picked).
 |---|---|---|---|---|
 | 3V3(OUT) | 36 | — | → | VCC |
 | GND | 38 | — | → | GND |
-| GP0 | 1 | `0` | → | SDA |
-| GP1 | 2 | `1` | → | SCL |
+| GP0 | 1 | `0` | → | SDA (blue) |
+| GP1 | 2 | `1` | → | SCL (yellow) |
 
 `imu_test.py`'s constants: `SDA_PIN = 0`, `SCL_PIN = 1`, `I2C_ID = 0`.
 
