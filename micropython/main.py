@@ -1602,6 +1602,7 @@ def _capture_gesture_window(i2c, addr, start_ms):
         if elapsed >= _GESTURE_WINDOW_MS:
             break
         time.sleep_ms(4)  # matches vibration_sandbox.py's SAMPLE_INTERVAL_MS
+    return samples
 
 
 def _run_gesture_debug_loop():
