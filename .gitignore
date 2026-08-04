@@ -11,6 +11,9 @@ schedules/*
 # ── Firmware blobs (local .uf2 only) ──────────────────────────────
 firmware/
 
+# ── Vibration tuning captures — local bring-up data, not shared ───
+data/
+
 # ── Python env / caches ───────────────────────────────────────────
 .venv/
 __pycache__/

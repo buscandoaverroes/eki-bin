@@ -9,6 +9,8 @@
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
+#   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
+#                             handling_test.py data files on the device's flash
 #
 # upload/run/led-test/screen/repl all go through mpremote, which is board-
 # agnostic — the only board-specific step is the initial firmware flash, since
@@ -128,6 +130,14 @@ imu-test: _check-mpremote
 .PHONY: repl
 repl: _check-mpremote
 	$(MPREMOTE)
+
+# Lists + confirms + deletes vibration_*.json(l) / handling_*.json(l) files
+# left on-device by vibration_sandbox.py / handling_test.py sessions
+# (mpremote cp only copies them off, never deletes the originals — they
+# accumulate until flash fills up).
+.PHONY: clear-vibes
+clear-vibes: _check-mpremote
+	@MPREMOTE=$(MPREMOTE) bash scripts/clear_vibes.sh
 
 SCHEDULE_SOURCES := $(wildcard schedules/*.yaml)
 
