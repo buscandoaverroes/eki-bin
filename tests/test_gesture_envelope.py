@@ -150,14 +150,29 @@ def test_classify_hard_with_irregular_spacing_is_flick(load_main):
     assert m.classify_tap_or_flick(f) == "flick"
 
 
-def test_classify_hard_with_regular_or_no_spacing_is_rejected(load_main):
-    """The core insights.md §9 finding: magnitude alone can't tell a flick
-    from hard handling (setdown_firm is just as hard) — regularity can."""
+def test_classify_hard_with_regular_spacing_is_rejected(load_main):
+    """When spacing IS computable, low/regular spacing means hard handling,
+    not a flick (insights.md §9: setdown_firm is just as hard as a flick,
+    only spacing tells them apart)."""
     m = load_main(FLICK_MAGNITUDE_THRESHOLD_MG=140, FLICK_SPACING_STDEV_THRESHOLD_MS=5)
-    hard_but_no_ring = _features(peak_deviation_mg=1500, spacing_stdev_ms=None)
-    hard_but_regular = _features(peak_deviation_mg=1500, spacing_stdev_ms=1)
-    assert m.classify_tap_or_flick(hard_but_no_ring) is None
+    hard_but_regular = _features(peak_deviation_mg=1500, spacing_stdev_ms=1, num_crossings=3)
     assert m.classify_tap_or_flick(hard_but_regular) is None
+
+
+def test_classify_hard_no_spacing_falls_back_to_crossing_count(load_main):
+    """Real bug, found on real hardware: an earlier version treated
+    "spacing_stdev unavailable" (< 3 crossings — the common case, true for
+    ~70% of real flicks) as automatic rejection, which silently killed
+    almost every real hard tap/flick (gesture-envelope.md §10). Fixed:
+    when spacing can't be computed, fall back to num_crossings — 1 leans
+    flick, 2+ leans hard-handling (the best available single feature in
+    that regime, ~80%, confirmed a real ceiling not a "need more features"
+    gap)."""
+    m = load_main(FLICK_MAGNITUDE_THRESHOLD_MG=140)
+    one_crossing = _features(peak_deviation_mg=1500, spacing_stdev_ms=None, num_crossings=1)
+    two_crossings = _features(peak_deviation_mg=1500, spacing_stdev_ms=None, num_crossings=2)
+    assert m.classify_tap_or_flick(one_crossing) == "flick"
+    assert m.classify_tap_or_flick(two_crossings) is None
 
 
 # ── classify_position ────────────────────────────────────────────

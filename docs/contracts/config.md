@@ -79,7 +79,7 @@ it with `getattr(config, "NAME", default)`, so
 | `GESTURE_POSITION_ENABLED` | bool | no | `False` | **Gesture envelope.** Shoulder-vs-base tap disaggregation — ~78-81% even on a bottle it's tuned for (`docs/insights.md` §8-9), optional |
 | `GESTURE_FLICK_ENABLED` | bool | no | `True` | **Gesture envelope.** Best-validated signal after tap presence — on by default |
 | `TAP_TRIGGER_THRESHOLD_MG` | int | no | `50` | **Gesture envelope.** Cheap first-pass gate only — deliberately permissive; the recognizer, not this trigger, does the real tap/flick/noise discrimination |
-| `FLICK_MAGNITUDE_THRESHOLD_MG` | int | no | `140` | **Gesture envelope.** Flick vs. soft tap — chianti-bottle value, re-derive per physical unit |
+| `FLICK_MAGNITUDE_THRESHOLD_MG` | int | no | `328` | **Gesture envelope.** Flick vs. soft tap — chianti-bottle value, re-derive per physical unit. Recalibrated against shoulder+base taps (95.2%) after real-hardware testing found the original 140 (calibrated against body taps only) let 79% of ordinary shoulder taps through as false flicks |
 | `FLICK_SPACING_STDEV_THRESHOLD_MS` | int | no | `5` | **Gesture envelope.** Flick vs. hard handling — the feature that actually separates them (magnitude alone caps ~80%, `docs/insights.md` §9) |
 | `POSITION_THRESHOLD_MG` | int | no | `151` | **Gesture envelope.** Only read if `GESTURE_POSITION_ENABLED` |
 | `ORIENTATION_STABLE_MG` | int | no | `700` | **Gesture envelope.** Below this, a reading is "mid-motion," not a resting orientation |

@@ -275,3 +275,37 @@ and extending it needs its own deliberate gesture (double-tap = EXTEND).
 `GESTURE_MODE_TIMEOUT_MS` is an idle timeout on an active interaction, not
 a power budget — the two timers look similar but answer different
 questions, and conflating them was the bug.
+
+**Second real-hardware bug, more consequential: `classify_tap_or_flick`
+was silently rejecting almost every hard tap/flick, and position always
+read "base" as a downstream symptom of the same bug, not a separate
+problem.** Live testing (`gesture_sandbox.py`) showed shoulder taps never
+scrolling — every hard hit came back `→ rejected as noise`. Root cause:
+`spacing_stdev_ms` needs >= 3 crossings to compute at all, and the
+original code treated "can't compute it" as automatic rejection. Checked
+against the pooled handling-test data: **70% of real flicks and ~25% of
+hard-handling events have fewer than 3 crossings** — the feature that
+worked beautifully in the original statistical comparison (insights.md
+§9's 100% figure) was implicitly computed only on the subset where it
+*was* available, which turns out to be the minority case for flicks. In
+practice this meant almost every hard event over `FLICK_MAGNITUDE_
+THRESHOLD_MG` got killed before `classify_position` ever ran on it — only
+weak, sub-threshold taps (which can only ever be "base," since they're
+also below `POSITION_THRESHOLD_MG`) survived to be classified at all. One
+bug explained both symptoms.
+
+**Fix, and the honest ceiling found along the way:** when spacing_stdev
+isn't computable, fall back to `num_crossings` (1 leans flick, 2+ leans
+hard-handling) — the single best available feature in that regime, but
+only ~80% on its own. Before shipping that as "good enough," checked
+whether a classifier could do better: a random forest on every available
+feature (peak magnitude, energy, crossings, ring-down, duration) scored
+**80.7%** on the same pooled data — statistically the same as the single
+feature. Unlike the rocking-bottle tap-count case (55%→91% by combining
+features), this is a genuine ceiling with the current feature set, not a
+"needs a smarter model" gap — confirmed by testing, not assumed. Also
+recalibrated `FLICK_MAGNITUDE_THRESHOLD_MG` from 140 (calibrated against
+body taps, median 50mg) to **328** (95.2%, calibrated against shoulder+base
+taps specifically, median 128mg — where taps actually happen in this
+envelope). The original number wasn't wrong on its own terms, it was
+measured against the wrong comparison group.

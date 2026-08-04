@@ -149,7 +149,11 @@ GESTURE_FLICK_ENABLED = True        # best-validated signal after tap presence
 TAP_TRIGGER_THRESHOLD_MG = 50       # cheap gate only — real handling motion
 #                                      crosses this too, recognizer does the
 #                                      real discrimination, not this trigger
-FLICK_MAGNITUDE_THRESHOLD_MG = 140
+FLICK_MAGNITUDE_THRESHOLD_MG = 328   # recalibrated against shoulder+base
+#                                       taps (95.2%) — the original 140 was
+#                                       calibrated against body taps only and
+#                                       let 79% of real shoulder taps through
+#                                       as false flicks, see gesture-envelope.md §10
 FLICK_SPACING_STDEV_THRESHOLD_MS = 5  # the feature that actually separates
 #                                        flick from hard handling — magnitude
 #                                        alone caps ~80% (setdown_firm is just

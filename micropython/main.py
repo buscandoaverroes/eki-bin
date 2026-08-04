@@ -205,11 +205,21 @@ TAP_TRIGGER_THRESHOLD_MG = getattr(config, "TAP_TRIGGER_THRESHOLD_MG", 50)  #
 #   motion overlaps this range too, see insights.md §9's handling_test.py
 #   findings), the real discrimination happens in the recognizer layer
 #   below, not at this trigger
-FLICK_MAGNITUDE_THRESHOLD_MG = getattr(config, "FLICK_MAGNITUDE_THRESHOLD_MG", 140)
+FLICK_MAGNITUDE_THRESHOLD_MG = getattr(config, "FLICK_MAGNITUDE_THRESHOLD_MG", 328)  #
+#   RECALIBRATED against shoulder+base taps (95.2% separability) — the
+#   original 140 was calibrated against BODY taps only (median 50mg), which
+#   badly undershoots shoulder's own normal tap force (median 215mg) — real
+#   hardware testing found 79% of ordinary shoulder taps already exceeded
+#   140mg on their own. See gesture-envelope.md §10.
 FLICK_SPACING_STDEV_THRESHOLD_MS = getattr(config, "FLICK_SPACING_STDEV_THRESHOLD_MS", 5)
-#   flick vs. hard handling — magnitude alone caps ~80% (setdown_firm is
-#   just as hard as a deliberate flick); this shape feature is what
-#   actually separates them, see insights.md §9
+#   flick vs. hard handling when spacing IS computable — magnitude alone
+#   caps ~80% (setdown_firm is just as hard as a deliberate flick); this
+#   shape feature helps when available, see insights.md §9. NOT available
+#   most of the time in practice (needs >=3 crossings; ~70% of real flicks
+#   and ~25% of hard handling events don't have that many) — see
+#   classify_tap_or_flick's own docstring for how the missing case is
+#   handled, and gesture-envelope.md §10 for why a classifier doesn't do
+#   any better here (~80% ceiling either way).
 POSITION_THRESHOLD_MG = getattr(config, "POSITION_THRESHOLD_MG", 151)  #
 #   only read if GESTURE_POSITION_ENABLED
 ORIENTATION_STABLE_MG = getattr(config, "ORIENTATION_STABLE_MG", 700)  #
@@ -1440,20 +1450,27 @@ def extract_gesture_features(samples):
 # load_main(...) config overrides.
 # ─────────────────────────────────────────────────────────────
 def classify_tap_or_flick(features):
-    """"tap", "flick", or None (below the trigger floor / hard-but-not-a-
-    flick). Two-stage, and the SECOND stage is the one doing real work
-    (insights.md §9): magnitude alone only separates flick from hard
-    handling ~80% (setdown_firm is just as hard as a deliberate flick) —
-    spacing regularity is what actually tells them apart. A hard event
-    with low/absent spacing_stdev is treated as noise, not a flick."""
+    """"tap", "flick", or None (below the trigger floor). Real-hardware
+    testing found a real bug in an earlier version: treating "spacing_stdev
+    unavailable" (< 3 crossings — true for ~70% of real flicks and ~25% of
+    hard handling events, see FLICK_SPACING_STDEV_THRESHOLD_MS's comment)
+    as automatic REJECTION silently killed almost every hard tap/flick,
+    which is why shoulder taps never registered as anything at all
+    (gesture-envelope.md §10). Fixed: when spacing IS computable, it's
+    still the primary discriminator, unchanged. When it ISN'T,
+    num_crossings is the best available single feature in that regime
+    (~80%, 1 crossing leans flick, 2+ leans hard-handling) — not great,
+    but confirmed via a cross-validated classifier on every available
+    feature to be a real ceiling here, not a "combine more features" gap
+    (gesture-envelope.md §10 has the full analysis)."""
     peak = features["peak_deviation_mg"]
     if peak < TAP_TRIGGER_THRESHOLD_MG:
         return None
     if peak >= FLICK_MAGNITUDE_THRESHOLD_MG:
         spacing = features["spacing_stdev_ms"]
-        if spacing is not None and spacing >= FLICK_SPACING_STDEV_THRESHOLD_MS:
-            return "flick"
-        return None
+        if spacing is not None:
+            return "flick" if spacing >= FLICK_SPACING_STDEV_THRESHOLD_MS else None
+        return "flick" if features["num_crossings"] <= 1 else None
     return "tap"
 
 
