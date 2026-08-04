@@ -127,36 +127,39 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # EXTEND_CONFIRM_MS = 600
 
 # ── Gesture envelope — docs/contracts/gesture-envelope.md ──────────────
-# Evidence-based (docs/insights.md §8-9), unlike WAKE_INTERACTION's
-# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS above — but the threshold VALUES here
-# are chianti-bottle-specific (amplitude features don't transfer across
-# bottles, §9). Re-derive per physical unit via vibration_sandbox.py +
-# scripts/analyze_taps.py before flashing a different bottle. Terminal-only
-# testing: set GESTURE_DEBUG_ENABLED = True and `make screen` — prints
-# state transitions instead of touching LEDs, no schedule/WiFi needed.
-# IMU_I2C_ID = 0
-# IMU_SDA_PIN = 0   # Pico 2W default — see pinouts/pico2w.md
-# IMU_SCL_PIN = 1
-# GESTURE_DEBUG_ENABLED = False       # terminal-only test loop, see above
-# GESTURE_FLIP_ENABLED = False        # requires wired (USB) power — Qi breaks
-#                                        on flip
-# GESTURE_POSITION_ENABLED = False    # shoulder-vs-base — ~78-81% even tuned,
-#                                        optional, off by default
-# GESTURE_FLICK_ENABLED = True        # best-validated signal after tap presence
-# TAP_TRIGGER_THRESHOLD_MG = 50       # cheap gate only — real handling motion
-#                                        crosses this too, recognizer does the
-#                                        real discrimination, not this trigger
-# FLICK_MAGNITUDE_THRESHOLD_MG = 140
-# FLICK_SPACING_STDEV_THRESHOLD_MS = 5  # the feature that actually separates
-#                                          flick from hard handling — magnitude
-#                                          alone caps ~80% (setdown_firm is just
-#                                          as hard as a deliberate flick)
-# POSITION_THRESHOLD_MG = 151         # only read if GESTURE_POSITION_ENABLED
-# ORIENTATION_STABLE_MG = 700
-# ORIENTATION_MAP = (("upright", "y", 1), ("horizontal", "z", -1), ("upside_down", "y", -1))
-# GESTURE_MENU_OPTIONS = ("Item 1", "Item 2", "Item 3")  # placeholder content —
-#                                                            see gesture-envelope.md §9
-# GESTURE_MODE_TIMEOUT_MS = 15_000
+# ACTIVE below (not commented) — set up for the Pico 2W + IMU-only terminal
+# test: `make upload && make screen`, no LED strip or WiFi needed
+# (GESTURE_DEBUG_ENABLED bypasses schedule/WiFi/boot entirely). Threshold
+# VALUES are chianti-bottle-specific (amplitude features don't transfer
+# across bottles, docs/insights.md §9) — re-derive per physical unit via
+# vibration_sandbox.py + scripts/analyze_taps.py before flashing a
+# different bottle. Flip GESTURE_DEBUG_ENABLED back to False (or delete
+# this whole block) once you're past terminal testing and wiring real LEDs.
+IMU_I2C_ID = 0
+IMU_SDA_PIN = 0   # Pico 2W default — see pinouts/pico2w.md
+IMU_SCL_PIN = 1
+GESTURE_DEBUG_ENABLED = True        # terminal-only test loop, see above
+GESTURE_FLIP_ENABLED = True         # requires wired (USB) power — fine for
+#                                      this test, Qi is the only thing flip
+#                                      is incompatible with
+GESTURE_POSITION_ENABLED = True     # shoulder-vs-base — ~78-81% even tuned,
+#                                      on here so the terminal test exercises
+#                                      position-aware scroll direction too
+GESTURE_FLICK_ENABLED = True        # best-validated signal after tap presence
+TAP_TRIGGER_THRESHOLD_MG = 50       # cheap gate only — real handling motion
+#                                      crosses this too, recognizer does the
+#                                      real discrimination, not this trigger
+FLICK_MAGNITUDE_THRESHOLD_MG = 140
+FLICK_SPACING_STDEV_THRESHOLD_MS = 5  # the feature that actually separates
+#                                        flick from hard handling — magnitude
+#                                        alone caps ~80% (setdown_firm is just
+#                                        as hard as a deliberate flick)
+POSITION_THRESHOLD_MG = 151         # only read since GESTURE_POSITION_ENABLED=True
+ORIENTATION_STABLE_MG = 700
+ORIENTATION_MAP = (("upright", "y", 1), ("horizontal", "z", -1), ("upside_down", "y", -1))
+GESTURE_MENU_OPTIONS = ("Item 1", "Item 2", "Item 3")  # placeholder content —
+#                                                          see gesture-envelope.md §9
+GESTURE_MODE_TIMEOUT_MS = 15_000
 
 # ── LED status messages — docs/contracts/led-status-messages.md ────────
 # Shared vocabulary for brief acknowledgments + distinguishable failure
