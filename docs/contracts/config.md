@@ -71,6 +71,21 @@ it with `getattr(config, "NAME", default)`, so
 | `BRIGHTNESS_PRESETS` | tuple | no | `(0.15, 0.35, 0.6)` | Levels `SECONDARY_ACTION="brightness_cycle"` cycles through |
 | `EXTEND_CONFIRM_COLOR` | tuple | no | `STARTUP_COLOR` | Double-tap-while-AWAKE confirmation colour |
 | `EXTEND_CONFIRM_MS` | int | no | `600` | Duration of the extend confirmation |
+| `IMU_I2C_ID` | int | no | `0` | **Gesture envelope** (`docs/contracts/gesture-envelope.md`). Hardware I2C peripheral index |
+| `IMU_SDA_PIN` | int | no | `0` | **Gesture envelope.** Board-specific — see `pinouts/<board>.md` (Pico 2W default shown) |
+| `IMU_SCL_PIN` | int | no | `1` | **Gesture envelope.** Board-specific — see `pinouts/<board>.md` |
+| `GESTURE_DEBUG_ENABLED` | bool | no | `False` | **Gesture envelope.** Terminal-only validation loop (`_run_gesture_debug_loop`) — prints state transitions instead of rendering LEDs, bypasses WiFi/schedule/boot entirely. Own flag, deliberately separate from `WAKE_INTERACTION_ENABLED` |
+| `GESTURE_FLIP_ENABLED` | bool | no | `False` | **Gesture envelope.** Orientation/flip detection — requires wired (USB) power; flipping a Qi-mounted jar breaks inductive coupling |
+| `GESTURE_POSITION_ENABLED` | bool | no | `False` | **Gesture envelope.** Shoulder-vs-base tap disaggregation — ~78-81% even on a bottle it's tuned for (`docs/insights.md` §8-9), optional |
+| `GESTURE_FLICK_ENABLED` | bool | no | `True` | **Gesture envelope.** Best-validated signal after tap presence — on by default |
+| `TAP_TRIGGER_THRESHOLD_MG` | int | no | `50` | **Gesture envelope.** Cheap first-pass gate only — deliberately permissive; the recognizer, not this trigger, does the real tap/flick/noise discrimination |
+| `FLICK_MAGNITUDE_THRESHOLD_MG` | int | no | `140` | **Gesture envelope.** Flick vs. soft tap — chianti-bottle value, re-derive per physical unit |
+| `FLICK_SPACING_STDEV_THRESHOLD_MS` | int | no | `5` | **Gesture envelope.** Flick vs. hard handling — the feature that actually separates them (magnitude alone caps ~80%, `docs/insights.md` §9) |
+| `POSITION_THRESHOLD_MG` | int | no | `151` | **Gesture envelope.** Only read if `GESTURE_POSITION_ENABLED` |
+| `ORIENTATION_STABLE_MG` | int | no | `700` | **Gesture envelope.** Below this, a reading is "mid-motion," not a resting orientation |
+| `ORIENTATION_MAP` | tuple of tuples | no | `(("upright","y",1), ("horizontal","z",-1), ("upside_down","y",-1))` | **Gesture envelope.** `(state name, dominant axis, sign)` — depends entirely on how the IMU is physically mounted on a given bottle, re-derive with `orientation_test.py` per unit |
+| `GESTURE_MENU_OPTIONS` | tuple | no | `("Item 1", "Item 2", "Item 3")` | **Gesture envelope.** Placeholder scrollwheel content — the real option list is a product decision, not yet made (`docs/contracts/gesture-envelope.md` §9) |
+| `GESTURE_MODE_TIMEOUT_MS` | int | no | `15000` | **Gesture envelope.** Bounded return to ambient — same philosophy as `WAKE_MINUTES` |
 | `STATUS_LED_INDEX` | int | no | `NUM_LEDS // 2` | Shared "middle-ish" position for brief acknowledgments — see `docs/contracts/led-status-messages.md`. Deliberately not `ANCHOR_INDEX`, stays contract-agnostic |
 | `QUIET_TAP_COLOR` | tuple | no | `(128, 0, 200)` | Acknowledgment colour for a tap during quiet hours (purple) |
 | `QUIET_TAP_DURATION_MS` | int | no | `2500` | Duration of the quiet-hours acknowledgment |
