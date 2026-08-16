@@ -32,16 +32,24 @@ import main
 
 
 def _write_segment(start, end, color, mult=1.0):
+    # _clamp255 matters here now, not just belt-and-suspenders: jolt-style
+    # scenes (see "Gesture jolt prototypes" below) push mult above 1.0 —
+    # gamma(mult) for mult>1 is mult**GAMMA, e.g. gamma(2.0)≈4.6 at the
+    # default GAMMA=2.2 — so color[ch]*level can clear 255 well before
+    # BRIGHTNESS_PRESETS' top end (0.6). main._paint clamps for exactly
+    # this reason; every prior scene here just never multiplied past 1.0
+    # so it never came up.
     level = main.BRIGHTNESS * main.gamma(mult)
     for logical in range(start, end):
         phys = main._physical(logical)
         if main.DITHER:
+            # _quantize clamps internally — same split main._paint uses.
             res = main._residual[phys]
             main.np[phys] = tuple(
                 main._quantize(color[ch] * level, res, ch) for ch in range(3)
             )
         else:
-            main.np[phys] = tuple(int(color[ch] * level) for ch in range(3))
+            main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
 
 
 # ── Scenes ────────────────────────────────────────────────────────
