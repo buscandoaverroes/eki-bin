@@ -216,6 +216,29 @@ def test_classify_orientation_unclear_when_axis_unmapped(load_main):
     assert m.classify_orientation(x_dominant) == "unclear"
 
 
+# ── classify_valid_input (v1 minimal contract, §11) ─────────────────
+
+
+def test_classify_valid_input_low_energy_is_valid(load_main):
+    m = load_main(TAP_ENERGY_THRESHOLD=138000)
+    assert m.classify_valid_input(_features(energy=27000)) is True
+
+
+def test_classify_valid_input_high_energy_is_noise(load_main):
+    m = load_main(TAP_ENERGY_THRESHOLD=138000)
+    assert m.classify_valid_input(_features(energy=2_300_000)) is False
+
+
+def test_classify_valid_input_ignores_everything_but_energy(load_main):
+    """Deliberately doesn't look at position/spacing/crossings — that's
+    the whole point of the v1 specialization (gesture-envelope.md §11)."""
+    m = load_main(TAP_ENERGY_THRESHOLD=138000)
+    low_energy_odd_shape = _features(
+        energy=50000, peak_deviation_mg=5000, num_crossings=9, spacing_stdev_ms=1
+    )
+    assert m.classify_valid_input(low_energy_odd_shape) is True
+
+
 # ── _GestureMenu ──────────────────────────────────────────────────
 
 
@@ -335,3 +358,106 @@ def test_scroll_direction_position_aware(load_main):
 def test_scroll_direction_defaults_forward_when_unknown(load_main):
     m = load_main()
     assert m._scroll_direction(None) == 1
+
+
+# ── _TapCycleState (v1 minimal contract, §11) ────────────────────────
+
+
+def _state(load_main, **overrides):
+    defaults = dict(WAKE_JOLT_MS=500, WAKE_SETTLE_MS=1500, AWAKE_MINUTES=15)
+    defaults.update(overrides)
+    return load_main(**defaults)._TapCycleState()
+
+
+def test_tap_cycle_starts_asleep(load_main):
+    state = _state(load_main)
+    assert state.awake is False
+    assert state.phase == "asleep"
+    assert state.accepts_input() is True
+
+
+def test_tap_cycle_valid_input_while_asleep_wakes(load_main):
+    state = _state(load_main)
+    assert state.resolve(1000, valid=True) == "wake"
+    assert state.awake is True
+    assert state.phase == "waking"
+    assert state.phase_started_at == 1000
+
+
+def test_tap_cycle_noise_while_asleep_does_nothing(load_main):
+    state = _state(load_main)
+    assert state.resolve(1000, valid=False) is None
+    assert state.awake is False
+    assert state.phase == "asleep"
+
+
+def test_tap_cycle_no_input_accepted_during_waking_or_settling(load_main):
+    state = _state(load_main, WAKE_JOLT_MS=500, WAKE_SETTLE_MS=1500)
+    state.resolve(0, valid=True)  # -> waking
+    assert state.accepts_input() is False
+    assert state.resolve(100, valid=True) is None  # a trigger landing here is ignored
+
+    state.advance(500)  # -> settling
+    assert state.phase == "settling"
+    assert state.accepts_input() is False
+    assert state.resolve(600, valid=True) is None
+
+
+def test_tap_cycle_advances_waking_to_settling_to_awake(load_main):
+    state = _state(load_main, WAKE_JOLT_MS=500, WAKE_SETTLE_MS=1500, AWAKE_MINUTES=15)
+    state.resolve(0, valid=True)  # -> waking, phase_started_at=0
+
+    assert state.advance(499) is None  # not yet
+    assert state.advance(500) == "settling"
+    assert state.phase == "settling"
+    assert state.phase_started_at == 500
+
+    assert state.advance(1999) is None  # not yet (500 + 1500 - 1)
+    assert state.advance(2000) == "awake"
+    assert state.phase == "awake"
+    assert state.awake_until == 2000 + 15 * 60_000
+
+
+def test_tap_cycle_valid_input_while_awake_cycles(load_main):
+    state = _state(load_main)
+    state.resolve(0, valid=True)
+    state.advance(500)
+    state.advance(2000)
+    assert state.phase == "awake"
+
+    assert state.resolve(3000, valid=True) == "cycle"
+    assert state.phase == "awake"  # cycling doesn't change phase
+    assert state.awake is True
+
+
+def test_tap_cycle_noise_while_awake_does_nothing(load_main):
+    state = _state(load_main)
+    state.resolve(0, valid=True)
+    state.advance(500)
+    state.advance(2000)
+
+    assert state.resolve(3000, valid=False) is None
+    assert state.phase == "awake"
+
+
+def test_tap_cycle_times_out_back_to_asleep(load_main):
+    state = _state(load_main, AWAKE_MINUTES=15)
+    state.resolve(0, valid=True)
+    state.advance(500)
+    state.advance(2000)
+    awake_until = state.awake_until
+
+    assert state.advance(awake_until - 1) is None
+    assert state.advance(awake_until) == "asleep"
+    assert state.awake is False
+    assert state.phase == "asleep"
+    assert state.awake_until is None
+
+
+def test_tap_cycle_acknowledge_sets_pending_flag(load_main):
+    state = _state(load_main)
+    assert state.ack_pending is False
+    state.acknowledge()
+    assert state.ack_pending is True
+    state.resolve(0, valid=True)
+    assert state.ack_pending is False

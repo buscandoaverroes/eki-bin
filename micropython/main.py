@@ -251,6 +251,31 @@ GESTURE_MODE_TIMEOUT_MS = getattr(config, "GESTURE_MODE_TIMEOUT_MS", 15_000)  #
 # same safety-gate precedent as everything else opt-in here.
 GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
 
+# V1 minimal gesture contract — gesture-envelope.md §11. A deliberate
+# SPECIALIZATION of the recognizer/scrollwheel above (tap-vs-noise only,
+# GESTURE_POSITION_ENABLED/GESTURE_FLICK_ENABLED stay False), not a
+# replacement — see that section for why. TAP_ENERGY_THRESHOLD is the one
+# threshold this path needs; the timing knobs below drive the two-phase
+# ACK/CONFIRM state machine (_TapCycleState).
+TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
+#   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
+#   (chianti bottle), see §11
+ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
+#   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
+#   hardware allow
+WAKE_JOLT_MS = getattr(config, "WAKE_JOLT_MS", 500)  # confirmed-wake jolt
+#   duration, no input accepted — flagged too slow as-is (§11), timing is
+#   a feel question to iterate visually, not a logic one
+WAKE_JOLT_BRIGHTNESS_MULT = getattr(config, "WAKE_JOLT_BRIGHTNESS_MULT", 2.0)
+WAKE_SETTLE_MS = getattr(config, "WAKE_SETTLE_MS", 1500)  # post-jolt
+#   debounce, no input accepted — prevents the same physical contact that
+#   triggered WAKE from also registering as an immediate CYCLE
+AWAKE_MINUTES = getattr(config, "AWAKE_MINUTES", 15)  # bounded-window,
+#   same philosophy as WAKE_MINUTES — no EXTEND gesture, no runtime
+#   adjustment, deliberately simpler than the old wake-interaction design
+CYCLE_TRANSITION_MS = getattr(config, "CYCLE_TRANSITION_MS", 200)  # flash,
+#   then a hard cut to the next station — no crossfade, see §11
+
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
 # GPIO). Other boards have no such alias: set this to a GPIO number for that
@@ -1504,6 +1529,22 @@ def classify_orientation(sample):
     return "unclear"
 
 
+def classify_valid_input(features):
+    """V1 minimal contract (gesture-envelope.md §11) — deliberate touch
+    vs. ambient handling, the ONLY distinction this path needs. energy
+    alone: 98.4% across pooled tap sessions vs. pooled handling-noise
+    sessions (pickup/carry/setdown/bump) — not a single-session number, and
+    a much bigger margin than anything classify_tap_or_flick/
+    classify_position ever reached (median tap energy ~27K vs. median
+    handling-noise energy ~2.3M, nearly two orders of magnitude apart, not
+    a close call). Deliberately does NOT distinguish tap from flick or
+    classify position — this is the specialization gesture-envelope.md §11
+    describes, not a replacement for classify_tap_or_flick, which stays
+    defined and tested for when GESTURE_FLICK_ENABLED/GESTURE_POSITION_
+    ENABLED come back on."""
+    return features["energy"] < TAP_ENERGY_THRESHOLD
+
+
 # ─────────────────────────────────────────────────────────────
 # Gesture envelope (scrollwheel) — gesture-envelope.md §7
 # The interaction state machine — what an abstract event MEANS, not what
@@ -1603,6 +1644,82 @@ def _scroll_direction(position):
     if position == "base":
         return -1
     return 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (v1 minimal contract) — gesture-envelope.md §11
+# The two-phase ACK/CONFIRM state machine. Separate class from
+# _GestureMenu/_WakeState above — those drive the richer scrollwheel
+# design; this is the narrower, actually-shipping v1 path, built
+# alongside them, not replacing them.
+# ─────────────────────────────────────────────────────────────
+class _TapCycleState:
+    """ASLEEP -> WAKING -> SETTLING -> AWAKE, with CYCLING as a brief
+    same-phase action rather than its own state (a flash+cut, not
+    somewhere you can get stuck). Two-phase because classify_valid_input
+    needs the full ~1200ms capture window to decide anything, which fails
+    the "instant" feel a wake gesture needs on its own (§11's latency
+    finding). acknowledge() marks a trigger the INSTANT it fires, before
+    any verdict exists; resolve() applies the verdict once the window's
+    capture completes — same class-based pure-state-mutation style
+    _WakeState/_GestureMenu already use."""
+
+    def __init__(self):
+        self.awake = False  # v1 starts ASLEEP — no lights until a real tap
+        #   wakes it, unlike the classic loop (which starts AWAKE)
+        self.phase = "asleep"  # "asleep" | "waking" | "settling" | "awake"
+        self.phase_started_at = None
+        self.awake_until = None
+        self.ack_pending = False
+
+    def accepts_input(self):
+        """False during WAKING/SETTLING — the debounce gesture-envelope.md
+        §11 calls for, so the same physical contact that triggered WAKE
+        can't also register as an immediate CYCLE."""
+        return self.phase in ("asleep", "awake")
+
+    def acknowledge(self):
+        """Call the instant a trigger fires (caller already checked
+        accepts_input() first) — before the capture window or any verdict
+        exists. Purely a bookkeeping flag; the caller's own immediate
+        ACK-flash print/render doesn't depend on this."""
+        self.ack_pending = True
+
+    def resolve(self, now_ms, valid):
+        """Call once classify_valid_input's verdict on the completed
+        capture is known. Returns "wake", "cycle", or None (noise, or a
+        trigger that landed while WAKING/SETTLING — re-checked here since
+        the capture window can outlast a phase change)."""
+        self.ack_pending = False
+        if not valid or not self.accepts_input():
+            return None
+        if not self.awake:
+            self.awake = True
+            self.phase = "waking"
+            self.phase_started_at = now_ms
+            return "wake"
+        return "cycle"
+
+    def advance(self, now_ms):
+        """Call every tick — advances WAKING->SETTLING->AWAKE on their own
+        timers, and AWAKE->ASLEEP on AWAKE_MINUTES timeout. Returns the
+        phase just entered, or None if nothing changed this tick. Plain
+        subtraction, not time.ticks_diff — same choice _WakeState/
+        _TapClassifier/_GestureMenu already made for windows this short."""
+        if self.phase == "waking" and now_ms - self.phase_started_at >= WAKE_JOLT_MS:
+            self.phase = "settling"
+            self.phase_started_at = now_ms
+            return "settling"
+        if self.phase == "settling" and now_ms - self.phase_started_at >= WAKE_SETTLE_MS:
+            self.phase = "awake"
+            self.awake_until = now_ms + AWAKE_MINUTES * 60_000
+            return "awake"
+        if self.phase == "awake" and self.awake_until is not None and now_ms >= self.awake_until:
+            self.awake = False
+            self.phase = "asleep"
+            self.awake_until = None
+            return "asleep"
+        return None
 
 
 _GESTURE_TRIGGER_BUFFER_LEN = 8  # rolling context for the trigger's cheap

@@ -1,11 +1,18 @@
 # micropython/gesture_sandbox.py — eki-bin live gesture model sandbox
 # `import main` pulls in main.py's REAL HAL + recognizer + scrollwheel
 # primitives (_imu_read_accel_raw, extract_gesture_features,
-# classify_tap_or_flick, classify_position, _GestureMenu, ...) without
-# starting the real loop — same pattern led_sandbox.py already established
-# for the LED side ("import main resolves against whatever main.py is
-# CURRENTLY ON THE DEVICE, not your local repo copy — see that file's
-# header for the full caveat, it applies here identically").
+# classify_tap_or_flick, classify_position, _GestureMenu, _TapCycleState,
+# ...) without starting the real loop — same pattern led_sandbox.py already
+# established for the LED side ("import main resolves against whatever
+# main.py is CURRENTLY ON THE DEVICE, not your local repo copy — see that
+# file's header for the full caveat, it applies here identically").
+#
+# Two modes, set MODE below: "full" exercises the richer tap/flick/
+# position/scrollwheel machinery (§4-10 of gesture-envelope.md); "v1"
+# exercises the minimal tap-or-noise + two-phase ACK/CONFIRM contract
+# (§11) that's actually shipping first. Both are real, tested main.py code
+# — this script never re-derives recognizer or state-machine logic, only
+# the trigger/capture timing around it.
 #
 # Why this exists, not just more iteration inside main.py's
 # _run_gesture_debug_loop: real-hardware testing found that loop's trigger
@@ -36,6 +43,8 @@ import time
 
 import main
 
+MODE = "v1"  # "full" | "v1" — see header
+
 # ── Trigger tuning — LOCAL to this sandbox, not main.py ────────────
 # Faster than main.py's _run_gesture_debug_loop (FRAME_MS=16ms) — matches
 # the sandbox tools' proven 240Hz/4ms cadence instead. Edit freely; this is
@@ -50,7 +59,7 @@ TRIGGER_BUFFER_LEN = 20  # ~80ms of rolling local-baseline context at 4ms
 # config.py on-device.
 THRESHOLD_OVERRIDES = {
     # "TAP_TRIGGER_THRESHOLD_MG": 30,
-    # "FLICK_MAGNITUDE_THRESHOLD_MG": 250,
+    "FLICK_MAGNITUDE_THRESHOLD_MG": 328,
     # "FLICK_SPACING_STDEV_THRESHOLD_MS": 20,
 }
 for _name, _value in THRESHOLD_OVERRIDES.items():
@@ -77,13 +86,15 @@ def _fmt(value, digits=1):
     return "—" if value is None else f"{value:.{digits}f}"
 
 
-def run():
+def run_full():
+    """Exercises classify_tap_or_flick/classify_position/_GestureMenu —
+    the richer scrollwheel machinery, §4-10 of gesture-envelope.md."""
     i2c, addr = main._get_imu()
     if addr is None:
         print("  ✗ No LSM6DSV16X found — run imu_test.py first to debug wiring")
         return
 
-    print("\n══ eki-bin gesture model sandbox ═════════════════════")
+    print("\n══ eki-bin gesture model sandbox (full) ══════════════")
     print(f"  IMU confirmed at {hex(addr)}")
     print(
         f"  thresholds: trigger={main.TAP_TRIGGER_THRESHOLD_MG}mg"
@@ -172,4 +183,86 @@ def run():
         print("\n  gesture sandbox stopped")
 
 
-run()
+def run_v1():
+    """Exercises classify_valid_input + _TapCycleState — the minimal
+    tap-or-noise, two-phase ACK/CONFIRM contract, gesture-envelope.md §11.
+    No LED jolt animation exists yet (timing is a feel question to iterate
+    separately, once this logic is confirmed) — this prints ACK/CONFIRM/
+    WAKE/CYCLE/TIMEOUT so the recognizer + state machine can be validated
+    before there's any animation to wire them to."""
+    i2c, addr = main._get_imu()
+    if addr is None:
+        print("  ✗ No LSM6DSV16X found — run imu_test.py first to debug wiring")
+        return
+
+    print("\n══ eki-bin gesture model sandbox (v1) ════════════════")
+    print(f"  IMU confirmed at {hex(addr)}")
+    print(f"  tap energy threshold: {main.TAP_ENERGY_THRESHOLD}")
+    print(f"  trigger poll: {TRIGGER_INTERVAL_MS}ms")
+    print("  tap anywhere — Ctrl+C to stop\n")
+
+    state = main._TapCycleState()
+    trigger_buffer = []
+    last_heartbeat = time.ticks_ms()
+
+    try:
+        while True:
+            now_ms = time.ticks_ms()
+
+            phase_change = state.advance(now_ms)
+            if phase_change:
+                print(f"  [{phase_change.upper()}]")
+
+            if not state.accepts_input():
+                # WAKING/SETTLING — deliberately not tracking a baseline
+                # during the debounce window (gesture-envelope.md §11);
+                # trigger_buffer naturally re-warms once input resumes.
+                time.sleep_ms(TRIGGER_INTERVAL_MS)
+                continue
+
+            sample = (now_ms,) + main._imu_read_accel_raw(i2c, addr)
+            mag = main._gesture_magnitude_mg(sample)
+
+            triggered = False
+            baseline = None
+            if len(trigger_buffer) >= TRIGGER_BUFFER_LEN:
+                baseline = main._gesture_median(trigger_buffer)
+                triggered = abs(mag - baseline) >= main.TAP_TRIGGER_THRESHOLD_MG
+
+            trigger_buffer.append(mag)
+            if len(trigger_buffer) > TRIGGER_BUFFER_LEN:
+                trigger_buffer.pop(0)
+
+            if baseline is not None and now_ms - last_heartbeat >= 1000:
+                print(f"  … mag={mag:.0f}mg  baseline={baseline:.0f}mg  dev={abs(mag - baseline):.0f}mg  [{state.phase}]")
+                last_heartbeat = now_ms
+
+            if triggered:
+                state.acknowledge()
+                print("  [ACK] felt contact — capturing…")
+                samples = _capture_window(i2c, addr, now_ms)
+                trigger_buffer = []
+                features = main.extract_gesture_features(samples)
+                valid = main.classify_valid_input(features)
+                print(f"    energy={_fmt(features['energy'], 0)}  (threshold={main.TAP_ENERGY_THRESHOLD})")
+
+                now_ms = time.ticks_ms()  # stale after the blocking capture
+                response = state.resolve(now_ms, valid)
+                if response == "wake":
+                    print("  [CONFIRM → WAKE]\n")
+                elif response == "cycle":
+                    print("  [CONFIRM → CYCLE]\n")
+                else:
+                    print("  [false start — noise]\n")
+
+            time.sleep_ms(TRIGGER_INTERVAL_MS)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n  v1 gesture sandbox stopped")
+
+
+if MODE == "v1":
+    run_v1()
+else:
+    run_full()
