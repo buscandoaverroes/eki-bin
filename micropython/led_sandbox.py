@@ -82,28 +82,62 @@ STARTUP_COLOR = main.STARTUP_COLOR  # reuse the boot ceremony's colour language
 # All timings pulled from main's real config knobs (ACK_FLASH_MS,
 # main._GESTURE_WINDOW_MS, WAKE_JOLT_MS, WAKE_JOLT_BRIGHTNESS_MULT) so
 # this plays at the ACTUAL production budget, not a guessed one.
+#
+# Real-hardware feedback on the first live version (gesture_sandbox.py,
+# 2026-08-16): dropping ACK straight to black made it and CONFIRM read as
+# two disconnected blips with a stall in between, not one gesture. Fix:
+# ACK now settles onto a "continental shelf" — a dim but non-zero held
+# brightness — instead of 0, and CONFIRM rises FROM that shelf instead of
+# from black. Both the ACK peak and the shelf level also scale with tap
+# strength in the real (tap-triggered) version; there's no real strength
+# signal in this scripted preview, so PREVIEW_STRENGTH below stands in
+# for "a medium tap."
+#
+# ⚠ This preview's shelf will visibly dither, unlike the real thing: run()
+# redraws every scene continuously via the animated (gamma+dither)
+# _write_segment, every 30ms, for as long as the scene plays — fine for
+# every other scene here (all genuinely animated throughout), but a
+# HELD value redrawn repeatedly through the dithered path is exactly the
+# flicker failure mode _play_startup_burst's docstring warns about.
+# gesture_sandbox.py's real integration avoids this by writing the shelf
+# via a separate static (no gamma, no dither) path exactly ONCE, then
+# leaving it alone — see that file's _write_segment_static. Reproducing
+# that here would mean teaching run()'s generic redraw loop about static
+# holds, which every other scene doesn't need — not worth it for a shape/
+# timing preview. Judge the SHAPE and TIMING here; judge the actual
+# flicker-free feel on the real jar.
+PREVIEW_STRENGTH = 0.5  # stand-in for "a medium tap" — see gesture_sandbox.py's _tap_strength
+ACK_PEAK_FLOOR = 0.5
+ACK_PEAK_CEIL = 1.0
+SHELF_FLOOR = 0.08
+SHELF_CEIL = 0.25
+PREVIEW_PEAK_MULT = ACK_PEAK_FLOOR + PREVIEW_STRENGTH * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)
+PREVIEW_SHELF_MULT = SHELF_FLOOR + PREVIEW_STRENGTH * (SHELF_CEIL - SHELF_FLOOR)
 
 
-def ack_flash(phase_ms, ack_ms=main.ACK_FLASH_MS):
-    """Candidate A: a bare on/off flash — "felt contact," no verdict yet."""
-    return 1.0 if phase_ms < ack_ms else 0.0
+def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS):
+    """Candidate A: bare on/off — "felt contact," no verdict yet. Jumps to
+    peak_mult, holds, then drops to shelf_mult (not necessarily 0)."""
+    return peak_mult if phase_ms < ack_ms else shelf_mult
 
 
-def ack_flick(phase_ms, ack_ms=main.ACK_FLASH_MS * 3):
+def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS * 3):
     """Candidate B: a quick rise-then-dip instead of a flat flash — the
     "flick, down or up" idea, so ACK has its own shape distinct from
-    CONFIRM's rise/decay even at a glance. 3x ACK_FLASH_MS because a
-    flash that's ALSO a triangle needs a bit more than 50ms to read as a
-    shape rather than a blip."""
+    CONFIRM's rise/decay even at a glance. Dips to shelf_mult, not
+    necessarily 0 — see the "continental shelf" note above. 3x
+    ACK_FLASH_MS because a flash that's ALSO a triangle needs a bit more
+    than 50ms to read as a shape rather than a blip."""
     half = ack_ms / 2
     if phase_ms < half:
-        return phase_ms / half
+        return (phase_ms / half) * peak_mult
     if phase_ms < ack_ms:
-        return 1.0 - (phase_ms - half) / half
-    return 0.0
+        frac = (phase_ms - half) / half
+        return peak_mult + (shelf_mult - peak_mult) * frac
+    return shelf_mult
 
 
-def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT):
+def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
     """The CONFIRM jolt: same linear rise/decay shape as _play_startup_burst
     (_startup_burst_mult) — quick bright rise, slower decay — but scaled to
     fit WAKE_JOLT_MS's real 500ms budget instead of the boot ceremony's
@@ -111,27 +145,31 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     WAKE_JOLT_BRIGHTNESS_MULT instead of 1.0 so it reads as brighter than
     steady-state, not just another breathe cycle. Same rise:decay ratio as
     the boot burst (800:1500 ≈ event feels sudden, recovery feels calmer).
-    mult>1.0 during the rise/peak is expected and intentional — see
-    _write_segment's clamping above."""
+    Rises from start_mult (the shelf, not necessarily 0) and decays all
+    the way to 0 — the shelf said "still deciding," decaying past it to
+    black says "decided, done." mult>1.0 during the rise/peak is expected
+    and intentional — see _write_segment's clamping above."""
     rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
     decay_ms = total_ms - rise_ms
     if phase_ms < rise_ms:
-        return (phase_ms / rise_ms) * peak_mult
+        return start_mult + (phase_ms / rise_ms) * (peak_mult - start_mult)
     decay_elapsed = phase_ms - rise_ms
     if decay_elapsed >= decay_ms:
         return 0.0
     return peak_mult * (1.0 - decay_elapsed / decay_ms)
 
 
-def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=main._GESTURE_WINDOW_MS):
-    """The full ACK -> (silent capture window) -> CONFIRM sequence. gap_ms
-    defaults to the REAL capture window (main._GESTURE_WINDOW_MS, 1200ms)
-    deliberately — that silence in the middle isn't a rendering choice,
-    it's however long the recognizer actually takes to decide, so the
-    prototype should feel exactly as long as production will."""
+def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=main._GESTURE_WINDOW_MS,
+                 peak_mult=PREVIEW_PEAK_MULT, shelf_mult=PREVIEW_SHELF_MULT):
+    """The full ACK -> (silent capture window, now bridged by the shelf) ->
+    CONFIRM sequence. gap_ms defaults to the REAL capture window
+    (main._GESTURE_WINDOW_MS, 1200ms) deliberately — that gap isn't a
+    rendering choice, it's however long the recognizer actually takes to
+    decide, so the prototype should feel exactly as long as production
+    will."""
     if phase_ms < gap_ms:
-        return ack_fn(phase_ms)
-    return confirm_jolt(phase_ms - gap_ms)
+        return ack_fn(phase_ms, peak_mult=peak_mult, shelf_mult=shelf_mult)
+    return confirm_jolt(phase_ms - gap_ms, start_mult=shelf_mult)
 
 
 SCENES = {

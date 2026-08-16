@@ -88,6 +88,9 @@ LED_RENDER_INTERVAL_MS = 16  # throttle LED writes independent of the 4ms
 
 
 def _write_segment(start, end, color, mult=1.0):
+    """For a CHANGING value (rise/decay) — gamma + dither, same as
+    led_sandbox.py. Do not use this for a held/static value; see
+    _write_segment_static below for why."""
     level = main.BRIGHTNESS * main.gamma(mult)
     for logical in range(start, end):
         phys = main._physical(logical)
@@ -100,31 +103,88 @@ def _write_segment(start, end, color, mult=1.0):
             main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
 
 
-def ack_flash(phase_ms, ack_ms=main.ACK_FLASH_MS):
-    """Candidate A: a bare on/off flash. See led_sandbox.py for the A/B."""
-    return 1.0 if phase_ms < ack_ms else 0.0
+def _write_segment_static(start, end, color, mult):
+    """For a HELD value — the "continental shelf" between ACK and CONFIRM.
+    No gamma, no dither: same fix main.py's MARKER_BRIGHTNESS already
+    uses for the approach contract's idle ticks (see that comment). Two
+    separate reasons, not one: dithering flickers on a value that ISN'T
+    changing (nothing for the quantization noise to average against —
+    _play_startup_burst's docstring), and gamma pushes a low mult toward
+    invisible (gamma(0.15)≈0.014 at GAMMA=2.2) — exactly wrong for a
+    shelf whose entire point is staying visibly non-zero. Call this ONCE
+    per shelf, not every frame — nothing here needs re-rendering while
+    the value isn't moving."""
+    level = main.BRIGHTNESS * mult
+    for logical in range(start, end):
+        phys = main._physical(logical)
+        main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
 
 
-def ack_flick(phase_ms, ack_ms=main.ACK_FLASH_MS * 3):
-    """Candidate B (current default, ACK_FN below): a quick rise-then-dip —
-    distinct in shape from the CONFIRM jolt even at a glance."""
+# ── Tap-strength → brightness — "hardware-defined software" ─────────
+# A harder tap reads brighter, both on the ACK's peak (the "up") and on
+# the shelf it settles onto (the "down") — real-hardware testing found a
+# fixed-brightness response regardless of tap strength wastes a signal
+# that's sitting right there. Only `dev` (this trigger sample's deviation
+# from baseline) is available this early — `energy`, the recognizer's
+# real signal, isn't known until the capture window closes ~1.2s later.
+# Bounds below are a starting point, NOT validated against real capture
+# data — tune STRENGTH_MAX_DEV_MG live against what your own light vs.
+# hard tap actually reads as `dev` in the heartbeat/ACK line.
+STRENGTH_MIN_DEV_MG = main.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
+STRENGTH_MAX_DEV_MG = 400  # UNTESTED GUESS — a "hard" tap's dev, tune live
+ACK_PEAK_FLOOR = 0.5   # lightest-tap ACK brightness
+ACK_PEAK_CEIL = 1.0    # hardest-tap ACK brightness
+SHELF_FLOOR = 0.08     # lightest-tap shelf — dim, not dark
+SHELF_CEIL = 0.25      # hardest-tap shelf — stays well below ACK_PEAK_FLOOR
+#                        and WAKE_JOLT_BRIGHTNESS_MULT, so shelf never
+#                        blurs into either the ACK or the CONFIRM jolt
+
+
+def _tap_strength(dev_mg):
+    """0..1, how hard the triggering tap read at the moment of contact.
+    Clamped, linear."""
+    span = STRENGTH_MAX_DEV_MG - STRENGTH_MIN_DEV_MG
+    if span <= 0:
+        return 1.0
+    t = (dev_mg - STRENGTH_MIN_DEV_MG) / span
+    return max(0.0, min(1.0, t))
+
+
+def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS):
+    """Candidate A: bare on/off — jumps to peak_mult, holds; the caller's
+    static shelf write takes over once ack_ms elapses. See led_sandbox.py
+    for the A/B against ack_flick."""
+    return peak_mult if phase_ms < ack_ms else shelf_mult
+
+
+def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS * 3):
+    """Candidate B (current default, ACK_FN below): rises to peak_mult,
+    dips to shelf_mult — NOT necessarily 0 (the "continental shelf": a
+    real but hard, real-hardware test found dropping straight to black
+    made the ACK and CONFIRM read as two disconnected blips with a stall
+    in between rather than one continuous gesture). The caller is
+    responsible for holding shelf_mult statically once ack_ms elapses —
+    see _capture_window."""
     half = ack_ms / 2
     if phase_ms < half:
-        return phase_ms / half
+        return (phase_ms / half) * peak_mult
     if phase_ms < ack_ms:
-        return 1.0 - (phase_ms - half) / half
-    return 0.0
+        frac = (phase_ms - half) / half
+        return peak_mult + (shelf_mult - peak_mult) * frac
+    return shelf_mult
 
 
-def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT):
-    """WAKE's response: same linear rise/decay shape as _play_startup_burst,
-    scaled to WAKE_JOLT_MS's 500ms budget and peaking above 1.0 so it reads
-    brighter than steady-state. See led_sandbox.py's confirm_jolt for the
-    full rationale."""
+def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
+    """WAKE's response: rises from start_mult (continuing from wherever
+    the shelf left off, not necessarily 0) to peak_mult, then decays all
+    the way to 0 — the shelf's job was "still here, deciding"; decaying
+    past it to black says "decided, done." Same rise:decay ratio as
+    _play_startup_burst, scaled to WAKE_JOLT_MS's 500ms budget. See
+    led_sandbox.py's confirm_jolt for the full rise/decay rationale."""
     rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
     decay_ms = total_ms - rise_ms
     if phase_ms < rise_ms:
-        return (phase_ms / rise_ms) * peak_mult
+        return start_mult + (phase_ms / rise_ms) * (peak_mult - start_mult)
     decay_elapsed = phase_ms - rise_ms
     if decay_elapsed >= decay_ms:
         return 0.0
@@ -134,14 +194,17 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
 def cycle_flash(phase_ms, total_ms=main.CYCLE_TRANSITION_MS):
     """CYCLE's response: a quick flash + hard cut, not WAKE's fuller jolt —
     deliberately simpler, gesture-envelope.md §11's AWAKE→CYCLE decision
-    (no crossfade, same reasoning as CHASE's transition redesign)."""
+    (no crossfade, same reasoning as CHASE's transition redesign). Doesn't
+    bother continuing from the shelf the way confirm_jolt does — CYCLE is
+    meant to feel more abrupt, a plain jump reads that way regardless of
+    where it starts from."""
     return 1.0 if phase_ms < total_ms else 0.0
 
 
 ACK_FN = ack_flick  # swap to ack_flash to compare live, no re-upload needed
 
 
-def _render_confirm_jolt():
+def _render_confirm_jolt(shelf_mult=0.0):
     """Blocking, ~WAKE_JOLT_MS — same accepted-tradeoff category as the
     capture window itself. By the time this returns, real wall-clock time
     has passed matching the "waking" phase duration, so the main loop's
@@ -153,7 +216,8 @@ def _render_confirm_jolt():
         elapsed = time.ticks_diff(time.ticks_ms(), start)
         if elapsed >= main.WAKE_JOLT_MS:
             break
-        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, confirm_jolt(elapsed))
+        mult = confirm_jolt(elapsed, start_mult=shelf_mult)
+        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, mult)
         main.np.write()
         time.sleep_ms(LED_RENDER_INTERVAL_MS)
     main.clear()
@@ -172,7 +236,7 @@ def _render_cycle_flash():
     main.clear()
 
 
-def _capture_window(i2c, addr, start_ms, ack_fn=None):
+def _capture_window(i2c, addr, start_ms, ack_fn=None, ack_ms=0, shelf_mult=0.0):
     """Local, tunable capture loop — deliberately NOT main._capture_gesture_
     window, so its timing can be experimented with independently. Still
     calls main._imu_read_accel_raw (the real HAL), never re-derives the
@@ -180,19 +244,30 @@ def _capture_window(i2c, addr, start_ms, ack_fn=None):
 
     ack_fn, if given, renders live during the capture window instead of
     after it — the ACK has to happen here, this is the only code running
-    while the real recognizer hasn't decided anything yet. Rendering is
-    throttled to LED_RENDER_INTERVAL_MS, independent of the 4ms sample
-    rate the recognizer's accuracy numbers were measured at."""
+    while the real recognizer hasn't decided anything yet. The rise/dip
+    (0..ack_ms) is animated (throttled to LED_RENDER_INTERVAL_MS,
+    independent of the 4ms sample rate the recognizer's accuracy numbers
+    were measured at); once it settles, the shelf is written exactly ONCE
+    via the static path and left alone for the rest of the window — see
+    _write_segment_static for why re-writing a static value every frame
+    is exactly the flicker failure mode to avoid."""
     samples = []
     last_render = start_ms
+    shelf_written = False
     while True:
         now = time.ticks_ms()
         elapsed = now - start_ms
         samples.append((elapsed,) + main._imu_read_accel_raw(i2c, addr))
-        if ack_fn is not None and now - last_render >= LED_RENDER_INTERVAL_MS:
-            _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed))
-            main.np.write()
-            last_render = now
+        if ack_fn is not None:
+            if elapsed < ack_ms:
+                if now - last_render >= LED_RENDER_INTERVAL_MS:
+                    _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed))
+                    main.np.write()
+                    last_render = now
+            elif not shelf_written:
+                _write_segment_static(0, main.NUM_LEDS, main.STARTUP_COLOR, shelf_mult)
+                main.np.write()
+                shelf_written = True
         if elapsed >= main._GESTURE_WINDOW_MS:
             break
         time.sleep_ms(TRIGGER_INTERVAL_MS)
@@ -357,8 +432,18 @@ def run_v1():
 
             if triggered:
                 state.acknowledge()
-                print("  [ACK] felt contact — capturing…")
-                samples = _capture_window(i2c, addr, now_ms, ack_fn=ACK_FN)
+                dev = abs(mag - baseline)
+                strength = _tap_strength(dev)
+                peak_mult = ACK_PEAK_FLOOR + strength * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)
+                shelf_mult = SHELF_FLOOR + strength * (SHELF_CEIL - SHELF_FLOOR)
+                ack_ms = main.ACK_FLASH_MS * 3
+                print(f"  [ACK] felt contact (dev={dev:.0f}mg, strength={strength:.2f}) — capturing…")
+                samples = _capture_window(
+                    i2c, addr, now_ms,
+                    ack_fn=lambda ph: ACK_FN(ph, peak_mult=peak_mult, shelf_mult=shelf_mult, ack_ms=ack_ms),
+                    ack_ms=ack_ms,
+                    shelf_mult=shelf_mult,
+                )
                 trigger_buffer = []
                 features = main.extract_gesture_features(samples)
                 valid = main.classify_valid_input(features)
@@ -368,15 +453,15 @@ def run_v1():
                 response = state.resolve(now_ms, valid)
                 if response == "wake":
                     print("  [CONFIRM → WAKE]\n")
-                    _render_confirm_jolt()
+                    _render_confirm_jolt(shelf_mult=shelf_mult)
                 elif response == "cycle":
                     print("  [CONFIRM → CYCLE]\n")
                     _render_cycle_flash()
                 else:
                     print("  [false start — noise]\n")
-                    main.clear()  # ack_fn already faded to 0 well before the
-                    #                capture window closed — this just makes
-                    #                sure, no confirm jolt for a rejected tap
+                    main.clear()  # hard cut from the shelf to black —
+                    #                "decided: no," same reasoning as
+                    #                confirm_jolt's decay-to-0 for a "yes"
 
             time.sleep_ms(TRIGGER_INTERVAL_MS)
     except KeyboardInterrupt:

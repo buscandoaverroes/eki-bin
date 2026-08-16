@@ -517,9 +517,50 @@ just a hard cut to black. Still prints every transition — `run_v1()`
 stays the recognizer/state-machine regression check even with real
 rendering wired in.
 
-**Not yet done:** real-hardware feel-testing of the wired-up jolt
-(timing, whether the ACK/CONFIRM shapes read as distinct, whether
-`WAKE_JOLT_MS`'s 500ms budget still feels "too slow" the way the full
-boot burst was flagged), and wiring any of this into `main.py`'s actual
-production loop — `gesture_sandbox.py` is still a sandbox, not the real
-thing.
+**First real-hardware feedback (2026-08-16):** the wired-up jolt was
+tested on the actual jar. `WAKE_JOLT_MS`'s 500ms budget did NOT feel
+slow — no change needed there. But ACK and CONFIRM read as **two
+disconnected blips, almost too distinct**, with the ~1.2s gap between
+them leaning toward a stall rather than a pause. Root cause: ACK was
+dropping straight to black after its flick, so the gap looked like
+"nothing is happening" instead of "it's still here, deciding."
+
+**Fix — the "continental shelf" + tap-strength scaling.** Two changes,
+both in `gesture_sandbox.py` (and mirrored as a scripted preview in
+`led_sandbox.py`, see that file's caveat about dithering in the preview
+specifically):
+
+- **ACK no longer settles to 0.** It dips to a dim-but-non-zero "shelf"
+  brightness instead, held statically for the rest of the capture
+  window, bridging ACK and CONFIRM into one continuous gesture rather
+  than two isolated events. `CONFIRM`'s jolt then rises FROM the shelf,
+  not from black, and decays all the way to 0 — the shelf says "still
+  deciding," decaying past it says "decided, done."
+- **Tap strength now scales both the ACK peak and the shelf level** —
+  `_tap_strength()` maps `dev` (the triggering sample's deviation from
+  baseline — the only signal available this early; the recognizer's real
+  `energy` isn't known until the capture window closes) to 0..1, which
+  sets both `ACK_PEAK_FLOOR..CEIL` (the "up") and `SHELF_FLOOR..CEIL`
+  (the "down") — a harder tap reads brighter on both ends, not just a
+  fixed response regardless of how hard you actually tapped.
+  `STRENGTH_MAX_DEV_MG` is an **untested guess (400mg)** — tune it live
+  against what a real light vs. hard tap actually reads as `dev`.
+
+**Avoiding flicker was the binding constraint, not an afterthought.** A
+held/static value redrawn repeatedly through the normal gamma+dither
+path is exactly the failure mode `_play_startup_burst`'s docstring warns
+about (dithering has nothing to average against when the value isn't
+changing) — and gamma alone would have crushed a low shelf mult toward
+invisible (`gamma(0.15)≈0.014` at `GAMMA=2.2`), defeating the whole
+point. Fix: the shelf is written via a separate static path (no gamma,
+no dither — same fix `MARKER_BRIGHTNESS` already uses for the approach
+contract's idle ticks) exactly ONCE when the ACK settles, then left
+alone until CONFIRM/CYCLE/rejection overwrites it. The rise/dip and the
+jolt itself stay on the normal animated (gamma+dither) path — they're
+genuinely changing, so dithering helps there instead of hurting.
+
+**Not yet done:** real-hardware feel-testing of the shelf/strength
+revision itself (does it actually fix the "two disconnected blips"
+feeling; whether `STRENGTH_MAX_DEV_MG=400` is remotely close), and
+wiring any of this into `main.py`'s actual production loop —
+`gesture_sandbox.py` is still a sandbox, not the real thing.
