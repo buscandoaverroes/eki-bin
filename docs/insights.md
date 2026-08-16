@@ -538,3 +538,91 @@ anything validated at n<30 or in a single session as a hypothesis, not a
 result** — this cost real rework more than once here, and the fix each
 time was the same: collect more, pool across sessions, and only trust
 numbers that hold up when re-checked.
+
+---
+
+## 10. ACK/CONFIRM LED jolt — real-hardware iteration (2026-08-16)
+
+§9's fuller gesture vocabulary (position, flick-vs-tap, etc.) didn't get
+built on directly — real-hardware testing the day after §9 was written
+found that every one of its harder problems was *additional*
+discrimination on top of tap-vs-noise, which was never actually
+unreliable (95-98%+). Scoped down instead to a minimal "light switch"
+contract: tap wakes, tap cycles, timeout sleeps. Full design + rationale:
+`docs/contracts/gesture-envelope.md` §11 ("Scope pivot"). This section is
+the field-note synthesis of what came after that pivot — designing and
+tuning the LED response to that contract, across five real-hardware
+rounds in one day, once `main.py`'s recognizer + state machine were
+already validated on their own.
+
+**The core UX finding — brightness has to bridge the gap, not just mark
+the endpoints:** the two-phase design (instant ACK the moment a tap is
+felt, ~1.2s later a CONFIRM once the recognizer has a verdict) is
+necessary — that gap is however long the recognizer actually takes to
+decide, not a rendering choice, and no capture window shorter than that
+stays accurate (§11's own latency/accuracy table: ~94-98% at 1200ms down
+to ~70% at 50ms). But the *naive* rendering of that gap — ACK flashes,
+drops to black, CONFIRM flashes later — read as two disconnected blips
+with a stall in between, not one continuous gesture. Fix: ACK settles
+onto a dim-but-non-zero "continental shelf," held for the rest of the
+gap, that CONFIRM then rises *from* instead of from black. The shelf is
+doing real communicative work ("still here, deciding") that a hard cut to
+off can't.
+
+**"Hardware-defined software" as a genuine UX win, not just a slogan:**
+tap strength (`dev`, the triggering sample's deviation from baseline —
+the only signal available before `energy` is known) scales both the ACK
+peak *and* the shelf level, so a harder tap reads brighter on both the
+"up" and the "down." Took real tuning to land, though — the brightness
+range needed widening **three separate times** as testing moved from a
+bare LED strip to inside the actual frosted jar: 0.5-1.0x (2x spread,
+imperceptible) → 0.4-1.6x (4x, worked bare) → 0.35-2.2x (in-bottle, the
+frosted glass compresses contrast a bare strip never showed) → pulled
+back to 0.35-6.0x after a saturation bug was found (see below). **The
+in-bottle jump is the one to remember**: a diffuser you haven't tested
+through yet will always make a bare-strip-tuned range look flatter than
+it is — 駅瓶's whole premise is the frosted glass, so bare-strip numbers
+were never more than a rough starting point.
+
+**Two real rendering bugs, both traced to the same root cause — gamma
+correction misapplied to a low-brightness or held value:**
+- A brightness ceiling that looked fine in isolated tests (`10.0x`)
+  turned out to **clamp every hard tap to identical pure white** past
+  roughly 65% strength — losing exactly the differentiation the whole
+  feature exists for. Not obvious from watching single taps one at a
+  time; only showed up comparing two different hard taps side by side.
+  Fixed, then **hardened with a pytest regression test**
+  (`tests/test_gesture_sandbox.py`) checked against the actual
+  historical bad value — the saturation point is a pure property of the
+  brightness constants + `BRIGHTNESS`/`STARTUP_COLOR`, fully verifiable
+  without hardware, unlike whether real taps' `dev` values *cluster* in
+  practice (that's empirical, stays a documented on-hardware thing to
+  watch, not something a unit test can know).
+- The ACK's descent (rendered through the normal gamma+dither path)
+  visibly dove to near-black *before* reaching the shelf's own
+  (deliberately linear, un-gamma'd) brightness, then jumped back up once
+  the static shelf write took over — "dive underground to 0, then back
+  up to a plateau." Root cause: `gamma(mult)` for `mult` below roughly
+  0.3 is *much* smaller than `mult` itself, and the ACK's whole range
+  sat mostly in that zone. Fixed by rendering the whole ACK shape without
+  gamma correction — the same fix already used for the shelf itself
+  (`MARKER_BRIGHTNESS`'s precedent, approach-contract.md), just extended
+  to cover the animated approach to that value, not only the held value.
+  **General lesson for this codebase, worth stating past this one
+  feature:** gamma correction is for genuinely wide, actively-perceived
+  brightness swings — apply it reflexively to a value that's mostly
+  *low* or *about to be held static*, and it actively works against you
+  instead of smoothing anything.
+
+**A real hardware-fragility finding, not a firmware bug:** `OSError EIO`
+from the IMU read, twice, both correlated with physical handling (moving
+the bottle, a fumbled tap) — the same "connection shaken loose by
+tapping" `vibration_sandbox.py` diagnosed first (§8). An initial read
+that it correlated with *light* taps specifically didn't hold up on more
+data — another small-sample-mislead instance, see above. `gesture_sandbox.py`
+now catches it, skips the one bad sample, and only escalates to a visible
+LED cue (a new, distinct persistent-breathe colour) if a read hasn't
+succeeded in over a second — a deliberate consequence of
+`led-status-messages.md`'s "errors are persistent and unambiguous, not
+almost-normal" principle: a brief flash for a single dropped sample would
+have worked against that, not honored it.

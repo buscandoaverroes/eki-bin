@@ -3,16 +3,23 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.4 — wake/sleep interaction layer (branch `feature/wake-interaction-layer`, local only)
+## Current phase: gesture envelope (branch `feature/gesture-envelope`, not yet pushed)
 
-> `feature/positional-display` and `feature/startup-sequence` are both merged
-> to `dev`. Current branch **implements** the wake/sleep + LED status-message
-> designs (`docs/contracts/wake-interaction.md`,
-> `docs/contracts/led-status-messages.md`) — 136 tests passing, but **not yet
-> pushed** (kept local per instruction) and **not yet on real hardware**. No
-> IMU is physically wired, so the actual sensor read is a stub; gated behind
-> `WAKE_INTERACTION_ENABLED` (default `False`) so this can't affect any
-> existing deployment until a real sensor exists to back it up.
+> **Supersedes the wake/sleep interaction layer below** — same sensor
+> (AE-LSM6DSV16X), a redesigned interaction model. Real-hardware testing
+> (many sessions, two bottles, a sandbox toolchain built specifically to
+> answer "what can this hardware actually support") found the original
+> multi-gesture wake-interaction design's harder pieces (position
+> disambiguation, flick-vs-handling) genuinely unreliable, while tap-vs-noise
+> discrimination alone was consistently strong (95-98%+). Scoped down to a
+> minimal "light switch"-reliable contract instead of the fuller vocabulary —
+> full rationale in `docs/contracts/gesture-envelope.md`'s "Scope pivot"
+> callout and §11. IMU is now **physically wired and extensively validated**
+> on the Pico 2W + AE-WS2812B-STICK8 (not the stub `wake-interaction.md`
+> describes) — see the new subsection below, after "Wake/sleep interaction
+> layer," for the full account. 185 tests passing. **Not yet pushed**, **not
+> yet on the XIAO/full LED tape/actual bottle** (that's the next step before
+> merge to `dev`).
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -469,7 +476,14 @@ byte-identical.
       tests total, all passing
 - [ ] **Not yet validated on real hardware** — host tests only so far
 
-### Wake/sleep interaction layer (IMU tap gestures) ✅ implemented, local only
+### Wake/sleep interaction layer (IMU tap gestures) — superseded, see below
+
+⚠ **Superseded by the "Gesture envelope" section immediately below.** Kept
+here as history, not deleted — the state-machine/safety-gate patterns
+(`WAKE_INTERACTION_ENABLED`-style opt-in gating, cooperative-loop
+concurrency) carried forward correctly into the new design; what changed
+is the *gesture vocabulary* itself, after real hardware showed the
+multi-gesture plan below was more than this sensor could reliably support.
 
 Branch: `feature/wake-interaction-layer` (not pushed, per instruction).
 Full design: `docs/contracts/wake-interaction.md`. Not the simple "tap
@@ -521,6 +535,85 @@ indistinguishable from a registered one).
       `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` are untested guesses pending a
       real sensor
 - [ ] **Not pushed to `dev`/`main`** — kept local per instruction
+
+### Gesture envelope (IMU tap gestures, v2) ✅ implemented, extensively real-hardware validated, not yet pushed
+
+Branch: `feature/gesture-envelope` (not pushed). Full design + the complete
+real-hardware iteration log: `docs/contracts/gesture-envelope.md` (§11
+specifically covers everything below in full detail — this is the
+proportionate summary). Field-note synthesis: `docs/insights.md` §8-9.
+
+**The sensor is now really wired**, not the stub the section above
+describes — AE-LSM6DSV16X on the Pico 2W (`pinouts/pico2w.md`, now
+✅ Verified, combined IMU+LED wiring documented with an explicit
+3.3V/5V power-rail safety note). A purpose-built sandbox toolchain
+(`micropython/vibration_sandbox.py`, `imu_test.py`, `handling_test.py`,
+`orientation_test.py`, plus host-side `scripts/analyze_taps.py` /
+`prepare_tap_dataset.py` / `train_tap_classifier.py`) ran across many
+sessions and two bottles to empirically determine what this hardware could
+actually support, rather than assuming the original design's harder
+gestures (position disambiguation, flick-vs-handling) would just work.
+They didn't hold up reliably at scale; tap-vs-noise did (95-98%+,
+98.4% for tap-vs-all-pooled-handling-noise). **Scope pivot:** rather than
+force the fuller multi-gesture vocabulary, built a minimal "light
+switch"-reliable contract instead — tap wakes, tap cycles, timeout
+sleeps, no fourth gesture.
+
+- [x] **`classify_valid_input`** — energy-threshold tap-vs-noise
+      recognizer, pure, host-tested, 98.4% lab accuracy
+- [x] **`_TapCycleState`** — two-phase ACK/CONFIRM state machine
+      (ASLEEP→WAKING→SETTLING→AWAKE; tap=WAKE when asleep, tap=CYCLE when
+      awake, timeout back to ASLEEP), pure, host-tested
+- [x] **`micropython/gesture_sandbox.py`** — new sandbox, `import main`s
+      the real recognizer/state-machine (never re-derives it) but tunes
+      the trigger/capture timing independently (240Hz/4ms vs. `main.py`'s
+      debug loop's 16ms, a real cause of missed taps found on hardware)
+- [x] **Real-hardware validation, terminal-only first:** 10/10 consecutive
+      real taps correctly resolved; the one live miss matched the
+      already-known 3/180 failure-mode rate, not a new problem; `SETTLING`
+      correctly filters taps landing right after `WAKE`
+- [x] **LED jolt UX, then wired to a real tap** — ACK (instant, live
+      during the ~1.2s capture window itself, before the recognizer has a
+      verdict) → CONFIRM (WAKE gets a fuller rise/decay jolt; CYCLE gets a
+      simpler flash+cut). Five real-hardware iteration rounds refined this
+      from a first pass to something confirmed working well in-bottle:
+      the "continental shelf" (ACK settles to a dim held brightness
+      instead of black, so ACK and CONFIRM read as one gesture instead of
+      two disconnected blips with a stall between them); tap-strength
+      scaling (`dev` at trigger time — the only signal available before
+      `energy` is known — drives both the ACK peak and the shelf level,
+      "hardware-defined software"); a real saturation bug (an
+      over-widened brightness ceiling clamped every hard tap to
+      identical pure white, silently losing differentiation — found, fixed,
+      and **hardened with regression tests**, `tests/test_gesture_sandbox.py`);
+      a real rendering bug (`gamma()` crushing the ACK's low-range descent
+      to near-black before the shelf's linearly-rendered brightness took
+      over — "dive underground to 0, then back up to a plateau"); and
+      non-interactive I2C error resilience (a jostled breadboard
+      connection — same finding `vibration_sandbox.py` made first — no
+      longer crashes the whole script; a sustained failure escalates to a
+      persistent-breathe LED cue, matching `led-status-messages.md`'s own
+      "errors are persistent and unambiguous" principle rather than a
+      brief flash that would work against it)
+- [x] 185 tests passing (`tests/test_gesture_envelope.py`,
+      `tests/test_gesture_sandbox.py`)
+- [ ] **Not yet on the target hardware** — everything above is Pico 2W +
+      AE-WS2812B-STICK8 (8 LEDs, bare strip). The actual target is the
+      XIAO ESP32-C3 + full LED tape, inside the real frosted bottle —
+      genuinely different diffusion/contrast characteristics already
+      proven to matter (the bare-strip-tuned brightness range needed
+      widening again once first tested in-bottle). This is the explicit
+      next step before merge
+- [ ] **Not wired into `main.py`'s real production loop** — the jolt only
+      exists in `gesture_sandbox.py`'s sandbox integration so far;
+      `_run_gesture_debug_loop` (the terminal-only §4-10 exerciser) and
+      the real main loop are both untouched by this work
+- [ ] **`grab_and_tap` stays parked** — inconsistent across sessions,
+      root cause unconfirmed, not built on (`docs/insights.md` §9)
+- [ ] **Station-cycling display logic** — CYCLE needs a "current station
+      index" concept that doesn't exist anywhere in `main.py` yet; a real,
+      separate piece of scope, not resolved by any of the above
+- [ ] **Not pushed to `dev`/`main`**
 
 ### LED status messages (errors + acknowledgments) ✅ implemented, local only
 
