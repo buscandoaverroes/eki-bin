@@ -30,6 +30,17 @@
 # tap/flick/None call — that's the "other model data" this exists to show:
 # WHY a classification happened, not just what it was.
 #
+# run_v1() also drives the real LED stick now — gesture-envelope.md §11's
+# jolt, live off a real tap instead of a scripted timer. The shape
+# functions (_write_segment, ack_flick, confirm_jolt) are DUPLICATED from
+# led_sandbox.py, not imported — `mpremote run` only transfers the one
+# script named on the command line (see the module-level caveat below),
+# and neither sandbox script is part of `make upload`'s payload, so
+# `import led_sandbox` would fail on-device with no led_sandbox.py there
+# to find. led_sandbox.py stays the place to compare candidate shapes
+# side by side (e.g. jolt_ack_flash_vs_flick); this file is where the
+# chosen shape gets tested against a real tap, on the real jar.
+#
 # ⚠ Same input()-needs-a-real-REPL caveat as vibration_sandbox.py — no
 # input() here though (no human arming needed, the trigger runs on its
 # own), so plain `mpremote run` / `make run-file` works fine.
@@ -66,16 +77,122 @@ for _name, _value in THRESHOLD_OVERRIDES.items():
     setattr(main, _name, _value)
 
 
-def _capture_window(i2c, addr, start_ms):
+# ── LED rendering — see led_sandbox.py for the design/comparison work ──
+# Same _write_segment as led_sandbox.py (bypasses the arc abstraction,
+# still goes through the real gamma/dither/_physical pipeline). mult can
+# exceed 1.0 here (the CONFIRM jolt peaks at WAKE_JOLT_BRIGHTNESS_MULT) —
+# see led_sandbox.py's _write_segment for why the clamping matters.
+LED_RENDER_INTERVAL_MS = 16  # throttle LED writes independent of the 4ms
+#                              sample rate — matches main.py's FRAME_MS,
+#                              no reason to write() faster than a frame
+
+
+def _write_segment(start, end, color, mult=1.0):
+    level = main.BRIGHTNESS * main.gamma(mult)
+    for logical in range(start, end):
+        phys = main._physical(logical)
+        if main.DITHER:
+            res = main._residual[phys]
+            main.np[phys] = tuple(
+                main._quantize(color[ch] * level, res, ch) for ch in range(3)
+            )
+        else:
+            main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
+
+
+def ack_flash(phase_ms, ack_ms=main.ACK_FLASH_MS):
+    """Candidate A: a bare on/off flash. See led_sandbox.py for the A/B."""
+    return 1.0 if phase_ms < ack_ms else 0.0
+
+
+def ack_flick(phase_ms, ack_ms=main.ACK_FLASH_MS * 3):
+    """Candidate B (current default, ACK_FN below): a quick rise-then-dip —
+    distinct in shape from the CONFIRM jolt even at a glance."""
+    half = ack_ms / 2
+    if phase_ms < half:
+        return phase_ms / half
+    if phase_ms < ack_ms:
+        return 1.0 - (phase_ms - half) / half
+    return 0.0
+
+
+def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT):
+    """WAKE's response: same linear rise/decay shape as _play_startup_burst,
+    scaled to WAKE_JOLT_MS's 500ms budget and peaking above 1.0 so it reads
+    brighter than steady-state. See led_sandbox.py's confirm_jolt for the
+    full rationale."""
+    rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
+    decay_ms = total_ms - rise_ms
+    if phase_ms < rise_ms:
+        return (phase_ms / rise_ms) * peak_mult
+    decay_elapsed = phase_ms - rise_ms
+    if decay_elapsed >= decay_ms:
+        return 0.0
+    return peak_mult * (1.0 - decay_elapsed / decay_ms)
+
+
+def cycle_flash(phase_ms, total_ms=main.CYCLE_TRANSITION_MS):
+    """CYCLE's response: a quick flash + hard cut, not WAKE's fuller jolt —
+    deliberately simpler, gesture-envelope.md §11's AWAKE→CYCLE decision
+    (no crossfade, same reasoning as CHASE's transition redesign)."""
+    return 1.0 if phase_ms < total_ms else 0.0
+
+
+ACK_FN = ack_flick  # swap to ack_flash to compare live, no re-upload needed
+
+
+def _render_confirm_jolt():
+    """Blocking, ~WAKE_JOLT_MS — same accepted-tradeoff category as the
+    capture window itself. By the time this returns, real wall-clock time
+    has passed matching the "waking" phase duration, so the main loop's
+    next state.advance() call naturally finds it already elapsed — no
+    separate timer needed to keep the render and the state machine in
+    sync."""
+    start = time.ticks_ms()
+    while True:
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        if elapsed >= main.WAKE_JOLT_MS:
+            break
+        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, confirm_jolt(elapsed))
+        main.np.write()
+        time.sleep_ms(LED_RENDER_INTERVAL_MS)
+    main.clear()
+
+
+def _render_cycle_flash():
+    """Blocking, ~CYCLE_TRANSITION_MS — see cycle_flash above."""
+    start = time.ticks_ms()
+    while True:
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        if elapsed >= main.CYCLE_TRANSITION_MS:
+            break
+        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, cycle_flash(elapsed))
+        main.np.write()
+        time.sleep_ms(LED_RENDER_INTERVAL_MS)
+    main.clear()
+
+
+def _capture_window(i2c, addr, start_ms, ack_fn=None):
     """Local, tunable capture loop — deliberately NOT main._capture_gesture_
     window, so its timing can be experimented with independently. Still
     calls main._imu_read_accel_raw (the real HAL), never re-derives the
-    I2C register logic itself."""
+    I2C register logic itself.
+
+    ack_fn, if given, renders live during the capture window instead of
+    after it — the ACK has to happen here, this is the only code running
+    while the real recognizer hasn't decided anything yet. Rendering is
+    throttled to LED_RENDER_INTERVAL_MS, independent of the 4ms sample
+    rate the recognizer's accuracy numbers were measured at."""
     samples = []
+    last_render = start_ms
     while True:
         now = time.ticks_ms()
         elapsed = now - start_ms
         samples.append((elapsed,) + main._imu_read_accel_raw(i2c, addr))
+        if ack_fn is not None and now - last_render >= LED_RENDER_INTERVAL_MS:
+            _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed))
+            main.np.write()
+            last_render = now
         if elapsed >= main._GESTURE_WINDOW_MS:
             break
         time.sleep_ms(TRIGGER_INTERVAL_MS)
@@ -186,10 +303,11 @@ def run_full():
 def run_v1():
     """Exercises classify_valid_input + _TapCycleState — the minimal
     tap-or-noise, two-phase ACK/CONFIRM contract, gesture-envelope.md §11.
-    No LED jolt animation exists yet (timing is a feel question to iterate
-    separately, once this logic is confirmed) — this prints ACK/CONFIRM/
-    WAKE/CYCLE/TIMEOUT so the recognizer + state machine can be validated
-    before there's any animation to wire them to."""
+    Drives the real LED stick now too: ACK_FN renders live during the
+    capture window, then WAKE gets the fuller confirm_jolt or CYCLE gets
+    the simpler cycle_flash once the verdict is known. Still prints every
+    transition — this stays the recognizer/state-machine regression check
+    even with real rendering wired in."""
     i2c, addr = main._get_imu()
     if addr is None:
         print("  ✗ No LSM6DSV16X found — run imu_test.py first to debug wiring")
@@ -240,7 +358,7 @@ def run_v1():
             if triggered:
                 state.acknowledge()
                 print("  [ACK] felt contact — capturing…")
-                samples = _capture_window(i2c, addr, now_ms)
+                samples = _capture_window(i2c, addr, now_ms, ack_fn=ACK_FN)
                 trigger_buffer = []
                 features = main.extract_gesture_features(samples)
                 valid = main.classify_valid_input(features)
@@ -250,10 +368,15 @@ def run_v1():
                 response = state.resolve(now_ms, valid)
                 if response == "wake":
                     print("  [CONFIRM → WAKE]\n")
+                    _render_confirm_jolt()
                 elif response == "cycle":
                     print("  [CONFIRM → CYCLE]\n")
+                    _render_cycle_flash()
                 else:
                     print("  [false start — noise]\n")
+                    main.clear()  # ack_fn already faded to 0 well before the
+                    #                capture window closed — this just makes
+                    #                sure, no confirm jolt for a rejected tap
 
             time.sleep_ms(TRIGGER_INTERVAL_MS)
     except KeyboardInterrupt:

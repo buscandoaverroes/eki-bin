@@ -497,11 +497,29 @@ of, §4-10's machinery) and confirmed via `gesture_sandbox.py`'s `MODE =
 - **`SETTLING` correctly filters taps during the debounce window** — no
   spurious `CYCLE` from a tap landing right after `WAKE`.
 
-**Not yet done:** any LED rendering — this validated the recognizer and
-state machine purely via terminal output, deliberately before any jolt
-animation exists (§11's "ship the mechanism before the content," same
-precedent `wake-interaction.md` set for its own secondary action). Next
-step is the ACK/CONFIRM jolt animation itself, prototyped in
-`led_sandbox.py` before being wired into `main.py`'s real loop — the
-current terminal-only `run_v1()` stays as the recognizer/state-machine
-regression check even once real rendering exists.
+**LED rendering wired (2026-08-16).** Candidate jolt shapes (`ack_flash`,
+`ack_flick`, `confirm_jolt`) were prototyped as scripted, non-gesture-
+triggered scenes in `led_sandbox.py` first (`jolt_ack_flash_vs_flick`,
+`jolt_double_hill_full`), then duplicated into `gesture_sandbox.py`'s
+`run_v1()` — deliberately duplicated, not imported, since neither
+sandbox script is part of `make upload`'s payload and `mpremote run`
+only transfers the one file named on the command line, so
+`import led_sandbox` would fail on-device. `run_v1()` now renders live
+off a real tap: `ACK_FN` (`ack_flick` by default) plays during the
+~1.2s capture window itself — the only code running while the
+recognizer hasn't decided anything yet — then, once the verdict is
+known, `WAKE` gets the fuller `confirm_jolt` (rise/decay scaled to
+`WAKE_JOLT_MS`, peaking at `WAKE_JOLT_BRIGHTNESS_MULT`) and `CYCLE` gets
+the simpler `cycle_flash` (flash + hard cut, `CYCLE_TRANSITION_MS` —
+deliberately not the fuller jolt, per this section's earlier
+AWAKE→CYCLE decision). A rejected tap gets no confirm animation at all,
+just a hard cut to black. Still prints every transition — `run_v1()`
+stays the recognizer/state-machine regression check even with real
+rendering wired in.
+
+**Not yet done:** real-hardware feel-testing of the wired-up jolt
+(timing, whether the ACK/CONFIRM shapes read as distinct, whether
+`WAKE_JOLT_MS`'s 500ms budget still feels "too slow" the way the full
+boot burst was flagged), and wiring any of this into `main.py`'s actual
+production loop — `gesture_sandbox.py` is still a sandbox, not the real
+thing.
