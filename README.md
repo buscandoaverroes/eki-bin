@@ -54,10 +54,19 @@ eki-bin/
 │
 ├── docs/
 │   ├── concept.md                ← design rationale (the "why")
-│   ├── hardware.md               ← parts in hand, voltage compatibility
+│   ├── design-principles.md      ← guiding principles (some stubs)
+│   ├── hardware.md               ← parts in hand, voltage compatibility, build technique
 │   ├── roadmap.md                ← v1.1/v1.2 hardware plan, form-factor threads
 │   ├── insights.md               ← field notes, why-decisions, parked ideas
+│   ├── nfc-provisioning.md       ← NFC provisioning workstream (bench record + current path)
 │   ├── rust-migration.md         ← V1 → V2 (MicroPython → Embassy) map
+│   ├── reflections/              ← periodic "how's it going" write-ups
+│   │
+│   │   ── proposals / research (not decided, not scheduled) ──
+│   ├── glass-stone-concept.md    ← eki-ishi: alternate "glass stone on a stand" form factor
+│   ├── jjy-time-signal.md        ← JJY radio time sync: requirements + sourcing memo
+│   ├── surface-as-input.md       ← could the object's own surface be the input layer?
+│   │
 │   └── contracts/
 │       ├── schedule-json.md      ← schema for the generated schedule
 │       ├── config.md             ← schema for config.py fields

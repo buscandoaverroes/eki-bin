@@ -227,11 +227,14 @@ tag reads fine — another reason cork is the chosen first closure.
 
 ## IMU — LSM6DSV16X (wake/sleep interaction layer)
 
-**Purpose:** tap detection for the wake/sleep interaction layer — see
-`docs/contracts/wake-interaction.md`. **In hand as of 2026-08-03**; not yet
-wired to a board. Firmware side (`_imu_tap_detected()` in `main.py`) is
-still a stub — see the bring-up sketch below, `micropython/imu_test.py`, for
-the first real I²C contact with the chip.
+**Purpose:** tap-gesture detection — see `docs/contracts/gesture-envelope.md`
+(the current design; supersedes `wake-interaction.md`'s original
+multi-gesture plan). **In hand as of 2026-08-03**, and as of 2026-08-16
+**wired and extensively validated on the Pico 2W** — real recognizer, real
+LED response, not the `_imu_tap_detected()` stub `wake-interaction.md`
+describes. Wiring: `pinouts/pico2w.md` (including combined IMU+LED wiring
+and its 3.3V/5V power-rail warning). Bring-up: `micropython/imu_test.py`.
+Not yet wired on the XIAO — that's the pending next step.
 
 **Part:** ST **LSM6DSV16X** — 6-axis (3-axis accelerometer + 3-axis
 gyroscope, no magnetometer). Bought as Akizuki's **AE-LSM6DSV16X** breakout
@@ -279,15 +282,49 @@ Akizuki product page — it doesn't state these):
 was in. `micropython/imu_test.py` is the bring-up smoke test — scans the
 bus, confirms `WHO_AM_I`, enables the accelerometer, and streams X/Y/Z so
 you can watch numbers move when you tap or tilt the board. Deliberately
-does **not** attempt tap classification itself (that's `main.py`'s job,
-still stubbed) — this script's only job is proving the chip talks.
+does **not** attempt tap classification itself — that's `main.py`'s job
+(`classify_valid_input` / `extract_gesture_features`, real and host-tested
+as of 2026-08-16); this script's only job is proving the chip talks.
 
-**Wiring (I²C):** not yet done. Plan: Pico 2W's `GP0`/`GP1` (already
-reserved as I²C0 in `pinouts/pico2w.md` — that table previously named the
-reserved sensor "MPU-6050", an older placeholder from early V2 planning;
-corrected to LSM6DSV16X) for the first bring-up pass, since it's already on
-the breadboard; XIAO's `D4`/`D5` (`GPIO6`/`GPIO7`, same pins already used
-for the ST25DV above) for the eventual real integration into the gift-jar
-build. The smoke test itself is board-agnostic except for two pin
-constants at the top of the file — same "SET PER BOARD" pattern
+**Wiring (I²C):** ✅ **done on the Pico 2W** — `GP0`/`GP1` (I²C0), per
+`pinouts/pico2w.md`. (That table previously named the reserved sensor
+"MPU-6050", an older placeholder from early V2 planning; corrected to
+LSM6DSV16X.) ⬜ **Not yet on the XIAO** — planned for `D4`/`D5`
+(`GPIO6`/`GPIO7`, same pins already used for the ST25DV above) for the real
+gift-jar integration. The smoke test itself is board-agnostic except for two
+pin constants at the top of the file — same "SET PER BOARD" pattern
 `led_test.py` already uses.
+
+---
+
+## Build technique — wiring the XIAO permanently (2026-08-16)
+
+Notes from planning the permanent XIAO + IMU + LED build. **Technique, not
+pin facts** — the pin assignments themselves live in `pinouts/`.
+
+**The one-GND-pad problem.** The XIAO ESP32-C3 breaks out exactly one GND
+pad, but the permanent build needs *two* grounds on it (LED strip and IMU;
+see `pinouts/pico2w.md`'s combined-wiring section for why GND is the one
+rail that's shared and the power rails are not). Two separate joints on one
+small pad tends to lift the pad or leave a cold joint when the second is
+made.
+
+**Do a twisted splice instead:** strip both ground wires, twist them
+together into a single lead, solder the twist so it behaves as one
+conductor, heat-shrink it, then make **one** joint from that lead to the
+pad. One clean joint on the fragile pad instead of two competing ones.
+
+**Wire gauge — Japanese "sq" notation.** Japanese suppliers size wire in
+**sq** = mm² of conductor cross-section, not AWG:
+
+| Japanese | ≈ AWG | Use here |
+|---|---|---|
+| 0.3sq | ≈ AWG22 | Signal lines (LED DIN, I²C SDA/SCL) — flexible enough not to strain a pad |
+| **0.5sq** | ≈ **AWG20** | VCC/GND for a ~20-LED strip. Fine for the current, but **stiff** — a stiff signal wire levers against its solder joint every time the assembly moves |
+
+**Mix gauges deliberately**: thicker for power, thinner for signal. Using
+0.5sq for everything is a common instinct and it makes the signal joints
+fragile. **Silicone-insulated** stranded wire is worth the small premium
+here — it stays flexible, tolerates soldering-iron contact far better than
+PVC, and this build has wires that must flex as the assembly goes into an
+enclosure.
