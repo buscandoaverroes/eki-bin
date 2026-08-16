@@ -114,20 +114,26 @@ SHELF_CEIL = 0.25
 PREVIEW_PEAK_MULT = ACK_PEAK_FLOOR + PREVIEW_STRENGTH * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)
 PREVIEW_SHELF_MULT = SHELF_FLOOR + PREVIEW_STRENGTH * (SHELF_CEIL - SHELF_FLOOR)
 
+# Real-hardware feedback (2026-08-16): at the old default (main.ACK_FLASH_MS
+# * 3 = 150ms), the rise-to-peak happened too fast to actually see a
+# strength difference. Widened, still well under half the ~1200ms window
+# so the shelf keeps the larger share — see gesture_sandbox.py's matching
+# constant, kept in sync so this preview's timing doesn't drift from the
+# real thing.
+ACK_HOLD_MS = 400
 
-def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS):
+
+def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     """Candidate A: bare on/off — "felt contact," no verdict yet. Jumps to
     peak_mult, holds, then drops to shelf_mult (not necessarily 0)."""
     return peak_mult if phase_ms < ack_ms else shelf_mult
 
 
-def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS * 3):
+def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     """Candidate B: a quick rise-then-dip instead of a flat flash — the
     "flick, down or up" idea, so ACK has its own shape distinct from
     CONFIRM's rise/decay even at a glance. Dips to shelf_mult, not
-    necessarily 0 — see the "continental shelf" note above. 3x
-    ACK_FLASH_MS because a flash that's ALSO a triangle needs a bit more
-    than 50ms to read as a shape rather than a blip."""
+    necessarily 0 — see the "continental shelf" note above."""
     half = ack_ms / 2
     if phase_ms < half:
         return (phase_ms / half) * peak_mult

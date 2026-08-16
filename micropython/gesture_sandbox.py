@@ -77,6 +77,32 @@ for _name, _value in THRESHOLD_OVERRIDES.items():
     setattr(main, _name, _value)
 
 
+# ── I2C resilience ────────────────────────────────────────────────
+# A jumper wire jostled by the very tap/grab being measured can cause a
+# transient I2C failure (OSError EIO) — vibration_sandbox.py hit this
+# first ("check the sensor's wiring — likely a connection shaken loose by
+# tapping") and retries interactively there. This script can't do the
+# same interactive retry — it's deliberately autonomous, no input(), and
+# mpremote run doesn't forward keystrokes anyway (see the module header).
+# So: catch it, skip that one sample, keep the loop alive. Diagnostic is
+# throttled to ~1/sec — a genuinely bad (not just momentarily jostled)
+# connection would otherwise flood the terminal with one error per 4ms
+# trigger tick.
+I2C_ERROR_PRINT_INTERVAL_MS = 1000
+
+
+def _safe_read_accel(i2c, addr, now_ms, last_error_print):
+    """Returns (raw_xyz_or_None, updated last_error_print). Caller skips
+    the sample on None instead of crashing the whole run."""
+    try:
+        return main._imu_read_accel_raw(i2c, addr), last_error_print
+    except OSError as e:
+        if now_ms - last_error_print >= I2C_ERROR_PRINT_INTERVAL_MS:
+            print(f"  ⚠ I2C read failed ({e}) — likely a connection jostled by the tap/grab itself, same finding as vibration_sandbox.py. Check the IMU's wiring if this repeats. Skipping this sample.")
+            last_error_print = now_ms
+        return None, last_error_print
+
+
 # ── LED rendering — see led_sandbox.py for the design/comparison work ──
 # Same _write_segment as led_sandbox.py (bypasses the arc abstraction,
 # still goes through the real gamma/dither/_physical pipeline). mult can
@@ -139,6 +165,16 @@ SHELF_CEIL = 0.25      # hardest-tap shelf — stays well below ACK_PEAK_FLOOR
 #                        and WAKE_JOLT_BRIGHTNESS_MULT, so shelf never
 #                        blurs into either the ACK or the CONFIRM jolt
 
+# Real-hardware feedback (2026-08-16): at the old ack_ms (main.ACK_FLASH_MS
+# * 3 = 150ms out of the ~1200ms window), the rise-to-peak happened too
+# fast to actually SEE a strength difference — 150ms isn't enough time to
+# track "how high did it climb" before it's already dipping to the shelf.
+# ACK_HOLD_MS widens that ratio; still well under half the window, so the
+# shelf (the "still deciding" cue) keeps the larger share. LOCAL to this
+# sandbox, not main.py's ACK_FLASH_MS (that's a different, smaller
+# "instant acknowledgment" concept) — tune freely, no re-upload needed.
+ACK_HOLD_MS = 400
+
 
 def _tap_strength(dev_mg):
     """0..1, how hard the triggering tap read at the moment of contact.
@@ -150,14 +186,14 @@ def _tap_strength(dev_mg):
     return max(0.0, min(1.0, t))
 
 
-def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS):
+def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     """Candidate A: bare on/off — jumps to peak_mult, holds; the caller's
     static shelf write takes over once ack_ms elapses. See led_sandbox.py
     for the A/B against ack_flick."""
     return peak_mult if phase_ms < ack_ms else shelf_mult
 
 
-def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=main.ACK_FLASH_MS * 3):
+def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     """Candidate B (current default, ACK_FN below): rises to peak_mult,
     dips to shelf_mult — NOT necessarily 0 (the "continental shelf": a
     real but hard, real-hardware test found dropping straight to black
@@ -250,14 +286,21 @@ def _capture_window(i2c, addr, start_ms, ack_fn=None, ack_ms=0, shelf_mult=0.0):
     were measured at); once it settles, the shelf is written exactly ONCE
     via the static path and left alone for the rest of the window — see
     _write_segment_static for why re-writing a static value every frame
-    is exactly the flicker failure mode to avoid."""
+    is exactly the flicker failure mode to avoid.
+
+    A dropped sample (see _safe_read_accel) just means one fewer of the
+    ~300 samples a full window normally collects — negligible for feature
+    extraction, so the capture keeps running rather than aborting."""
     samples = []
     last_render = start_ms
+    last_error_print = start_ms
     shelf_written = False
     while True:
         now = time.ticks_ms()
         elapsed = now - start_ms
-        samples.append((elapsed,) + main._imu_read_accel_raw(i2c, addr))
+        raw, last_error_print = _safe_read_accel(i2c, addr, now, last_error_print)
+        if raw is not None:
+            samples.append((elapsed,) + raw)
         if ack_fn is not None:
             if elapsed < ack_ms:
                 if now - last_render >= LED_RENDER_INTERVAL_MS:
@@ -300,11 +343,16 @@ def run_full():
     menu = main._GestureMenu(main.GESTURE_MENU_OPTIONS)
     trigger_buffer = []
     last_heartbeat = time.ticks_ms()
+    last_error_print = time.ticks_ms()
 
     try:
         while True:
             now_ms = time.ticks_ms()
-            sample = (now_ms,) + main._imu_read_accel_raw(i2c, addr)
+            raw, last_error_print = _safe_read_accel(i2c, addr, now_ms, last_error_print)
+            if raw is None:
+                time.sleep_ms(TRIGGER_INTERVAL_MS)
+                continue
+            sample = (now_ms,) + raw
             mag = main._gesture_magnitude_mg(sample)
 
             triggered = False
@@ -397,6 +445,7 @@ def run_v1():
     state = main._TapCycleState()
     trigger_buffer = []
     last_heartbeat = time.ticks_ms()
+    last_error_print = time.ticks_ms()
 
     try:
         while True:
@@ -413,7 +462,11 @@ def run_v1():
                 time.sleep_ms(TRIGGER_INTERVAL_MS)
                 continue
 
-            sample = (now_ms,) + main._imu_read_accel_raw(i2c, addr)
+            raw, last_error_print = _safe_read_accel(i2c, addr, now_ms, last_error_print)
+            if raw is None:
+                time.sleep_ms(TRIGGER_INTERVAL_MS)
+                continue
+            sample = (now_ms,) + raw
             mag = main._gesture_magnitude_mg(sample)
 
             triggered = False
@@ -436,7 +489,7 @@ def run_v1():
                 strength = _tap_strength(dev)
                 peak_mult = ACK_PEAK_FLOOR + strength * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)
                 shelf_mult = SHELF_FLOOR + strength * (SHELF_CEIL - SHELF_FLOOR)
-                ack_ms = main.ACK_FLASH_MS * 3
+                ack_ms = ACK_HOLD_MS
                 print(f"  [ACK] felt contact (dev={dev:.0f}mg, strength={strength:.2f}) — capturing…")
                 samples = _capture_window(
                     i2c, addr, now_ms,
