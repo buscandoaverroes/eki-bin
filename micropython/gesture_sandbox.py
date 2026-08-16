@@ -188,17 +188,25 @@ def _write_segment_static(start, end, color, mult):
 # that's sitting right there. Only `dev` (this trigger sample's deviation
 # from baseline) is available this early — `energy`, the recognizer's
 # real signal, isn't known until the capture window closes ~1.2s later.
-# Bounds below are a starting point, NOT validated against real capture
-# data — tune STRENGTH_MAX_DEV_MG live against what your own light vs.
-# hard tap actually reads as `dev` in the heartbeat/ACK line.
+#
+# STRENGTH_MAX_DEV_MG=400 held up on real taps (observed dev spanned
+# 54-444mg, strength 0.01-1.00 — close enough to the ceiling not to need
+# retuning). ACK_PEAK_FLOOR/CEIL did NOT hold up: real-hardware feedback
+# (2026-08-16) was that even the lowest- and highest-strength taps didn't
+# produce a "real human differentiable brightness flash." The old 0.5-1.0
+# range is only a 2x linear spread — not enough given perception is
+# roughly logarithmic, not linear. Widened to a ~4x spread instead.
 STRENGTH_MIN_DEV_MG = main.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
-STRENGTH_MAX_DEV_MG = 400  # UNTESTED GUESS — a "hard" tap's dev, tune live
-ACK_PEAK_FLOOR = 0.5   # lightest-tap ACK brightness
-ACK_PEAK_CEIL = 1.0    # hardest-tap ACK brightness
+STRENGTH_MAX_DEV_MG = 400
+ACK_PEAK_FLOOR = 0.4   # lightest-tap ACK brightness
+ACK_PEAK_CEIL = 1.6    # hardest-tap ACK brightness — >1.0 is fine, same
+#                        "brighter than normal" precedent WAKE_JOLT_BRIGHTNESS_MULT
+#                        already sets, and ack_flick renders without gamma
+#                        (use_gamma=False) so this is a real linear multiplier,
+#                        not further amplified the way confirm_jolt's peak is
 SHELF_FLOOR = 0.08     # lightest-tap shelf — dim, not dark
-SHELF_CEIL = 0.25      # hardest-tap shelf — stays well below ACK_PEAK_FLOOR
-#                        and WAKE_JOLT_BRIGHTNESS_MULT, so shelf never
-#                        blurs into either the ACK or the CONFIRM jolt
+SHELF_CEIL = 0.25      # hardest-tap shelf — stays below ACK_PEAK_FLOOR (0.4)
+#                        with a real margin, so shelf never blurs into ACK
 
 # Real-hardware feedback (2026-08-16): at the old ack_ms (main.ACK_FLASH_MS
 # * 3 = 150ms out of the ~1200ms window), the rise-to-peak happened too

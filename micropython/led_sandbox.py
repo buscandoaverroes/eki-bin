@@ -120,8 +120,11 @@ STARTUP_COLOR = main.STARTUP_COLOR  # reuse the boot ceremony's colour language
 # caveat above — this file stays a shape/timing preview, not a pixel-
 # accurate one.
 PREVIEW_STRENGTH = 0.5  # stand-in for "a medium tap" — see gesture_sandbox.py's _tap_strength
-ACK_PEAK_FLOOR = 0.5
-ACK_PEAK_CEIL = 1.0
+# Real-hardware feedback (2026-08-16): the old 0.5-1.0 ACK peak range (2x
+# linear spread) wasn't perceptually differentiable even at the strength
+# extremes — widened to match gesture_sandbox.py's real constants.
+ACK_PEAK_FLOOR = 0.4
+ACK_PEAK_CEIL = 1.6
 SHELF_FLOOR = 0.08
 SHELF_CEIL = 0.25
 PREVIEW_PEAK_MULT = ACK_PEAK_FLOOR + PREVIEW_STRENGTH * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)

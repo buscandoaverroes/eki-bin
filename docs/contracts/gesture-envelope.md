@@ -603,8 +603,48 @@ Unlike the production "forever, needs reset" pattern, this sandbox's
 version self-clears once reads succeed again, since a jostled wire is
 likely to self-heal and this is a dev tool, not the shipped experience.
 
-**Not yet done:** confirming whether confirm_jolt's rise has the same
-gamma-dip issue; real-hardware feel-testing of whether `ACK_HOLD_MS=400`
-now makes strength actually perceivable; and wiring any of this into
-`main.py`'s actual production loop — `gesture_sandbox.py` is still a
-sandbox, not the real thing.
+**Third round of real-hardware feedback (2026-08-16, same day):**
+
+- **The "dive to black" fix confirmed working.**
+- **`ACK_PEAK_FLOOR`/`CEIL` widened.** Even at the strength extremes
+  (`dev=54mg, strength=0.01` vs. `dev=444mg, strength=1.00`), the old
+  0.5-1.0 ACK peak range (a 2x linear spread) wasn't perceivably
+  different — human brightness perception is roughly logarithmic, so a
+  narrow linear range under-delivers. Widened to 0.4-1.6 (~4x). The
+  shelf range stayed put (0.08-0.25); it wasn't the thing reported as
+  hard to distinguish.
+- **`STRENGTH_MAX_DEV_MG=400` held up** — real captured `dev` values
+  spanned 54-444mg across this session's taps, close enough to the
+  ceiling that it didn't need retuning.
+- **A structural observation, not a bug:** the two highest-`dev` taps
+  captured this round (396mg, 444mg) were also the two that got
+  rejected as noise (`energy` above `TAP_ENERGY_THRESHOLD` — correct,
+  expected behavior per this section's earlier "closer to a smartphone
+  touchscreen tap than a firm knock" finding). Since `dev` and `energy`
+  both derive from the same physical event, they're correlated — meaning
+  the brightest ACK flashes are somewhat *more* likely to end in
+  rejection, not less. This is an inherent consequence of previewing
+  with `dev` (available at ACK time) before `energy` (the real
+  accept/reject signal, not known until the capture window closes) is
+  known — not something a brightness-mapping tweak can really fix, since
+  the two signals are fundamentally different quantities measured at
+  different times. Noted here as a known property of the design, not
+  flagged as broken.
+- **EIO failures observed correlating with light taps specifically** (3
+  occurrences, all preceded by near-zero `dev` heartbeat lines) — logged
+  as a hypothesis being tested live, explicitly NOT treated as confirmed
+  given the sample size (n=3) and this project's own repeated "small
+  samples mislead" lesson (§9). Physically counterintuitive too: a
+  harder impact should stress a marginal connection more, not less. An
+  untested alternative hypothesis: `print()` over the USB-serial link can
+  briefly block, and if that coincides with an I2C transaction, it could
+  produce timing-based EIO independent of tap force — which would just
+  happen to cluster around active testing (more terminal output) rather
+  than light taps specifically. Needs more data either way.
+
+**Not yet done:** resolving the EIO/tap-force correlation question with
+more data; confirming whether confirm_jolt's rise has the same gamma-dip
+issue; real-hardware feel-testing of the widened ACK_PEAK range and
+whether `ACK_HOLD_MS=400` now makes strength actually perceivable; and
+wiring any of this into `main.py`'s actual production loop —
+`gesture_sandbox.py` is still a sandbox, not the real thing.
