@@ -11,12 +11,12 @@ Parts context: `docs/hardware.md` (voltage compatibility, parts list).
 ```
                     USB
               ┌─────────┐
-    GP0   1 ──┤         ├── 40  VBUS    ← 5V from USB → LED VCC
-    GP1   2 ──┤         ├── 39  VSYS
-    GND   3 ──┤         ├── 38  GND     ← LED GND
+  ◆ GP0   1 ──┤         ├── 40  VBUS    ← 5V from USB → LED VCC
+  ◆ GP1   2 ──┤         ├── 39  VSYS
+    GND   3 ──┤         ├── 38  GND     ← shared GND rail (LED + IMU)
     GP2   4 ──┤         ├── 37  3V3_EN
-    GP3   5 ──┤         ├── 36  3V3(OUT)  future sensors
-    GP4   6 ──┤         ├── 35  ADC_VREF
+    GP3   5 ──┤         ├── 36  3V3(OUT)  ◆ IMU VCC (NOT the LED — 5V
+    GP4   6 ──┤         ├── 35  ADC_VREF     would exceed its rating)
     GP5   7 ──┤         ├── 34  GP28
     GND   8 ──┤         ├── 33  GND
   ► GP6   9 ──┤         ├── 32  GP27
@@ -34,7 +34,9 @@ Parts context: `docs/hardware.md` (voltage compatibility, parts list).
               └─────────┘
 ```
 
-`►` = assigned V1 LED data pin
+`►` = assigned V1 LED data pin. `◆` = assigned IMU pins (I2C0 SDA/SCL +
+its own 3.3V rail) — both boards now wired simultaneously on this build,
+see the combined wiring section below for the power-rail safety note.
 
 ---
 
@@ -63,10 +65,11 @@ GP6  (pin  9) ─────────── DIN
 
 ## Wiring — AE-LSM6DSV16X (IMU)
 
-**Status: ⬜ Proposed** — in hand, not yet physically wired. First bring-up
-target (over the XIAO) since this board's already on the breadboard.
-Parts/register reference: `docs/hardware.md`. Smoke test:
-`micropython/imu_test.py` (`make imu-test`).
+**Status: ✅ Verified** — wired and extensively validated across
+`docs/contracts/gesture-envelope.md`'s tap/flick/orientation testing (V1
+scope now, not just a future-sensor placeholder — see that doc). Parts/
+register reference: `docs/hardware.md`. Smoke test: `micropython/
+imu_test.py` (`make imu-test`).
 
 `GP0`/`GP1` is I²C0 on this board — fixed by the RP2350's silicon, not an
 arbitrary choice (see the "Pins reserved for V2" table below, which already
@@ -81,6 +84,25 @@ had this reserved before the sensor itself was picked).
 
 `imu_test.py`'s constants: `SDA_PIN = 0`, `SCL_PIN = 1`, `I2C_ID = 0`.
 
+## Wiring — IMU + LED together (combined breadboard build)
+
+Both wired simultaneously on this board for full IMU + LED testing (see
+`docs/contracts/gesture-envelope.md` §11's jolt/UX work) — GPIO pins don't
+conflict (IMU: GP0/GP1, LED: GP6), so this is just the two sections above
+combined onto one breadboard, plus one rule that matters:
+
+| Signal | Pico 2W pin | Shared between the two? |
+|---|---|---|
+| GND | 38 | ✅ **yes** — normal, both devices need it, common ground rail |
+| IMU VCC | 3V3(OUT), pin 36 | ❌ **IMU only** — the LSM6DSV16X isn't 5V-tolerant |
+| LED VCC | VBUS, pin 40 (5V) | ❌ **LED only** — needs actual 5V, and would over-volt the IMU |
+| IMU SDA/SCL | GP0 / GP1 | — |
+| LED DIN | GP6 | — |
+
+**Do not bridge the two power rails** — 3V3(OUT) and VBUS are different
+voltages feeding devices with different tolerances. GND is the only rail
+meant to be common between them.
+
 ## Status heartbeat
 
 `HEARTBEAT_PIN = "LED"` — a Pico-2W-only alias routed through the onboard CYW43
@@ -93,7 +115,7 @@ WiFi chip, **not** a plain GPIO. This is the *only* board where the string
 
 | GPIO | Purpose |
 |---|---|
-| GP0/1 | I2C0 SDA/SCL → DS3231 RTC, LSM6DSV16X IMU (in hand — see the wiring section above; "MPU-6050" here was an early V2-planning placeholder, corrected once the actual part was picked) |
+| GP0/1 | I2C0 SDA/SCL → DS3231 RTC (V2), and **already actively wired for the LSM6DSV16X IMU in V1** (see the wiring section above) — not just a V2 reservation anymore |
 | GP2/3 | I2C1 SDA/SCL → QMC5883L magnetometer |
 | GP4/5 | SPI → PN532 NFC module |
 | GP10/11/12/13 | SPI → e-ink display (Waveshare 2.9") |
