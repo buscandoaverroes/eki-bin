@@ -642,9 +642,43 @@ likely to self-heal and this is a dev tool, not the shipped experience.
   happen to cluster around active testing (more terminal output) rather
   than light taps specifically. Needs more data either way.
 
-**Not yet done:** resolving the EIO/tap-force correlation question with
-more data; confirming whether confirm_jolt's rise has the same gamma-dip
-issue; real-hardware feel-testing of the widened ACK_PEAK range and
-whether `ACK_HOLD_MS=400` now makes strength actually perceivable; and
+**Fourth round of real-hardware feedback (2026-08-16, same day) — first
+IN-BOTTLE test.** Everything up to this point was tuned against a bare
+LED strip. 駅瓶's whole premise is a frosted glass jar, not a bare strip
+— so this is the first test against the actual target, not a proxy.
+
+- **Bare strip (0.4-1.6 ACK_PEAK range): three real strength levels
+  (dev=93/244/344mg) read as clearly distinguishable.**
+- **Same range, in-bottle: "less distinguishable... but still subtly
+  different."** A frosted diffuser compresses brightness contrast — a
+  range tuned bare will always under-deliver once the glass is on, this
+  isn't a new bug, just the first time it was measured against the real
+  enclosure. Widened again: `ACK_PEAK_FLOOR/CEIL` 0.4-1.6 → 0.35-2.2,
+  pushed mostly on the ceiling (the floor was already close to
+  `SHELF_CEIL`, and eating that margin risks shelf/ACK ambiguity — the
+  ceiling has more room before rivaling `CONFIRM`'s gamma-amplified
+  peak). `STRENGTH_MAX_DEV_MG` nudged 400→460 (observed max crept
+  444mg→461mg between rounds). Expect this may need a further round —
+  there's no way to predict how much a frosted diffuser compresses
+  contrast without measuring it, and this is only the first in-bottle
+  measurement.
+- **The sensor-error escalation worked correctly in the wild**, twice:
+  `[SENSOR ERROR]` → `[SENSOR RECOVERED]`, no crash, both times
+  triggered by real handling (moving the bottle across the table; an
+  "odd tap sequence" the user described as their own input error) rather
+  than a clean single tap.
+- **Revises the EIO/tap-force hypothesis from the last round:** this
+  round's failures cluster around *handling* (moving the bottle, a
+  fumbled tap sequence), not light taps in isolation — more consistent
+  with the original vibration_sandbox.py diagnosis (jostled connection
+  from handling) than a light-tap-specific effect. The earlier
+  "correlates with light taps" read looks like it may have been exactly
+  the small-sample coincidence flagged last round. Still not conclusively
+  resolved either way.
+
+**Not yet done:** further in-bottle feel-testing of the widened
+ACK_PEAK range (this is now the second attempt, likely not the last);
+resolving the EIO/handling-correlation question with more data;
+confirming whether confirm_jolt's rise has the same gamma-dip issue; and
 wiring any of this into `main.py`'s actual production loop —
 `gesture_sandbox.py` is still a sandbox, not the real thing.

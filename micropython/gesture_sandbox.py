@@ -189,24 +189,37 @@ def _write_segment_static(start, end, color, mult):
 # from baseline) is available this early — `energy`, the recognizer's
 # real signal, isn't known until the capture window closes ~1.2s later.
 #
-# STRENGTH_MAX_DEV_MG=400 held up on real taps (observed dev spanned
-# 54-444mg, strength 0.01-1.00 — close enough to the ceiling not to need
-# retuning). ACK_PEAK_FLOOR/CEIL did NOT hold up: real-hardware feedback
-# (2026-08-16) was that even the lowest- and highest-strength taps didn't
-# produce a "real human differentiable brightness flash." The old 0.5-1.0
-# range is only a 2x linear spread — not enough given perception is
-# roughly logarithmic, not linear. Widened to a ~4x spread instead.
+# Round 1 (bare LED strip, out of the bottle): 0.5-1.0 (2x) wasn't
+# differentiable even at the strength extremes; widened to 0.4-1.6 (4x),
+# and that read as clearly distinguishable — but ONLY tested bare.
+#
+# Round 2 (2026-08-16, first IN-BOTTLE test — this is the real target,
+# 駅瓶's whole premise is frosted glass, not a bare strip): the SAME
+# 0.4-1.6 range that worked bare was only "subtly different" through the
+# glass — a frosted diffuser compresses brightness contrast, so a range
+# tuned bare will always under-deliver once the glass is on. Widened
+# again, pushed mostly on the ceiling (not the floor — floor is already
+# close to SHELF_CEIL=0.25 and eating that margin risks shelf/ACK
+# ambiguity; ceiling has more room before it'd rival CONFIRM's
+# gamma-amplified peak). Expect this may need a further round once
+# retested in-bottle — there's no way to predict how much a frosted
+# diffuser compresses contrast without just measuring it.
+#
+# STRENGTH_MAX_DEV_MG nudged 400→460: observed real dev crept from 444mg
+# to 461mg between rounds, both clamping to strength=1.0 — a slightly
+# higher ceiling keeps "hard" taps from all reading identically.
 STRENGTH_MIN_DEV_MG = main.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
-STRENGTH_MAX_DEV_MG = 400
-ACK_PEAK_FLOOR = 0.4   # lightest-tap ACK brightness
-ACK_PEAK_CEIL = 1.6    # hardest-tap ACK brightness — >1.0 is fine, same
+STRENGTH_MAX_DEV_MG = 460
+ACK_PEAK_FLOOR = 0.35  # lightest-tap ACK brightness
+ACK_PEAK_CEIL = 2.2    # hardest-tap ACK brightness — >1.0 is fine, same
 #                        "brighter than normal" precedent WAKE_JOLT_BRIGHTNESS_MULT
 #                        already sets, and ack_flick renders without gamma
 #                        (use_gamma=False) so this is a real linear multiplier,
 #                        not further amplified the way confirm_jolt's peak is
 SHELF_FLOOR = 0.08     # lightest-tap shelf — dim, not dark
-SHELF_CEIL = 0.25      # hardest-tap shelf — stays below ACK_PEAK_FLOOR (0.4)
-#                        with a real margin, so shelf never blurs into ACK
+SHELF_CEIL = 0.25      # hardest-tap shelf — stays below ACK_PEAK_FLOOR (0.35)
+#                        with a real (if narrower than before) margin, so
+#                        shelf never blurs into ACK
 
 # Real-hardware feedback (2026-08-16): at the old ack_ms (main.ACK_FLASH_MS
 # * 3 = 150ms out of the ~1200ms window), the rise-to-peak happened too
