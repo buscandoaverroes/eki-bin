@@ -360,50 +360,113 @@ def classify_valid_input(features):
 `TAP_ENERGY_THRESHOLD` ≈ 138000 (chianti-bottle value, same per-bottle
 recalibration caveat as every other threshold in this doc).
 
-**State machine — linear, no cursor, no submenu:**
+**Latency forced a real design decision, not just a tuning knob.** The
+recognizer needs the *full* capture window before `classify_valid_input`
+can answer — truncating it to feel more instant was tried and rejected
+with data, not assumed:
+
+| Window | Accuracy |
+|---|---|
+| 1200ms (full) | ~94-98% |
+| 300ms | 83.9% |
+| 150ms | 80.6% |
+| 50ms | 69.7% |
+
+Degrades gracefully, not a cliff, but there's no short window that's both
+fast and "light switch" accurate — a tap and the start of a handling event
+look the same for their first ~100-150ms; what actually distinguishes them
+is whether the signal *keeps going* (handling) or *settles* (tap), which
+by definition takes time to observe. Confirmed this is a real tradeoff, not
+a threshold to tune away.
+
+**Resolved as two phases, not a compromise between speed and accuracy:**
+an immediate, cheap **ACKNOWLEDGE** the instant the trigger fires (no
+verdict yet, just "felt contact") followed by **CONFIRM** once the full
+window's `classify_valid_input` verdict lands. If it turns out to be noise,
+the acknowledgment just fades back out — a quiet "false start," which is
+honest feedback, not a failure to hide. Same shape as a phone's fingerprint
+sensor: instant tactile response, confirmation a beat later.
 
 ```
-ASLEEP ──tap──► WAKING ──(WAKE_JOLT_MS)──► SETTLING ──(WAKE_SETTLE_MS)──► AWAKE
-                (jolt anim,                (debounce,                       │  ▲
-                 no input)                  no input)                       │  │ tap → CYCLING
-                                                                             │  │  (~200ms flash +
-                                                                             │  │   transition to
-                                                                             │  └──┘   next station)
-                                                                             │
-                                                                     timeout (AWAKE_MINUTES,
-                                                                      no extend — deliberately
-                                                                      simpler than WAKE_MINUTES'
-                                                                      EXTEND gesture)
-                                                                             │
-                                                                             ▼
-                                                                          ASLEEP
+                    trigger (any state, ASLEEP or AWAKE)
+                              │
+                              ▼
+                  ACKNOWLEDGE (instant flash — no
+                   state change yet, capture window
+                   running in the background)
+                              │
+                 classify_valid_input() resolves
+                    │                       │
+                  valid                   noise
+                    │                       │
+                    ▼                       ▼
+         was it ASLEEP or AWAKE?    fade out, back to
+             │            │          whatever state you
+             ▼            ▼          were already in
+          WAKING       CYCLING
+        (jolt, no      (flash, hard
+         input) │       cut to next
+             ▼   │      station)
+         SETTLING│           │
+        (debounce,│          │
+         no input)│          │
+             │     │         │
+             ▼     ▼         │
+            AWAKE ◄──────────┘
+              │
+         timeout (AWAKE_MINUTES,
+          no extend — deliberately
+          simpler than WAKE_MINUTES'
+          EXTEND gesture)
+              │
+              ▼
+           ASLEEP
 ```
 
-Two new timing pieces that don't exist yet, distinct from `_WakeState`'s
-existing countdown:
+**Parked research note** (ties back to §4's hardcoded-vs-model principle):
+this latency/accuracy tradeoff is a genuine candidate for where a model
+might eventually earn its complexity — not to replace `classify_valid_input`,
+but to make the *ACKNOWLEDGE* phase itself smarter, e.g. a lightweight
+classifier trained to make an earlier, still-reasonably-confident call from
+a partial window, rather than either waiting the full window or guessing
+blind. Nothing has tested this; noted so it isn't lost, not attempted here.
 
-- **`SETTLING`** — a dead zone *after* the wake jolt where input is
-  deliberately ignored (`WAKE_SETTLE_MS`, ~1-2s). Prevents the same
-  physical contact that triggered `WAKE` from also registering as an
-  immediate `CYCLE`, and gives the jolt animation room to actually be seen
-  before anything else can happen.
-- **No `EXTEND`.** `wake-interaction.md`'s double-tap-to-extend is
-  deliberately dropped — v1 has exactly one gesture meaning (tap = cycle),
-  not two to disambiguate. `AWAKE_MINUTES` runs its course and returns to
-  `ASLEEP`; there is no way to lengthen it at runtime, matching the
-  explicit design intent ("no off switch, just timeout").
+**UX decisions confirmed (2026-08-05), each backed by existing precedent
+rather than invented fresh:**
+
+- **Wake jolt:** `_play_startup_burst()` (rise → decay) is the starting
+  point, scaled by `WAKE_JOLT_BRIGHTNESS_MULT` — already validated,
+  already the `wake-interaction.md` plan. **Flagged as too slow as currently
+  timed** — a feel/timing question, not a logic one, to be iterated visually
+  (`led_sandbox.py`, or just direct hardware testing) once the recognizer
+  side is settled, not solved by more analysis.
+- **AWAKE→CYCLING:** flash, then an **instant hard cut** to the next
+  station's display — no crossfade, no gradual fade-up of the new station's
+  LEDs *during* the jolt's fade-out. That overlap was considered and
+  explicitly dropped for v1 ("too quick to matter, keep it simple") — not
+  because it's a bad idea, but because chasing it now risks the exact
+  low-brightness dithering flicker this project has hit repeatedly (the
+  original CHASE crossfade, the boot ceremony's own rejected crossfade-into-
+  live-contract). Revisit only if the hard cut actually feels wrong once
+  built, not preemptively.
+- **Fade out from jolt to live display:** reuses `_play_startup_burst`'s
+  already-validated shape exactly — rise, decay, then a hard handoff with
+  no crossfade. Nothing new to build here, same primitive as wake.
 
 **Config, proposed (not yet wired into `main.py`):**
 
 ```python
 TAP_ENERGY_THRESHOLD = 138000     # per-bottle, see classify_valid_input above
-WAKE_JOLT_MS = 500                # jolt animation duration, no input accepted
+ACK_FLASH_MS = 50                 # instant acknowledgment — as close to 0 as
+                                    #   FRAME_MS/hardware allow, no verdict yet
+WAKE_JOLT_MS = 500                # jolt animation duration, no input accepted —
+                                    #   flagged too slow as-is, needs iteration
 WAKE_JOLT_BRIGHTNESS_MULT = 2.0   # scalar over BRIGHTNESS for the jolt
 WAKE_SETTLE_MS = 1500             # post-jolt debounce, no input accepted
 AWAKE_MINUTES = 15                # matches WAKE_MINUTES' bounded-window
                                     #   philosophy; no EXTEND gesture, no
                                     #   runtime adjustment
-CYCLE_TRANSITION_MS = 200         # flash + fade into the next station
+CYCLE_TRANSITION_MS = 200         # flash, then hard cut to the next station
 ```
 
 **Genuinely new integration surface, not just gesture recognition:**
@@ -417,4 +480,4 @@ itself.
 **Not yet done:** none of this is implemented — §10's `GESTURE_DEBUG_
 ENABLED` loop still exercises the full tap/flick/position machinery, not
 this narrower v1 path. Next step is building `classify_valid_input` +
-the linear state machine alongside (not instead of) what already exists.
+the two-phase state machine alongside (not instead of) what already exists.
