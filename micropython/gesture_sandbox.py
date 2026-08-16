@@ -211,7 +211,7 @@ def _write_segment_static(start, end, color, mult):
 STRENGTH_MIN_DEV_MG = main.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
 STRENGTH_MAX_DEV_MG = 460
 ACK_PEAK_FLOOR = 0.35  # lightest-tap ACK brightness
-ACK_PEAK_CEIL = 2.2    # hardest-tap ACK brightness — >1.0 is fine, same
+ACK_PEAK_CEIL = 6.0    # hardest-tap ACK brightness — >1.0 is fine, same
 #                        "brighter than normal" precedent WAKE_JOLT_BRIGHTNESS_MULT
 #                        already sets, and ack_flick renders without gamma
 #                        (use_gamma=False) so this is a real linear multiplier,
@@ -240,6 +240,19 @@ def _tap_strength(dev_mg):
         return 1.0
     t = (dev_mg - STRENGTH_MIN_DEV_MG) / span
     return max(0.0, min(1.0, t))
+
+
+def _would_saturate(mult, color=None):
+    """True if rendering `mult` through the SAME linear (no-gamma) formula
+    _write_segment(..., use_gamma=False) uses — the ack rendering path —
+    would clamp a channel to 255. Once that happens, any mult >= this one
+    renders IDENTICALLY: a real bug found 2026-08-16, ACK_PEAK_CEIL=10.0
+    silently clamped everything above ~65% strength to indistinguishable
+    pure white. Pure function, no LED writes — checkable from a host test
+    without hardware; see tests/test_gesture_sandbox.py."""
+    color = color or main.STARTUP_COLOR
+    level = main.BRIGHTNESS * mult
+    return max(color) * level >= 255
 
 
 def ack_flash(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
@@ -603,7 +616,11 @@ def run_v1():
         print("\n  v1 gesture sandbox stopped")
 
 
-if MODE == "v1":
-    run_v1()
-else:
-    run_full()
+if __name__ == "__main__":
+    # Matches led_sandbox.py's own guard — without it, `import gesture_sandbox`
+    # (e.g. from a host test) would immediately try to talk to real hardware
+    # instead of just defining the pure functions/constants below it.
+    if MODE == "v1":
+        run_v1()
+    else:
+        run_full()

@@ -676,9 +676,33 @@ LED strip. 駅瓶's whole premise is a frosted glass jar, not a bare strip
   the small-sample coincidence flagged last round. Still not conclusively
   resolved either way.
 
-**Not yet done:** further in-bottle feel-testing of the widened
-ACK_PEAK range (this is now the second attempt, likely not the last);
-resolving the EIO/handling-correlation question with more data;
-confirming whether confirm_jolt's rise has the same gamma-dip issue; and
-wiring any of this into `main.py`'s actual production loop —
+**Fifth round (2026-08-16, same day) — pulled ACK_PEAK_CEIL back to 6.0**
+after the saturation analysis above; retested in-bottle across strength
+0.01-1.00 (six real taps) and confirmed working well — the ceiling now
+sits just under the clamp point instead of past it.
+
+**Hardened against regression, not just documented.** The saturation bug
+(a real one, silently reproducible by anyone editing `ACK_PEAK_CEIL` or
+`BRIGHTNESS` later without knowing this history) is now covered by
+`tests/test_gesture_sandbox.py` — `test_ack_peak_ceiling_does_not_saturate`
+fails if the configured `ACK_PEAK_CEIL`/`BRIGHTNESS`/`STARTUP_COLOR`
+combination would clamp a channel before strength=1.0 (verified against
+the actual historical bad value, `ACK_PEAK_CEIL=10.0`, which does fail
+it). Also covers `SHELF_CEIL < ACK_PEAK_FLOOR` (the shelf/ACK-blur
+invariant) and a floor on `ACK_PEAK_CEIL/FLOOR`'s spread (guards the
+*other* direction — the original 2x-spread bug). Deliberately does NOT
+attempt to test for `dev`-value *clustering*: that depends on what real
+human taps actually produce, which is empirical, not a property of the
+constants themselves — clustering stays a documented, on-hardware thing
+to watch for (see the strength distribution note two rounds up), not a
+pytest assertion. Required guarding `gesture_sandbox.py`'s bottom dispatch with
+`if __name__ == "__main__":` first — it previously called
+`run_v1()`/`run_full()` unconditionally at import time, which would have
+tried to talk to real hardware the moment a test imported the module.
+`led_sandbox.py` already had this guard; `gesture_sandbox.py` just
+hadn't needed it until something needed to import it.
+
+**Not yet done:** resolving the EIO/handling-correlation question with
+more data; confirming whether confirm_jolt's rise has the same gamma-dip
+issue; and wiring any of this into `main.py`'s actual production loop —
 `gesture_sandbox.py` is still a sandbox, not the real thing.
