@@ -106,6 +106,19 @@ STARTUP_COLOR = main.STARTUP_COLOR  # reuse the boot ceremony's colour language
 # holds, which every other scene doesn't need — not worth it for a shape/
 # timing preview. Judge the SHAPE and TIMING here; judge the actual
 # flicker-free feel on the real jar.
+#
+# ⚠ Same reasoning, a second symptom: this preview's ACK descent will
+# visibly dip toward black right before the shelf, unlike the real thing.
+# run()'s _write_segment always applies gamma; gamma(mult) for mult below
+# roughly 0.3 (at GAMMA=2.2) renders much dimmer than the SAME mult
+# rendered through the shelf's linear static path, so the gamma'd descent
+# hits near-black before reaching a shelf brightness that's actually
+# meant to stay visible — confirmed as a real bug on the real jar
+# ("dive underground to 0, then back up to a plateau"), fixed there via
+# a use_gamma=False render for the whole ack shape. Same "not worth
+# reworking run()'s shared pipeline for one scene" call as the dithering
+# caveat above — this file stays a shape/timing preview, not a pixel-
+# accurate one.
 PREVIEW_STRENGTH = 0.5  # stand-in for "a medium tap" — see gesture_sandbox.py's _tap_strength
 ACK_PEAK_FLOOR = 0.5
 ACK_PEAK_CEIL = 1.0

@@ -559,8 +559,52 @@ alone until CONFIRM/CYCLE/rejection overwrites it. The rise/dip and the
 jolt itself stay on the normal animated (gamma+dither) path — they're
 genuinely changing, so dithering helps there instead of hurting.
 
-**Not yet done:** real-hardware feel-testing of the shelf/strength
-revision itself (does it actually fix the "two disconnected blips"
-feeling; whether `STRENGTH_MAX_DEV_MG=400` is remotely close), and
-wiring any of this into `main.py`'s actual production loop —
-`gesture_sandbox.py` is still a sandbox, not the real thing.
+**Second round of real-hardware feedback (2026-08-16, same day):** the
+shelf/strength revision was retested. Strength scaling works — captured
+`dev`/`strength` pairs (e.g. `dev=281mg → strength=0.66`) confirmed the
+mapping responds sensibly to real taps. Two more findings:
+
+- **The ACK peak was visible for too little time to actually perceive a
+  strength difference** — `ACK_HOLD_MS` widened 150ms → 400ms (§ above).
+- **A real rendering bug, not a feel issue: "on the downward trend from
+  the ack to the plateau, the leds turn off for about 100ms... a 'dive
+  underground to 0, then back up to a plateau.'"** Root cause: the ACK's
+  descent rendered through the normal gamma-corrected path, but
+  `gamma(mult)` for `mult` below roughly 0.3 (at `GAMMA=2.2`) is *much*
+  smaller than `mult` itself — and ack_flick's whole range (peak 0.5-1.0,
+  dipping to the shelf's 0.08-0.25) sits mostly in that zone. So the
+  gamma-corrected descent visibly hit black well before reaching the
+  shelf's own value, then jumped back up once the static (non-gamma)
+  shelf write took over. Fixed via `_write_segment(..., use_gamma=False)`
+  for the whole ack shape — confirm_jolt and cycle_flash stay
+  gamma-corrected (their range is high enough not to hit this, and
+  confirm_jolt's dramatic peak depends on gamma's extra emphasis there).
+  **Flagged but not fixed:** confirm_jolt's own rise starts from
+  `start_mult` (the shelf) through the same gamma path — unconfirmed
+  whether this produces the same brief dip (its rise is much faster,
+  ~174ms vs. the ack's ~200ms fall) — watch for it on the next test.
+
+**Also added this round:** a sustained-I2C-failure error state.
+Real-hardware testing crashed the script twice (`OSError EIO` from a
+table tap and a bottle grab jostling a breadboard connection — the same
+failure `vibration_sandbox.py` already diagnosed). `_safe_read_accel`
+now catches it and skips the sample instead of crashing. The natural
+follow-up question — "shouldn't this show something on the LEDs, like
+the ACK flash but red?" — surfaced a real tension with this doc's own
+principle (`docs/contracts/led-status-messages.md`: "errors are
+persistent and unambiguous... a broken device should look broken, not
+almost-normal"): a brief flash for a single dropped sample would read as
+*almost normal*, working against that. Resolved by keeping single blips
+silent (the point of skip-and-continue) and only escalating to the
+established persistent-breathe pattern — with its own new
+`SENSOR_ERROR_COLOR` (cyan, distinct from `ERROR_COLOR` and
+`SCHEDULE_ERROR_COLOR`) — once a read hasn't succeeded in over a second.
+Unlike the production "forever, needs reset" pattern, this sandbox's
+version self-clears once reads succeed again, since a jostled wire is
+likely to self-heal and this is a dev tool, not the shipped experience.
+
+**Not yet done:** confirming whether confirm_jolt's rise has the same
+gamma-dip issue; real-hardware feel-testing of whether `ACK_HOLD_MS=400`
+now makes strength actually perceivable; and wiring any of this into
+`main.py`'s actual production loop — `gesture_sandbox.py` is still a
+sandbox, not the real thing.

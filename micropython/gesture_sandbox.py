@@ -103,6 +103,27 @@ def _safe_read_accel(i2c, addr, now_ms, last_error_print):
         return None, last_error_print
 
 
+# A single dropped sample above gets no LED treatment — that's the whole
+# point of skip-and-continue, it's meant to be a non-event. But
+# docs/contracts/led-status-messages.md already committed to "errors are
+# persistent and unambiguous... a broken device should look broken, not
+# almost-normal," and "different failure causes get visually distinct
+# colours" — a brief flash for a momentary blip would read as "almost
+# normal" (working against that principle), and reusing ERROR_COLOR or
+# SCHEDULE_ERROR_COLOR would collide with two DIFFERENT existing failure
+# meanings. So: only a SUSTAINED failure — no successful read for
+# SENSOR_ERROR_TIMEOUT_MS — escalates to that same persistent-breathe
+# pattern, with its own distinct SENSOR_ERROR_COLOR. Unlike the
+# production pattern ("forever, needs reset"), this sandbox's version
+# clears itself once reads succeed again: deliberately, since this is a
+# dev tool testing a failure mode (a wire) that's likely to self-heal,
+# not a WiFi/schedule failure that genuinely won't fix itself.
+SENSOR_ERROR_TIMEOUT_MS = 1000
+SENSOR_ERROR_COLOR = (0, 180, 200)  # cyan — distinct from ERROR_COLOR (red)
+#                       and SCHEDULE_ERROR_COLOR (magenta); a different
+#                       failure cause should look like a different failure
+
+
 # ── LED rendering — see led_sandbox.py for the design/comparison work ──
 # Same _write_segment as led_sandbox.py (bypasses the arc abstraction,
 # still goes through the real gamma/dither/_physical pipeline). mult can
@@ -113,11 +134,25 @@ LED_RENDER_INTERVAL_MS = 16  # throttle LED writes independent of the 4ms
 #                              no reason to write() faster than a frame
 
 
-def _write_segment(start, end, color, mult=1.0):
-    """For a CHANGING value (rise/decay) — gamma + dither, same as
-    led_sandbox.py. Do not use this for a held/static value; see
-    _write_segment_static below for why."""
-    level = main.BRIGHTNESS * main.gamma(mult)
+def _write_segment(start, end, color, mult=1.0, use_gamma=True):
+    """For a CHANGING value (rise/decay) — dithered, and gamma-corrected
+    unless use_gamma=False. Do not use this for a held/static value; see
+    _write_segment_static below for why.
+
+    use_gamma=False matters for a range that stays mostly BELOW roughly
+    0.3 (at GAMMA=2.2): gamma(mult) there is much smaller than mult
+    itself, so it renders visibly dimmer than the SAME mult rendered
+    through the linear static path. Real-hardware finding: ack_flick's
+    whole range (peak 0.5-1.0, dipping to the shelf's 0.08-0.25) sits
+    right in that zone, so its gamma-corrected descent visibly hit black
+    well before reaching the shelf's own (linear) brightness, then jumped
+    back up once the static shelf write took over — a real bug ("dive
+    underground to 0, then back up to a plateau"), not a feel preference.
+    Genuinely high-range content (confirm_jolt, cycle_flash) stays
+    gamma-corrected as normal — that range doesn't hit this problem, and
+    losing gamma's extra emphasis at the bright end (gamma(2.0)≈4.6 vs a
+    linear 2.0) would blunt the jolt's whole "brighter than normal" point."""
+    level = main.BRIGHTNESS * (main.gamma(mult) if use_gamma else mult)
     for logical in range(start, end):
         phys = main._physical(logical)
         if main.DITHER:
@@ -216,7 +251,17 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     the way to 0 — the shelf's job was "still here, deciding"; decaying
     past it to black says "decided, done." Same rise:decay ratio as
     _play_startup_burst, scaled to WAKE_JOLT_MS's 500ms budget. See
-    led_sandbox.py's confirm_jolt for the full rise/decay rationale."""
+    led_sandbox.py's confirm_jolt for the full rise/decay rationale.
+
+    NOTE: this rises from start_mult through the SAME gamma-corrected
+    path ack_flick's descent used to hit the "dive to black" bug on —
+    unconfirmed whether it's actually noticeable here (this rise is much
+    faster, ~174ms total, vs. the ack's ~200ms fall), and unlike
+    ack_flick this range genuinely wants gamma at its high end
+    (WAKE_JOLT_BRIGHTNESS_MULT's whole "brighter than normal" point), so
+    not fixed pre-emptively. Watch for a brief dip right as CONFIRM
+    starts; if it's there, a targeted fix (not a blanket use_gamma=False)
+    would be needed."""
     rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
     decay_ms = total_ms - rise_ms
     if phase_ms < rise_ms:
@@ -304,7 +349,7 @@ def _capture_window(i2c, addr, start_ms, ack_fn=None, ack_ms=0, shelf_mult=0.0):
         if ack_fn is not None:
             if elapsed < ack_ms:
                 if now - last_render >= LED_RENDER_INTERVAL_MS:
-                    _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed))
+                    _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed), use_gamma=False)
                     main.np.write()
                     last_render = now
             elif not shelf_written:
@@ -446,6 +491,8 @@ def run_v1():
     trigger_buffer = []
     last_heartbeat = time.ticks_ms()
     last_error_print = time.ticks_ms()
+    last_success_ms = time.ticks_ms()
+    sensor_error_start = None  # None = not currently in the error state
 
     try:
         while True:
@@ -464,8 +511,20 @@ def run_v1():
 
             raw, last_error_print = _safe_read_accel(i2c, addr, now_ms, last_error_print)
             if raw is None:
+                if now_ms - last_success_ms >= SENSOR_ERROR_TIMEOUT_MS:
+                    if sensor_error_start is None:
+                        sensor_error_start = now_ms
+                        print(f"  [SENSOR ERROR] no successful IMU read in over {SENSOR_ERROR_TIMEOUT_MS}ms — check wiring")
+                    mult = main.breathe(now_ms - sensor_error_start, main.ERROR_BREATHE_PERIOD_MS, floor=0.15)
+                    _write_segment(0, main.NUM_LEDS, SENSOR_ERROR_COLOR, mult)
+                    main.np.write()
                 time.sleep_ms(TRIGGER_INTERVAL_MS)
                 continue
+            if sensor_error_start is not None:
+                print("  [SENSOR RECOVERED]")
+                sensor_error_start = None
+                main.clear()
+            last_success_ms = now_ms
             sample = (now_ms,) + raw
             mag = main._gesture_magnitude_mg(sample)
 
