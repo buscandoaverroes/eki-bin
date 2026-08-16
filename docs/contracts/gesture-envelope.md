@@ -12,6 +12,16 @@ via the sandbox toolchain (`micropython/vibration_sandbox.py` /
 **Not yet done:** real menu content (still placeholder), LED-wired
 integration into the ambient display loop.
 
+**Scope pivot (2026-08-05):** live testing exposed that every open problem
+in §9/§10 (position disambiguation, flick-vs-handling) is *additional*
+discrimination on top of tap-vs-noise — the one thing that was never
+actually unreliable (95-98%, and 98.4% for tap-vs-all-pooled-handling-noise
+via `energy` alone, see §11). This branch's actual goal was a minimal
+working input (change the station display), not the full multi-gesture
+envelope — §11 specifies that minimal contract as a deliberate
+*specialization* of the architecture below, not a replacement for it, so
+position/flip/flick stay available to re-enable later without a rewrite.
+
 **Supersedes part of `docs/contracts/wake-interaction.md`, reuses the rest.**
 That doc's tap-*count* axis (single vs. double tap, `TAP_THRESHOLD` /
 `DOUBLE_TAP_WINDOW_MS`) turned out to be the wrong physical signal — §8/§9
@@ -309,3 +319,102 @@ body taps, median 50mg) to **328** (95.2%, calibrated against shoulder+base
 taps specifically, median 128mg — where taps actually happen in this
 envelope). The original number wasn't wrong on its own terms, it was
 measured against the wrong comparison group.
+
+## 11. V1 minimal contract — tap-or-noise, wake + cycle
+
+**A specialization of Layers 1-4 above, not a different architecture.**
+Same HAL (§2), same feature extraction (§3) — what narrows is Layer 3 (one
+binary recognizer instead of the tap/flick/position table) and Layer 4
+(one linear state instead of a cursor over a menu). `GESTURE_POSITION_
+ENABLED` / `GESTURE_FLIP_ENABLED` / `GESTURE_FLICK_ENABLED` already exist
+as capability flags for exactly this reason — v1 ships with all three
+`False`, and re-enabling any of them later is a config change, not a
+redesign. The abstract-event vocabulary (§6) and hardcoded-vs-model
+principle (§4) both carry over unchanged.
+
+**Why this scope, not the full envelope (§9's open problems):** every
+open problem so far — position disambiguation, flick-vs-handling — is
+*additional* discrimination layered on top of tap-vs-noise, which was
+never actually the unreliable part (95-98% since the very first sandbox
+sessions). This branch's actual goal is a minimal working input (change
+the station display), matching a light switch's reliability bar: near-100%
+for the one binary decision that matters, occasional misses acceptable,
+false triggers not. A proper on-device ML classifier for richer,
+multi-gesture input is a real idea worth pursuing — parked as future scope
+(§9), not this branch's job.
+
+**Recognizer — one function, one threshold, no model:**
+
+```python
+def classify_valid_input(features):
+    """Deliberate touch vs. ambient handling — the ONLY distinction v1
+    needs. energy alone: 98.4% (5/310 errors — 3 missed taps, 2 false
+    triggers) across pooled tap sessions vs. pooled handling-noise sessions
+    (pickup/carry/setdown/bump), not a single-session number. Does NOT
+    distinguish tap from flick or classify position — GESTURE_POSITION_
+    ENABLED/GESTURE_FLICK_ENABLED stay False for v1; classify_tap_or_flick/
+    classify_position remain defined and tested, just unused here."""
+    return features["energy"] < TAP_ENERGY_THRESHOLD
+```
+
+`TAP_ENERGY_THRESHOLD` ≈ 138000 (chianti-bottle value, same per-bottle
+recalibration caveat as every other threshold in this doc).
+
+**State machine — linear, no cursor, no submenu:**
+
+```
+ASLEEP ──tap──► WAKING ──(WAKE_JOLT_MS)──► SETTLING ──(WAKE_SETTLE_MS)──► AWAKE
+                (jolt anim,                (debounce,                       │  ▲
+                 no input)                  no input)                       │  │ tap → CYCLING
+                                                                             │  │  (~200ms flash +
+                                                                             │  │   transition to
+                                                                             │  └──┘   next station)
+                                                                             │
+                                                                     timeout (AWAKE_MINUTES,
+                                                                      no extend — deliberately
+                                                                      simpler than WAKE_MINUTES'
+                                                                      EXTEND gesture)
+                                                                             │
+                                                                             ▼
+                                                                          ASLEEP
+```
+
+Two new timing pieces that don't exist yet, distinct from `_WakeState`'s
+existing countdown:
+
+- **`SETTLING`** — a dead zone *after* the wake jolt where input is
+  deliberately ignored (`WAKE_SETTLE_MS`, ~1-2s). Prevents the same
+  physical contact that triggered `WAKE` from also registering as an
+  immediate `CYCLE`, and gives the jolt animation room to actually be seen
+  before anything else can happen.
+- **No `EXTEND`.** `wake-interaction.md`'s double-tap-to-extend is
+  deliberately dropped — v1 has exactly one gesture meaning (tap = cycle),
+  not two to disambiguate. `AWAKE_MINUTES` runs its course and returns to
+  `ASLEEP`; there is no way to lengthen it at runtime, matching the
+  explicit design intent ("no off switch, just timeout").
+
+**Config, proposed (not yet wired into `main.py`):**
+
+```python
+TAP_ENERGY_THRESHOLD = 138000     # per-bottle, see classify_valid_input above
+WAKE_JOLT_MS = 500                # jolt animation duration, no input accepted
+WAKE_JOLT_BRIGHTNESS_MULT = 2.0   # scalar over BRIGHTNESS for the jolt
+WAKE_SETTLE_MS = 1500             # post-jolt debounce, no input accepted
+AWAKE_MINUTES = 15                # matches WAKE_MINUTES' bounded-window
+                                    #   philosophy; no EXTEND gesture, no
+                                    #   runtime adjustment
+CYCLE_TRANSITION_MS = 200         # flash + fade into the next station
+```
+
+**Genuinely new integration surface, not just gesture recognition:**
+"cycle to next station" needs a *current station index* over some
+configured list of stations — that concept doesn't exist anywhere in
+`main.py` today (V1 has always driven a single configured station via
+`schedule.json`). That's a real, separate piece of scope on the display
+side, not something this doc's recognizer/state-machine work resolves by
+itself.
+
+**Not yet done:** none of this is implemented — §10's `GESTURE_DEBUG_
+ENABLED` loop still exercises the full tap/flick/position machinery, not
+this narrower v1 path. Next step is building `classify_valid_input` +
+the linear state machine alongside (not instead of) what already exists.
