@@ -477,7 +477,31 @@ configured list of stations — that concept doesn't exist anywhere in
 side, not something this doc's recognizer/state-machine work resolves by
 itself.
 
-**Not yet done:** none of this is implemented — §10's `GESTURE_DEBUG_
-ENABLED` loop still exercises the full tap/flick/position machinery, not
-this narrower v1 path. Next step is building `classify_valid_input` +
-the two-phase state machine alongside (not instead of) what already exists.
+**Implemented and validated on real hardware (2026-08-05).**
+`classify_valid_input` + `_TapCycleState` are built (alongside, not instead
+of, §4-10's machinery) and confirmed via `gesture_sandbox.py`'s `MODE =
+"v1"` path across every dimension that mattered:
+
+- **Latency feels instant** — `[ACK]` fires immediately on trigger, well
+  before the ~1.2s capture window resolves; the two-phase design achieves
+  the "light switch" feel without needing the window itself to shrink.
+- **Accuracy held up on live taps** — 10/10 consecutive real taps in one
+  run correctly resolved to `CYCLE`, energies spanning 5,676-107,520 (well
+  under the 138,000 threshold, plenty of margin, not a knife-edge).
+- **One live miss, and it's the already-known failure mode, not a new
+  one:** a real but hard, "rocking" tap read energy=175,448 and was
+  correctly rejected as noise per the threshold — consistent with the
+  3/180 miss rate already measured in §11's validation data, not a fresh
+  problem. Confirms the intended tap style is closer to a smartphone
+  touchscreen tap than a firm knock.
+- **`SETTLING` correctly filters taps during the debounce window** — no
+  spurious `CYCLE` from a tap landing right after `WAKE`.
+
+**Not yet done:** any LED rendering — this validated the recognizer and
+state machine purely via terminal output, deliberately before any jolt
+animation exists (§11's "ship the mechanism before the content," same
+precedent `wake-interaction.md` set for its own secondary action). Next
+step is the ACK/CONFIRM jolt animation itself, prototyped in
+`led_sandbox.py` before being wired into `main.py`'s real loop — the
+current terminal-only `run_v1()` stays as the recognizer/state-machine
+regression check even once real rendering exists.
