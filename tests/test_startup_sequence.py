@@ -113,3 +113,21 @@ def test_error_mult_never_goes_fully_dark(load_main):
     m = load_main(ERROR_BREATHE_PERIOD_MS=4000)
     samples = [m._startup_error_mult(t) for t in range(0, 4001, 200)]
     assert all(s >= 0.15 for s in samples)  # floor=0.15, never truly off
+
+
+# ── failure colours stay distinguishable ─────────────────────────
+
+
+def test_failure_colours_are_all_distinct(load_main):
+    # docs/contracts/led-status-messages.md's stated principle: "different
+    # failure CAUSES get visually distinct colours. One universal
+    # 'something's wrong, breathe red' for every failure defeats that."
+    # Three terminal failures exist now — WiFi/NTP, schedule load, and (new)
+    # a bad config value — and the whole point is telling them apart with no
+    # laptop attached, so a copy-paste that collapsed two of them into the
+    # same colour would silently undo the feature.
+    m = load_main()
+    colours = [m.ERROR_COLOR, m.SCHEDULE_ERROR_COLOR, m.CONFIG_ERROR_COLOR]
+    assert len(set(colours)) == len(colours), (
+        f"failure colours must be distinguishable, got {colours}"
+    )

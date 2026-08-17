@@ -1,14 +1,51 @@
 # micropython/config.example.py
 # Committed template — copy to config.py and fill in real values.
 # config.py is gitignored and never committed. You can also edit config.py
-# directly on the board via Thonny (it already lives on the Pico).
+# directly on the board via Thonny (it already lives on the device).
 #
 # Only WIFI_SSID / WIFI_PASS are required. Every other field below is OPTIONAL:
 # main.py reads it with a built-in default, so you can delete any line you don't
 # want to change (and older config.py files keep working unchanged).
-# See docs/contracts/config.md for full field documentation.
+#
+# Anything COMMENTED OUT below is showing you its default — uncomment only to
+# change it. Anything ACTIVE is either required, or a value worth stating
+# explicitly because the right setting depends on your hardware.
+#
+# See docs/contracts/config.md for full field documentation, and
+# docs/provisioning-runbook.md for the build-a-unit-from-scratch checklist.
 
-# ── WiFi (V1 only — removed in V2 when DS3231 replaces NTP) ──────
+# ══ ① BOARD-SPECIFIC — set these FIRST ═══════════════════════════════
+# These are the values that differ per board, and getting one wrong is the
+# single most common bring-up failure in this project's history. Grouped
+# here rather than scattered through the file for exactly that reason.
+#
+#   Value           | Pico 2W | XIAO ESP32-C3 |
+#   ----------------|---------|---------------|
+#   LED_PIN         | 6       | 2             |
+#   HEARTBEAT_PIN   | "LED"   | None          |
+#   IMU_SDA_PIN     | 0       | 6             |
+#   IMU_SCL_PIN     | 1       | 7             |
+#
+# Physical wiring for each: pinouts/<board>.md — that directory is the
+# source of truth for what's connected where; this file just mirrors it.
+
+LED_PIN = 6  # GPIO driving the WS2812B data line
+NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21; 4020 tape = 120
+HEARTBEAT_PIN = "LED"  # status LED. "LED" is a **Pico-2W-only** alias (routed
+#                        through the CYW43 WiFi chip). On ANY other board it
+#                        raises `ValueError: invalid pin` — set a GPIO number,
+#                        or bare None (NOT the string "none"!) to disable.
+#                        A quoted "none" is a truthy string main.py would try
+#                        to use as a real pin name; tests/test_real_config.py
+#                        catches that one before `make upload`.
+
+# IMU (LSM6DSV16X) — only read if you've actually wired one.
+IMU_I2C_ID = 0  # ESP32 maps I2C to any pins in software, so 0 works on both
+IMU_SDA_PIN = 0
+IMU_SCL_PIN = 1
+
+# ══ ② WiFi — the only genuinely required fields ══════════════════════
+# (V1 only — removed in V2 when a DS3231 RTC replaces NTP.)
 
 WIFI_SSID = "your_network_name"
 WIFI_PASS = "your_network_password"
@@ -24,24 +61,13 @@ DISPLAY_DIRECTION = "b"  # which timetable direction the ring shows
 # DISPLAY_DIRECTION_B = "a"  # "approach" contract, phase 2 (bidirectional)
 #                          only — a SECOND direction key, feeding arm B.
 #                          Unset = single-direction, phase 1. Also needs
-#                          ARM_B_LEN > 0 in config.py's approach-contract block.
+#                          ARM_B_LEN > 0 in the approach block below.
 WALK_TO_STATION_MINS = 2.5  # room→platform; trains you can't catch are hidden
 
-# ── Display: hardware ─────────────────────────────────────────────
-# Board-specific — see pinouts/<board>.md for the physical wiring these refer to.
-LED_PIN = 6  # GP pin driving the WS2812B data line
-NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; the V1.5 ring will be 12
-ARC_ORIGIN = "far"  # which end the arc grows from: "near" = DIN end (index 0),
-#                      "far" = the other end. Flip if the strip mounts upside-down.
-HEARTBEAT_PIN = "LED"  # status LED. "LED" is a Pico-2W-only alias — on boards
-#                        with no such alias (e.g. XIAO ESP32-C3) set a GPIO
-#                        number, or bare None (NOT the string "none"!) to
-#                        disable the heartbeat entirely. A quoted "none" is a
-#                        truthy string that main.py will try to use as a real
-#                        pin name and fail — tests/test_real_config.py catches
-#                        this before `make upload`, but save yourself the trip.
-
 # ── Display: look & feel ──────────────────────────────────────────
+ARC_ORIGIN = "far"  # which end the arc grows from: "near" = DIN end (index 0),
+#                     "far" = the other end. Mount-specific, not board-specific
+#                     — flip if the strip ends up mounted upside-down.
 BRIGHTNESS = 0.15  # 0.0–1.0 global ceiling — ambient, not blinding
 CONTRACT = "breathing"  # "sandtimer" | "color" | "breathing"
 #                         | "breathing_exponent" | "breathing_inverse" | "echo"
@@ -107,16 +133,27 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                              main loop takes over (no crossfade blend —
 #                              would reintroduce the low-brightness dithering
 #                              CHASE was built to eliminate, see the doc)
-# ERROR_COLOR = (255, 0, 0)         # WiFi-connect failure: persistent red,
-#                                     forever, until reset — no auto-retry
+
+# Terminal failure states — persistent breathe, forever, until reset. Each
+# failure CAUSE gets its own colour on purpose so a unit with no laptop
+# attached still tells you WHICH thing broke (led-status-messages.md).
+# ERROR_COLOR = (255, 0, 0)         # WiFi/NTP connect failure — red
+# SCHEDULE_ERROR_COLOR = (200, 0, 120)  # schedule.json missing/corrupt
+# CONFIG_ERROR_COLOR = (255, 140, 0)    # a bad config VALUE here — orange.
+#                            (e.g. HEARTBEAT_PIN="LED" on a non-Pico board.)
+#                            Note LED_PIN/NUM_LEDS can't be covered: they're
+#                            consumed at import time to build the strip
+#                            itself, so getting those wrong fails before any
+#                            LED can light. Those two need a serial console.
 # ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose
 
 # ── Wake/sleep interaction layer — docs/contracts/wake-interaction.md ──
-# OFF BY DEFAULT. No IMU is physically wired yet — _imu_tap_detected() is a
-# stub that always returns False, so enabling this with no real sensor read
-# would put the display permanently ASLEEP after WAKE_MINUTES with no way
-# to wake it again. Leave this False until a real IMU is wired and
-# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS have real bench numbers.
+# ⚠ SUPERSEDED by the gesture envelope below, and **leave this False**.
+# _imu_tap_detected() is still a stub that always returns False, so enabling
+# this puts the display permanently ASLEEP after WAKE_MINUTES with no way to
+# wake it — true even now that a real IMU is wired, because this older loop
+# doesn't read it. The newer gesture work lives in gesture_sandbox.py and is
+# not yet integrated into main()'s real loop.
 # WAKE_INTERACTION_ENABLED = False
 # WAKE_MINUTES = 30            # active-display window after any wake/extend
 # DOUBLE_TAP_WINDOW_MS = 400   # GUESS — tune against the real sensor
@@ -127,57 +164,56 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # EXTEND_CONFIRM_MS = 600
 
 # ── Gesture envelope — docs/contracts/gesture-envelope.md ──────────────
-# ACTIVE below (not commented) — set up for the Pico 2W + IMU-only terminal
-# test: `make upload && make screen`, no LED strip or WiFi needed
-# (GESTURE_DEBUG_ENABLED bypasses schedule/WiFi/boot entirely). Threshold
-# VALUES are chianti-bottle-specific (amplitude features don't transfer
-# across bottles, docs/insights.md §9) — re-derive per physical unit via
-# vibration_sandbox.py + scripts/analyze_taps.py before flashing a
-# different bottle. Flip GESTURE_DEBUG_ENABLED back to False (or delete
-# this whole block) once you're past terminal testing and wiring real LEDs.
-IMU_I2C_ID = 0
-IMU_SDA_PIN = 0   # Pico 2W default — see pinouts/pico2w.md
-IMU_SCL_PIN = 1
-GESTURE_DEBUG_ENABLED = True        # terminal-only test loop, see above
-GESTURE_FLIP_ENABLED = True         # requires wired (USB) power — fine for
-#                                      this test, Qi is the only thing flip
-#                                      is incompatible with
-GESTURE_POSITION_ENABLED = True     # shoulder-vs-base — ~78-81% even tuned,
-#                                      on here so the terminal test exercises
-#                                      position-aware scroll direction too
-GESTURE_FLICK_ENABLED = True        # best-validated signal after tap presence
-TAP_TRIGGER_THRESHOLD_MG = 50       # cheap gate only — real handling motion
-#                                      crosses this too, recognizer does the
-#                                      real discrimination, not this trigger
-FLICK_MAGNITUDE_THRESHOLD_MG = 328   # recalibrated against shoulder+base
-#                                       taps (95.2%) — the original 140 was
-#                                       calibrated against body taps only and
-#                                       let 79% of real shoulder taps through
-#                                       as false flicks, see gesture-envelope.md §10
-FLICK_SPACING_STDEV_THRESHOLD_MS = 5  # the feature that actually separates
-#                                        flick from hard handling — magnitude
-#                                        alone caps ~80% (setdown_firm is just
-#                                        as hard as a deliberate flick)
-POSITION_THRESHOLD_MG = 151         # only read since GESTURE_POSITION_ENABLED=True
-ORIENTATION_STABLE_MG = 700
-ORIENTATION_MAP = (("upright", "y", 1), ("horizontal", "z", -1), ("upside_down", "y", -1))
-GESTURE_MENU_OPTIONS = ("Item 1", "Item 2", "Item 3")  # placeholder content —
-#                                                          see gesture-envelope.md §9
-GESTURE_MODE_TIMEOUT_MS = 15_000
+# ⚠ GESTURE_DEBUG_ENABLED = True makes main() run a TERMINAL-ONLY debug loop
+# and return — no WiFi, no schedule, no boot ceremony, NO LED OUTPUT AT ALL.
+# It's a bring-up tool, not a display mode. Leave it False (the default) for
+# a normal unit; flip it on deliberately when you want the IMU exerciser over
+# `make screen`.
+#
+# Threshold VALUES below are PER-PHYSICAL-UNIT — amplitude features do not
+# transfer between bottles (cross-bottle position accuracy measured 0%, worse
+# than random; docs/insights.md §9). Re-derive per unit with
+# vibration_sandbox.py + scripts/analyze_taps.py rather than copying these.
+# GESTURE_DEBUG_ENABLED = False       # terminal-only IMU exerciser, see above
+# GESTURE_FLIP_ENABLED = False        # orientation detection; needs wired
+#                                       power — incompatible with Qi (flipping
+#                                       the jar breaks the charging coupling)
+# GESTURE_POSITION_ENABLED = False    # shoulder-vs-base — only ~78-81% even
+#                                       tuned, and per-bottle calibrated
+# GESTURE_FLICK_ENABLED = False       # best-validated signal after tap presence
+# TAP_TRIGGER_THRESHOLD_MG = 50       # cheap gate only — real handling motion
+#                                       crosses this too; the recognizer does
+#                                       the real discrimination, not this
+# TAP_ENERGY_THRESHOLD = 138000       # the v1 tap-vs-noise call (98.4%) — a
+#                                       tap reads BELOW this; harder/"rocking"
+#                                       contact reads above and is rejected
+# FLICK_MAGNITUDE_THRESHOLD_MG = 328  # recalibrated against shoulder+base taps
+#                                       (95.2%); the original 140 was derived
+#                                       from body taps only and let 79% of real
+#                                       shoulder taps through as false flicks
+# FLICK_SPACING_STDEV_THRESHOLD_MS = 5  # the feature that actually separates
+#                                       flick from hard handling — magnitude
+#                                       alone caps ~80% (setdown_firm is as
+#                                       hard as a deliberate flick)
+# POSITION_THRESHOLD_MG = 151         # only read if GESTURE_POSITION_ENABLED
+# ORIENTATION_STABLE_MG = 700
+# ORIENTATION_MAP = (("upright", "y", 1), ("horizontal", "z", -1), ("upside_down", "y", -1))
+# GESTURE_MENU_OPTIONS = ("Item 1", "Item 2", "Item 3")  # placeholder content
+# GESTURE_MODE_TIMEOUT_MS = 15_000
 
 # ── LED status messages — docs/contracts/led-status-messages.md ────────
-# Shared vocabulary for brief acknowledgments + distinguishable failure
-# colours. STATUS_LED_INDEX deliberately does NOT reuse ApproachContract's
+# Brief acknowledgments (as opposed to the terminal failures above).
+# STATUS_LED_INDEX deliberately does NOT reuse ApproachContract's
 # ANCHOR_INDEX — this stays contract-agnostic.
 # STATUS_LED_INDEX = NUM_LEDS // 2
 # QUIET_TAP_COLOR = (128, 0, 200)   # purple — tap during quiet hours
 # QUIET_TAP_DURATION_MS = 2500
 # NO_DATA_COLOR = (200, 160, 0)     # gold — woke up to nothing catchable
 # NO_DATA_DURATION_MS = 2500
-# SCHEDULE_ERROR_COLOR = (200, 0, 120)  # distinct from ERROR_COLOR (red) —
-#                                          a missing/corrupt schedule.json is
-#                                          a different failure than WiFi/NTP
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
+# ⚠ A dark strip during quiet hours is INDISTINGUISHABLE from a fault. Set
+# 24 / 0 to disable while testing; the loop prints "(quiet hours — display
+# off)" so the console can tell you apart from a real problem.
 QUIET_START_HOUR = 24
 QUIET_END_HOUR = 5

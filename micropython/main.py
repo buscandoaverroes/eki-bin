@@ -174,6 +174,14 @@ NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
 SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
 #   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
 #   cause should look like a different failure, not the same red for anything
+CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
+#   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
+#   such alias, which raises ValueError: invalid pin). Previously this class
+#   of failure crashed before any LED code ran, so a misconfigured unit on a
+#   wall adapter looked identical to a dead one — no serial console, no
+#   indication, nothing. That's the worst possible failure mode for a device
+#   meant to be handed to someone else. Same persistent-breathe treatment as
+#   the other two, its own colour per led-status-messages.md.
 
 # Gesture envelope — docs/contracts/gesture-envelope.md. Evidence-based,
 # from real sandbox data (docs/insights.md §8-9), unlike WAKE_INTERACTION's
@@ -2280,7 +2288,24 @@ def main():
             pass
         return
 
-    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+    # Config-value errors get an LED cue too. _heartbeat_pin is the known
+    # offender (HEARTBEAT_PIN="LED" is a Pico-2W-only alias; on any other
+    # board Pin("LED") raises ValueError) but this guards the whole class:
+    # a bad config value used to crash here, BEFORE run_startup_sequence()
+    # below ever runs, so nothing lit up at all. On USB you'd see the
+    # traceback; on a wall adapter the unit just looked dead.
+    #
+    # ⚠ Not everything is catchable here: LED_PIN/NUM_LEDS are consumed at
+    # IMPORT time to build `np`, so getting those wrong fails before main()
+    # is entered and no LED feedback is possible by construction. Those two
+    # stay a serial-console diagnosis.
+    try:
+        led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+    except (ValueError, TypeError) as e:
+        print(f"  ✗ Bad config value: HEARTBEAT_PIN={HEARTBEAT_PIN!r} ({e})")
+        print("    Pico 2W accepts \"LED\"; every other board needs a GPIO number")
+        print("    or bare None. See pinouts/<board>.md.")
+        _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
 
     try:
         schedule_data = load_schedule(SCHEDULE_FILE)
