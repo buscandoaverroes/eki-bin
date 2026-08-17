@@ -247,10 +247,31 @@ I²C spec at 400kHz (roughly 1K–10K is the usable band), so this is a note
 rather than a problem. It would only matter if a third pulled-up device
 joined the same bus.
 
-### Prefer Adafruit #5188 (STEMMA QT) — and how the chain actually works
+### Chain topology (what actually matters) vs. connector choice
 
-**#3013 has no QT socket**; #5188 is the same RTC with them. Only #5188
-can chain.
+**Take #3013 for this build.** An earlier version of this note recommended
+#5188 (the STEMMA QT variant) — that was optimizing for the wrong
+constraint, corrected here:
+
+- **The benefit is the TOPOLOGY, not the connector.** What avoids a 3-way
+  GND splice is routing `RTC → IMU → XIAO` instead of wiring RTC and IMU
+  each back to the board. **Soldered wire achieves that identically to a
+  QT cable.** #3013 gets the same win.
+- QT's real advantage is *solderless, reversible* assembly — and this
+  build solders everything, because header pins don't fit through the
+  bottle. That's a benefit there's no way to spend.
+- **Soldered is arguably safer here.** JST SH is a friction fit, and this
+  device's input method is *being tapped*. Intermittent `OSError EIO` from
+  a jostled connection has already cost real debugging time
+  (`docs/insights.md` §10). A plug-in connector inside an object designed
+  to be knocked invites that failure mode permanently; a solder joint
+  can't unseat.
+
+So: **#3013 + CR1220, no QT cables.** The QT route below stays documented
+for a future solderless/breadboard rig, where it's genuinely the nicer
+option.
+
+#### Wiring it (either connector choice)
 
 I²C is a **bus**: every device sits in *parallel* on the same SDA/SCL,
 distinguished purely by address (RTC 0x68, IMU 0x6A/0x6B). "Daisy-chaining"
@@ -263,16 +284,21 @@ socket is compatible.
 
 ```
 XIAO ──(A)── IMU ──(B)── DS3231
-     solder     QT        QT
+        ↑         ↑
+        └─────────┴── soldered wire (#3013) or QT cable (#5188)
 ```
 
-| Link | Needs | Get it by |
+| Link | Soldered build (**#3013 — recommended**) | Solderless (#5188 + QT) |
 |---|---|---|
-| **A** XIAO → IMU | QT plug one end, **bare wire** the other (no header pins fit in the bottle) | Cut one end off a QT-to-QT cable — or reuse the Qwiic-style lead Akizuki ships with the IMU |
-| **B** IMU → RTC | QT both ends | Buy as-is |
+| **A** XIAO → IMU | 4 wires to the IMU's through-holes: `3V3→VCC`, `GND→GND`, `D4→SDA`, `D5→SCL` | QT plug one end, bare wire the other (cut a QT-to-QT cable, or reuse the Qwiic lead Akizuki ships with the IMU) |
+| **B** IMU → RTC | 4 wires, hole to hole: `SDA↔SDA`, `SCL↔SCL`, `VCC↔VCC`, `GND↔GND` | QT-to-QT cable, plug in |
 
-**Order:** 1× DS3231 STEMMA QT (#5188), **2× QT-to-QT cable**, 1× CR1220.
-Two identical cables covers both links; cut one.
+Either way the XIAO only ever sees **four** I²C wires — the IMU is the
+junction. That's the whole point.
+
+**Order (soldered):** 1× DS3231 #3013, 1× CR1220. No cables needed.
+**Order (solderless):** 1× #5188, 2× QT-to-QT cable (cut one for Link A),
+1× CR1220.
 
 ⚠ **Buy 50–100mm, not 300mm.** Switch Science's own listing warns the
 300mm cable is marginal above 400kHz — and `main.py` runs the bus at
@@ -280,12 +306,13 @@ exactly `freq=400000`. Two of them is 600mm of bus capacitance on a build
 that has *already* produced intermittent `OSError EIO` (see
 `docs/insights.md` §10). Inside a bottle, 50–100mm is ample.
 
-**What this buys, stated accurately:** it takes GND from a **3-way splice
-down to 2-way** (LED strip + chain, instead of strip + IMU + RTC) and cuts
-the I²C run from eight wires to four. It does **not** eliminate the
-splice — the LED strip still needs its own GND straight to the pad (see
-§ Build technique). QT cable wire is ~28AWG: right for I²C and the RTC's
-trickle draw, wrong for LED power, so the strip keeps its thicker run.
+**What the chain buys, stated accurately:** it takes GND from a **3-way
+splice down to 2-way** (LED strip + chain, instead of strip + IMU + RTC)
+and cuts the I²C run from eight wires to four. It does **not** eliminate
+the splice — the LED strip still needs its own GND straight to the pad
+(see § Build technique). Keep I²C on thin wire (0.3sq / ~28AWG is right
+for signalling and the RTC's trickle draw) and leave the strip its own
+thicker 5V/GND run — the mixed-gauge rule in § Build technique.
 
 **Search terms (JP):** `Qwiic ケーブル` / `STEMMA QT ケーブル` /
 `JST SH 1.0mm 4ピン ケーブル` / `Qwiic 変換ケーブル` /
