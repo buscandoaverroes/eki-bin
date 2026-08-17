@@ -69,14 +69,23 @@ one axis near ±1000mg (gravity) at rest.
 
 ## 6. Run the real loop
 
-Set both gates **off** in `config.py`, then:
+Set both gates **off** in `config.py`, then **run it from flash**:
 
 ```bash
-make run                 # runs main.py live over USB — console output, Ctrl+C to stop
+make upload              # puts main.py on the device
+make screen              # then press Ctrl+D to soft-reset — main.py auto-runs
 ```
 
+> ⚠ **Don't use `make run` for `main.py` on the ESP32-C3.** `mpremote run`
+> ships the whole source over stdin, so the device holds ~115KB of text in RAM
+> *and* compiles it there — then `esp_wifi` has no heap left for its buffers
+> and you get `OSError: Wifi Out of Memory` (observed for real once `main.py`
+> passed ~2300 lines; it worked at the v1.2 checkpoint when the file was about
+> half this size). Booting from flash avoids that peak entirely. `make run`
+> is still fine for small scripts and on the roomier Pico 2W.
+
 For standalone (auto-runs on power-up, e.g. on a Qi pad): `make upload`, then
-power-cycle.
+power-cycle — same path, no laptop.
 
 - [ ] Boot ceremony plays (loading circle → burst).
 - [ ] Console prints station, contract, and per-tick departures.

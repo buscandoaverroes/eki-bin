@@ -8,6 +8,7 @@
 # "What's the urgency?" is computed once per tick and is independent of "how do
 # we show it?" — swap visual strategies by changing CONTRACT in config.py.
 
+import gc
 import json
 import math
 import time
@@ -2003,6 +2004,18 @@ def connect_wifi():
     _draw_startup_circle) while polling — replaced a blocking `sleep(1)`
     poll loop that drew nothing at all, the main piece of real engineering
     the boot ceremony needed (the animation math itself was nothing new)."""
+    # Reclaim before bringing the radio up. esp_wifi allocates real buffers
+    # at active(True) and raises `OSError: Wifi Out of Memory` if the heap
+    # can't serve them — a failure seen for real on the XIAO ESP32-C3 once
+    # main.py passed ~2300 lines. Cheap insurance at a genuine high-water
+    # mark; costs nothing on the roomier Pico 2W.
+    #
+    # ⚠ This does NOT rescue `mpremote run main.py` (i.e. `make run`), which
+    # ships the whole ~115KB source over stdin to be held in RAM AND compiled
+    # there — that peak happens before this line is ever reached. Run a file
+    # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
+    # to soft-reset. See docs/provisioning-runbook.md § 6.
+    gc.collect()
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(WIFI_SSID, WIFI_PASS)
