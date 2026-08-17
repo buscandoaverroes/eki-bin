@@ -57,10 +57,13 @@ stick, only the source board changes.
 
 ## Wiring — AE-LSM6DSV16X (IMU)
 
-**Status: ⬜ Proposed** — not yet wired here. First bring-up is happening on
-the Pico 2W (already on the breadboard — see `pinouts/pico2w.md`); this is
-where it lands for the real gift-jar integration once that's validated.
-Parts/register reference: `docs/hardware.md`.
+**Status: ✅ Verified** — wired and confirmed on this board 2026-08-16
+(`make imu-test`: IMU at `0x6b`, `WHO_AM_I = 0x70`, sane gravity readings).
+Originally brought up on the Pico 2W (`pinouts/pico2w.md`); now running on
+the XIAO as part of the gesture-envelope dev unit — full assembly, including
+the shared-GND splice and the 3V3-vs-5V rail warning, in
+[v1.4-imu-dev-unit.md](v1.4-imu-dev-unit.md). Parts/register reference:
+`docs/hardware.md`.
 
 Same I²C pins already used for the ST25DV NFC tag (`docs/hardware.md`'s NFC
 section) — same bus, multiple devices at their own addresses, no conflict.

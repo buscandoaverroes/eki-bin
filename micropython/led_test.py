@@ -21,7 +21,7 @@ from neopixel import NeoPixel
 
 # ── Configuration ────────────────────────────────────────────────
 DATA_PIN = 2  # WS2812B data line — SET PER BOARD (Pico 2W=6, XIAO C3=2); see header
-NUM_LEDS = 8  # SET PER STRIP (AE-WS2812B-STICK8=8, WS2812B-4020 tape=120, …)
+NUM_LEDS = 21  # SET PER STRIP (AE-WS2812B-STICK8=8, WS2812B-4020 tape=120, …)
 BRIGHTNESS = 0.15  # 0.0–1.0. Keep it low: 8 LEDs at full white ≈ 480mA off VBUS,
 # and it's blinding from a hand's distance. 0.15 is ample for
 # a bring-up — bump it later once you trust the wiring.
@@ -87,8 +87,14 @@ def chase(color, delay=0.18, trail=3):
 
 def main():
     print("\n══ eki-bin LED test ══════════════════════════════")
+    # "GPIO", not "GP" — GP<n> is Pico-specific naming and this script runs
+    # on the XIAO too, where the same number is a GPIO with a different D<n>
+    # silkscreen label. Echoing pin + count + brightness at startup is the
+    # convention across every bring-up script here: these files are
+    # deliberately NOT config-driven, so a stale per-board constant has to
+    # be visible on line one rather than surfacing as a confusing failure.
     print(
-        "  {} LEDs on GP{}, brightness {:.0f}%".format(
+        "  {} LEDs on GPIO{}, brightness {:.0f}%".format(
             NUM_LEDS, DATA_PIN, BRIGHTNESS * 100
         )
     )

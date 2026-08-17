@@ -39,8 +39,9 @@ import time
 from machine import I2C, Pin
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 0  # SET PER BOARD — see imu_test.py header
-SCL_PIN = 1
+SDA_PIN = 6  # SET PER BOARD (Pico 2W=0/1, XIAO C3=6/7) — see imu_test.py header
+SCL_PIN = 7  # currently: XIAO ESP32-C3. Echoed at startup so a stale value
+#              shows up as a wrong number, not as a mystery empty scan.
 I2C_ID = 0
 
 WHO_AM_I_REG = 0x0F
@@ -200,6 +201,7 @@ def _capture_rep(i2c, addr, poll, scenario):
 
 def main():
     print("\n══ eki-bin handling / false-positive test ═══════════")
+    print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
     i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
     addr = _find_device(i2c)
     if addr is None:

@@ -24,8 +24,12 @@ import time
 from machine import I2C, Pin
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0, XIAO C3=6/D4); see header
-SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1, XIAO C3=7/D5); see header
+SDA_PIN = 6  # I2C data  — SET PER BOARD (Pico 2W=0/GP0, XIAO C3=6/D4); see header
+SCL_PIN = 7  # I2C clock — SET PER BOARD (Pico 2W=1/GP1, XIAO C3=7/D5); see header
+#              ^^ currently set for the XIAO ESP32-C3. Swap back to 0/1 for the
+#              Pico 2W. An empty I2C scan is the symptom of forgetting this —
+#              the pins printed at startup are the first thing to check, since
+#              the XIAO doesn't even break out GPIO0/GPIO1 (its D0 is GPIO2).
 I2C_ID = 0   # hardware I2C peripheral index. Pico 2W: GP0/GP1 IS I2C0 — this
 #              pin pair is fixed by the RP2350's silicon, not arbitrary.
 #              XIAO C3 (ESP32): I2C pins are software-mapped, so ID 0 works
@@ -82,11 +86,26 @@ def _read_accel_mg(i2c, addr):
 
 def main():
     print("\n══ eki-bin IMU test (LSM6DSV16X) ════════════════")
+    # Echo the bus config before using it. This script is deliberately not
+    # config-driven (per-board constants, edited by hand), which means a
+    # board swap CAN silently leave the wrong pins in place — and the
+    # symptom, an empty scan, looks exactly like a wiring fault. Printing
+    # them makes the two cases distinguishable at a glance. Same footgun
+    # led_test.py's DATA_PIN hit during the v1.2 board-portability pass.
+    print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
     i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
 
     addr = _find_device(i2c)
     if addr is None:
-        print("  ✗ No LSM6DSV16X found — check wiring (SDA/SCL/3V3/GND)")
+        print("  ✗ No LSM6DSV16X found.")
+        print(f"    1. Are SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN} right for THIS board?")
+        print("       Pico 2W = 0/1, XIAO ESP32-C3 = 6/7 (see pinouts/<board>.md).")
+        print("       An EMPTY scan above usually means wrong pins, not bad solder —")
+        print("       the XIAO doesn't even expose GPIO0/GPIO1.")
+        print("    2. If the scan listed addresses but none matched, it's on the bus")
+        print("       at an unexpected address — check the SA0 pad.")
+        print("    3. Only then suspect wiring: 3V3 (NOT 5V — this chip isn't")
+        print("       5V-tolerant), GND, SDA, SCL.")
         return
     print(f"  ✓ LSM6DSV16X confirmed at {hex(addr)}")
 

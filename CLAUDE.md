@@ -49,6 +49,7 @@ When writing Rust code in this repo, take a teaching role:
 | Looking for… | File |
 |---|---|
 | Overview, quick start, every `make` target, workflows | `README.md` |
+| Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
 | What's done / next / open decisions | `dev-status.md` |
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |

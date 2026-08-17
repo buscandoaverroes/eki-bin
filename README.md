@@ -58,6 +58,7 @@ eki-bin/
 │   ├── hardware.md               ← parts in hand, voltage compatibility, build technique
 │   ├── roadmap.md                ← v1.1/v1.2 hardware plan, form-factor threads
 │   ├── insights.md               ← field notes, why-decisions, parked ideas
+│   ├── provisioning-runbook.md   ← bare board → running unit, one-glance checklist
 │   ├── nfc-provisioning.md       ← NFC provisioning workstream (bench record + current path)
 │   ├── rust-migration.md         ← V1 → V2 (MicroPython → Embassy) map
 │   ├── reflections/              ← periodic "how's it going" write-ups
