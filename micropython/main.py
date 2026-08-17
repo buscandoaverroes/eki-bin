@@ -22,10 +22,15 @@ from neopixel import NeoPixel
 # ─────────────────────────────────────────────────────────────
 # Settings (from config.py)
 # ─────────────────────────────────────────────────────────────
-# WiFi creds are *required* for V1 — import directly so a missing value fails
-# loudly rather than silently defaulting to nonsense.
-WIFI_SSID = config.WIFI_SSID
-WIFI_PASS = config.WIFI_PASS
+# WiFi creds are required only when TIME_SOURCE = "wifi" (the default), so
+# they can't be a hard `config.WIFI_SSID` any more — a deliberately
+# WiFi-free unit (TIME_SOURCE="rtc", the only way to run on the XIAO
+# ESP32-C3; see docs/insights.md §11) has no reason to carry credentials,
+# and a bare attribute read would AttributeError at import before main()
+# could explain why. Default to None and let connect_wifi() do the
+# complaining, where there's an LED path to complain THROUGH.
+WIFI_SSID = getattr(config, "WIFI_SSID", None)
+WIFI_PASS = getattr(config, "WIFI_PASS", None)
 
 # Everything else is optional with a default. getattr(config, "NAME", default)
 # returns the default when the field is absent, so a config.py written before a
@@ -175,6 +180,13 @@ NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
 SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
 #   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
 #   cause should look like a different failure, not the same red for anything
+TIME_SOURCE = getattr(config, "TIME_SOURCE", "wifi")
+#   "wifi" — connect + NTP at boot (V1 default, needs ~40KB of SRAM for
+#            esp_wifi; fine on the Pico 2W, does NOT fit on the XIAO
+#            ESP32-C3 alongside an app this size — docs/insights.md §11)
+#   "rtc"  — skip WiFi/NTP; trust the board's own RTC, set at provisioning
+#            time (`make set-time`). Survives soft reset, not power loss.
+#            The direction V2 goes permanently, via a DS3231.
 CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
 #   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
 #   such alias, which raises ValueError: invalid pin). Previously this class
@@ -1290,7 +1302,21 @@ def run_startup_sequence():
     success burst, then returns — the main loop takes over immediately
     after. On WiFi failure: _run_startup_failure_forever(), which NEVER
     RETURNS (see its docstring) — this function correspondingly never
-    returns either, in that case."""
+    returns either, in that case.
+
+    TIME_SOURCE="rtc" skips WiFi and NTP entirely and trusts whatever the
+    board's RTC already holds (set it at provisioning time with
+    `make set-time`). Added because the ESP32-C3 genuinely cannot fit
+    esp_wifi alongside a MicroPython app this size — see docs/insights.md
+    §11 — so on that board this is the difference between a working unit
+    and no unit. It also happens to be the direction V2 is going anyway
+    (DS3231 RTC, no WiFi in normal operation), so this is a step toward
+    the planned architecture rather than a detour around a bug."""
+    if TIME_SOURCE == "rtc":
+        print("  TIME_SOURCE='rtc' — skipping WiFi/NTP, trusting the board clock.")
+        print("  (Set it with `make set-time`; it survives soft reset, NOT power loss.)")
+        _play_startup_burst()
+        return
     if not connect_wifi():
         print("  ✗ WiFi failed — check config.py. Reset to retry.")
         _run_startup_failure_forever(ERROR_COLOR)
@@ -2015,6 +2041,13 @@ def connect_wifi():
     # there — that peak happens before this line is ever reached. Run a file
     # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
     # to soft-reset. See docs/provisioning-runbook.md § 6.
+    if not WIFI_SSID:
+        # Reachable only with TIME_SOURCE="wifi" and no credentials set —
+        # a config mistake, not a runtime failure. Say so plainly rather
+        # than handing esp_wifi a None to choke on.
+        print("  ✗ TIME_SOURCE='wifi' but WIFI_SSID is unset in config.py.")
+        print("    Set credentials, or use TIME_SOURCE='rtc' + `make set-time`.")
+        return False
     gc.collect()
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)

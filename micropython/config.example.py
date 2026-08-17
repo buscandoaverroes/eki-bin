@@ -44,9 +44,23 @@ IMU_I2C_ID = 0  # ESP32 maps I2C to any pins in software, so 0 works on both
 IMU_SDA_PIN = 0
 IMU_SCL_PIN = 1
 
-# ══ ② WiFi — the only genuinely required fields ══════════════════════
-# (V1 only — removed in V2 when a DS3231 RTC replaces NTP.)
+# ══ ② Time source + WiFi ═════════════════════════════════════════════
+# TIME_SOURCE = "wifi" (default) connects and NTP-syncs at boot.
+#
+# ⚠ **On the XIAO ESP32-C3, use "rtc".** esp_wifi needs ~40KB of SRAM and
+# ~26KB of that from one capability-constrained region that has only 32
+# bytes of spare margin at a bare boot — an app this size does not fit
+# alongside it, and you get `OSError: Wifi Out of Memory` or a native
+# abort() during association. Fully measured in docs/insights.md §11.
+# The Pico 2W has room and is fine on "wifi".
+#
+# "rtc" skips WiFi/NTP entirely and trusts the board's own clock — set it
+# with `make set-time`. It survives a soft reset but NOT a power cycle, so
+# re-run after unplugging. This is also where V2 is heading permanently
+# (DS3231 RTC, no WiFi in normal operation).
+TIME_SOURCE = "wifi"  # "wifi" | "rtc"
 
+# Only read when TIME_SOURCE = "wifi".
 WIFI_SSID = "your_network_name"
 WIFI_PASS = "your_network_password"
 

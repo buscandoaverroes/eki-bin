@@ -127,6 +127,17 @@ led-test: _check-mpremote
 imu-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/imu_test.py
 
+# Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
+# (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,
+# which can't fit esp_wifi alongside an app this size (docs/insights.md §11).
+# ⚠ The RTC survives a soft reset but NOT a power cycle — re-run after
+# unplugging. A DS3231 is the permanent answer (V2).
+.PHONY: set-time
+set-time: _check-mpremote
+	$(MPREMOTE) rtc --set
+	@$(MPREMOTE) rtc
+	@echo "✓ Device RTC set from host clock — re-run after any power cycle"
+
 .PHONY: repl
 repl: _check-mpremote
 	$(MPREMOTE)

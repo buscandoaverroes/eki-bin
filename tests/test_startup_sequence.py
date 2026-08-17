@@ -131,3 +131,41 @@ def test_failure_colours_are_all_distinct(load_main):
     assert len(set(colours)) == len(colours), (
         f"failure colours must be distinguishable, got {colours}"
     )
+
+
+# ── TIME_SOURCE ──────────────────────────────────────────────────
+
+
+def test_time_source_defaults_to_wifi(load_main):
+    m = load_main()
+    assert m.TIME_SOURCE == "wifi"  # V1 behaviour unchanged for existing configs
+
+
+def test_wifi_creds_optional_so_a_wifi_free_unit_can_boot():
+    # TIME_SOURCE="rtc" units (the only way to run a full app on the XIAO
+    # ESP32-C3 — docs/insights.md §11) have no reason to carry credentials.
+    # These were a hard `config.WIFI_SSID` read, which AttributeError'd at
+    # import before main() could explain anything.
+    #
+    # Built directly rather than via load_main, because that fixture always
+    # merges DEFAULT_CONFIG — and OMITTING the keys is the whole point here.
+    import importlib
+    import sys
+    import types
+
+    import conftest
+
+    conftest._install_device_fakes()
+    cfg = types.ModuleType("config")
+    for key, value in conftest.DEFAULT_CONFIG.items():
+        if key not in ("WIFI_SSID", "WIFI_PASS"):
+            setattr(cfg, key, value)
+    cfg.TIME_SOURCE = "rtc"
+    sys.modules["config"] = cfg
+    sys.modules.pop("main", None)
+    if conftest.MICROPYTHON_DIR not in sys.path:
+        sys.path.insert(0, conftest.MICROPYTHON_DIR)
+
+    m = importlib.import_module("main")  # must not raise
+    assert m.WIFI_SSID is None
+    assert m.TIME_SOURCE == "rtc"
