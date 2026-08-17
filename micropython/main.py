@@ -2321,29 +2321,45 @@ def main():
         _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
 
     try:
-        schedule_data = load_schedule(SCHEDULE_FILE)
-    except (OSError, ValueError):
-        # Different failure CAUSE, different colour — see
-        # docs/contracts/led-status-messages.md. A missing/corrupt
-        # schedule.json used to crash here with a console print and no LED
-        # indication at all; now gets the same persistent-failure treatment
-        # WiFi/NTP failure already had, just its own colour.
-        print("  ✗ Schedule failed to load. Reset to retry.")
-        _run_startup_failure_forever(SCHEDULE_ERROR_COLOR)  # never returns
+        # ⚠ ORDERING IS MEMORY-DRIVEN, NOT ARBITRARY — do not move WiFi back
+        # below load_schedule(). On the ESP32-C3, esp_wifi_init() needs
+        # ~40KB, and ~26KB of that must come from ONE specific SRAM region
+        # (measured: it drains regions 2 and 4 to 4 and 32 bytes free while
+        # leaving 111KB untouched in region 3, which can't satisfy its
+        # DMA/internal capability requirements). At a bare boot that region
+        # has just 26,448 bytes free against WiFi's 26,416 — **32 bytes of
+        # margin**. Anything allocated before WiFi comes up competes for it.
+        #
+        # Parsing schedule.json first cost ~5.5KB of exactly that region and
+        # made connect_wifi() raise `OSError: Wifi Out of Memory`. Bringing
+        # the radio up first lets MicroPython's heap grow into whatever's
+        # left over instead of the other way round.
+        #
+        # This buys margin; it does not create headroom. See
+        # docs/insights.md §11 for the real fix (stop compiling a 115KB
+        # module on-device) — this reorder is the cheap half.
+        run_startup_sequence()  # boot ceremony + WiFi/NTP — never returns on
+        #   WiFi failure (persistent red breathe instead), so everything
+        #   below only ever runs after a successful connect + burst.
 
-    print(
-        f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
-        f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+        try:
+            schedule_data = load_schedule(SCHEDULE_FILE)
+        except (OSError, ValueError):
+            # Different failure CAUSE, different colour — see
+            # docs/contracts/led-status-messages.md. A missing/corrupt
+            # schedule.json used to crash here with a console print and no
+            # LED indication at all; now gets the same persistent-failure
+            # treatment WiFi/NTP failure already had, just its own colour.
+            print("  ✗ Schedule failed to load. Reset to retry.")
+            _run_startup_failure_forever(SCHEDULE_ERROR_COLOR)  # never returns
 
-        f"  N trains: {N_TRAINS} "
-        f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
-    )
+        print(
+            f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
+            f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
 
-    try:
-        run_startup_sequence()  # boot ceremony — never returns on WiFi
-        #   failure (persistent red breathe instead), so everything below
-        #   only ever runs after a successful connect + burst.
-
+            f"  N trains: {N_TRAINS} "
+            f"LEDs: {NUM_LEDS} on GPIO{LED_PIN}"
+        )
         print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
 
         if WAKE_INTERACTION_ENABLED:

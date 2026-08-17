@@ -626,3 +626,122 @@ succeeded in over a second — a deliberate consequence of
 `led-status-messages.md`'s "errors are persistent and unambiguous, not
 almost-normal" principle: a brief flash for a single dropped sample would
 have worked against that, not honored it.
+
+---
+
+## 11. ESP32-C3 WiFi memory: two heaps, and only one of them counts (2026-08-17)
+
+Bringing the gesture dev unit up on the XIAO hit `OSError: Wifi Out of
+Memory` from `connect_wifi()`. Worth writing up because **two plausible
+diagnoses were wrong before the real one**, and the debugging method
+(measure the right pool) generalises well past this bug.
+
+### What it wasn't
+
+- **Not credentials.** `WIFI_SSID = config.WIFI_SSID` is direct attribute
+  access, so a missing value raises `AttributeError` at import — nowhere
+  near WiFi.
+- **Not (only) `mpremote run`.** `make run` ships the whole ~115KB source
+  over stdin to be held in RAM *and* compiled there; the traceback said
+  `File "<stdin>"`. Running from flash instead (`make upload` + soft reset)
+  was a genuine improvement and is now the documented path for a file this
+  size — but it did **not** fix the error. Right practice, wrong root cause.
+- **Not MicroPython heap exhaustion.** The obvious check says the opposite:
+
+  ```
+  gc.mem_free() → 155,824      GC total 175,872, used 37,632
+  ```
+
+  `main.py` — all 2355 lines — is **37KB of live data in a 172KB heap**.
+  There is no bloat problem in the sense you'd assume.
+
+### What it is
+
+**There are two separate heaps, and `gc.mem_free()` measures the wrong
+one.** MicroPython's GC heap holds Python objects. ESP-IDF's `malloc` heap
+is entirely separate, and `esp_wifi_init()` allocates from *that*. The two
+compete for the same physical SRAM, and on the ESP32 port MicroPython's GC
+heap **grows on demand by splitting chunks off the IDF heap and never
+returns them**.
+
+The right instrument is `esp32.idf_heap_info(esp32.HEAP_DATA)`, which
+returns one `(total, free, largest_free, min_free)` tuple **per region** —
+ESP-IDF manages SRAM as several disjoint ranges, not one pool, and a given
+`malloc` must be satisfied within a single region.
+
+Measured on a bare boot, bringing WiFi up by hand:
+
+| Region | free before | free after | WiFi took |
+|---|---|---|---|
+| 1 | 5,664 | 5,664 | 0 |
+| 2 | 10,160 | 4 | **10,156** |
+| 3 | 115,624 | 111,568 | 4,056 |
+| 4 | 26,448 | 32 | **26,416** |
+| | | **total** | **40,628** |
+
+**The distribution matters more than the total.** WiFi drained regions 2
+and 4 to 4 and 32 bytes while leaving 111KB untouched in region 3. That
+isn't the allocator being lazy — those buffers need DMA-capable internal
+SRAM, which region 3 doesn't provide. **Region 3's 111KB is essentially
+useless to WiFi.** Only regions 2 and 4 count.
+
+Which produces the number worth remembering: at a bare boot region 4 has
+26,448 bytes free and WiFi wants 26,416. **Thirty-two bytes of margin.**
+WiFi on this chip was always at the edge; compiling a `main.py` that had
+roughly doubled in size grew the GC heap ~5.5KB into region 4 and pushed it
+over. The IMU code didn't break it so much as consume the last slack.
+
+### How the allocator picks regions, and how much we can steer it
+
+`heap_caps_malloc(size, caps)` walks the registered heaps in a fixed
+priority order from the SoC's memory-layout table and takes the first that
+both satisfies the capability mask and has a large enough free block. It is
+**deterministic** for a given firmware and allocation sequence — but the
+sequence is exactly what changes between runs, which is why order matters
+so much here.
+
+From MicroPython, direct control is **not available**: you cannot request
+capabilities, and WiFi's allocations are internal to ESP-IDF. What is
+controllable:
+
+- **Ordering** — allocate the big, capability-constrained thing (WiFi)
+  before the flexible things (Python objects). Implemented; see below.
+- **Total pressure** — anything that stops the GC heap growing.
+- **Build-time `CONFIG_ESP32_WIFI_*`** — RX/TX buffer counts, static vs.
+  dynamic. This is the only real lever on WiFi's 40KB appetite, and it
+  needs a custom firmware build.
+
+### Fixed now (the cheap half)
+
+`main()` brings WiFi up **before** `load_schedule()`. The 8KB JSON parses
+into a much larger object graph that was previously held across WiFi init,
+costing ~5.5KB of precisely the contested region. Reordering lets
+MicroPython grow into what's left rather than the reverse.
+
+This buys margin. **It does not create headroom** — a fix that works by
+reclaiming 5KB against a 32-byte baseline margin is one feature away from
+breaking again.
+
+### The real fix, deliberately deferred
+
+Compiling a 115KB module on-device is a transient allocation spike that
+permanently enlarges the GC heap. Removing that spike is the durable
+answer, in rough order of effort:
+
+1. **Precompile to `.mpy`** (`mpy-cross`), with a two-line `main.py` that
+   imports it. No firmware build required.
+2. **Freeze into firmware** — bytecode lives in flash, not RAM. Biggest
+   win, needs a custom MicroPython build.
+3. **Split `main.py`** into modules so no single compile is huge. Helps
+   partly; the combined bytecode still lands in RAM.
+4. **Trim docstrings in hot modules.** Worth knowing: *comments are
+   stripped at compile time, docstrings are not* — they become live string
+   objects. This codebase's deliberately long docstrings therefore have a
+   real RAM cost, which is a genuine tension with its documentation ethos.
+   A marginal lever, listed for completeness rather than recommended.
+
+Deferred on purpose: `feature/gesture-envelope` is about getting gestures
+working on the XIAO, and the reorder unblocks that. Also worth noting the
+project's own roadmap retires this problem — V2 drops WiFi for a DS3231
+RTC, and gesture work needs no network at all (`GESTURE_DEBUG_ENABLED`
+already runs WiFi-free).
