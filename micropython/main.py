@@ -187,6 +187,15 @@ TIME_SOURCE = getattr(config, "TIME_SOURCE", "wifi")
 #   "rtc"  — skip WiFi/NTP; trust the board's own RTC, set at provisioning
 #            time (`make set-time`). Survives soft reset, not power loss.
 #            The direction V2 goes permanently, via a DS3231.
+
+# NTP writes UTC to the RTC; `mpremote rtc --set` writes the HOST'S LOCAL
+# time. So UTC_OFFSET_HOURS must only be applied in the "wifi" case —
+# adding it to an already-local clock puts the display UTC_OFFSET_HOURS
+# ahead, which is exactly what happened on the first real "rtc" boot.
+# Derived here rather than making the user also remember to zero
+# UTC_OFFSET_HOURS: two knobs that must agree is a footgun, one that
+# follows from the other isn't.
+_UTC_OFFSET_APPLIED = 0 if TIME_SOURCE == "rtc" else UTC_OFFSET_HOURS
 CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
 #   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
 #   such alias, which raises ValueError: invalid pin). Previously this class
@@ -1172,18 +1181,23 @@ def local_time():
     Return (minutes_since_midnight, weekday) in local time.
     weekday: 0=Monday … 6=Sunday (MicroPython convention)
 
-    NTP sets the Pico RTC to UTC. We add UTC_OFFSET_HOURS to get local
-    time — and also account for the day boundary, so the correct weekday
-    is used when UTC and local time are on different calendar days.
+    NTP sets the RTC to UTC, so we add UTC_OFFSET_HOURS to get local time —
+    and also account for the day boundary, so the correct weekday is used
+    when UTC and local time are on different calendar days.
     (e.g. UTC 22:00 Thursday = JST 07:00 Friday)
+
+    With TIME_SOURCE="rtc" the clock is ALREADY local (`mpremote rtc --set`
+    writes host local time), so no offset is applied — see
+    _UTC_OFFSET_APPLIED. Reading the raw clock as UTC in that case would
+    put the display UTC_OFFSET_HOURS ahead of reality.
     """
-    utc = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
-    utc_minutes = utc[3] * 60 + utc[4]
-    local_minutes_abs = utc_minutes + UTC_OFFSET_HOURS * 60
+    raw = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
+    utc_minutes = raw[3] * 60 + raw[4]
+    local_minutes_abs = utc_minutes + _UTC_OFFSET_APPLIED * 60
 
     day_overflow = local_minutes_abs // (24 * 60)  # 0 or 1
     local_minutes = local_minutes_abs % (24 * 60)
-    local_weekday = (utc[6] + day_overflow) % 7
+    local_weekday = (raw[6] + day_overflow) % 7
 
     return local_minutes, local_weekday
 

@@ -169,3 +169,16 @@ def test_wifi_creds_optional_so_a_wifi_free_unit_can_boot():
     m = importlib.import_module("main")  # must not raise
     assert m.WIFI_SSID is None
     assert m.TIME_SOURCE == "rtc"
+
+
+def test_rtc_time_source_does_not_double_apply_the_utc_offset(load_main):
+    # `mpremote rtc --set` writes the host's LOCAL time, unlike NTP which
+    # writes UTC. Applying UTC_OFFSET_HOURS on top put the first real
+    # TIME_SOURCE="rtc" boot 9 hours ahead.
+    m = load_main(TIME_SOURCE="rtc", UTC_OFFSET_HOURS=9)
+    assert m._UTC_OFFSET_APPLIED == 0
+
+
+def test_wifi_time_source_still_applies_the_utc_offset(load_main):
+    m = load_main(TIME_SOURCE="wifi", UTC_OFFSET_HOURS=9)
+    assert m._UTC_OFFSET_APPLIED == 9
