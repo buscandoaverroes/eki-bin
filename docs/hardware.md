@@ -247,13 +247,57 @@ I²C spec at 400kHz (roughly 1K–10K is the usable band), so this is a note
 rather than a problem. It would only matter if a third pulled-up device
 joined the same bus.
 
-**Worth considering instead: Adafruit #5188**, the same RTC with **STEMMA
-QT** connectors. The AE-LSM6DSV16X already has a Qwiic-compatible socket,
-so a QT part would let the RTC **daisy-chain off the IMU** — one 4-wire
-run from the board, zero extra solder joints, and it sidesteps the
-one-GND-pad splice problem entirely (see § Build technique). Given this
-build's single-GND-pad constraint, that's a real assembly advantage over
-saving a few hundred yen.
+### Prefer Adafruit #5188 (STEMMA QT) — and how the chain actually works
+
+**#3013 has no QT socket**; #5188 is the same RTC with them. Only #5188
+can chain.
+
+I²C is a **bus**: every device sits in *parallel* on the same SDA/SCL,
+distinguished purely by address (RTC 0x68, IMU 0x6A/0x6B). "Daisy-chaining"
+is not electrically a chain — Qwiic/STEMMA QT boards simply carry **two
+sockets wired straight through to each other**, so a cable in from upstream
+and another out to the next device taps the same bus. Nothing active, no
+hub. Qwiic (SparkFun) and STEMMA QT (Adafruit) are the same 4-pin JST SH
+1.0mm connector (GND/3.3V/SDA/SCL) and interoperate; the AE-LSM6DSV16X's
+socket is compatible.
+
+```
+XIAO ──(A)── IMU ──(B)── DS3231
+     solder     QT        QT
+```
+
+| Link | Needs | Get it by |
+|---|---|---|
+| **A** XIAO → IMU | QT plug one end, **bare wire** the other (no header pins fit in the bottle) | Cut one end off a QT-to-QT cable — or reuse the Qwiic-style lead Akizuki ships with the IMU |
+| **B** IMU → RTC | QT both ends | Buy as-is |
+
+**Order:** 1× DS3231 STEMMA QT (#5188), **2× QT-to-QT cable**, 1× CR1220.
+Two identical cables covers both links; cut one.
+
+⚠ **Buy 50–100mm, not 300mm.** Switch Science's own listing warns the
+300mm cable is marginal above 400kHz — and `main.py` runs the bus at
+exactly `freq=400000`. Two of them is 600mm of bus capacitance on a build
+that has *already* produced intermittent `OSError EIO` (see
+`docs/insights.md` §10). Inside a bottle, 50–100mm is ample.
+
+**What this buys, stated accurately:** it takes GND from a **3-way splice
+down to 2-way** (LED strip + chain, instead of strip + IMU + RTC) and cuts
+the I²C run from eight wires to four. It does **not** eliminate the
+splice — the LED strip still needs its own GND straight to the pad (see
+§ Build technique). QT cable wire is ~28AWG: right for I²C and the RTC's
+trickle draw, wrong for LED power, so the strip keeps its thicker run.
+
+**Search terms (JP):** `Qwiic ケーブル` / `STEMMA QT ケーブル` /
+`JST SH 1.0mm 4ピン ケーブル` / `Qwiic 変換ケーブル` /
+`DS3231 モジュール` / `リアルタイムクロック モジュール`.
+Shops: スイッチサイエンス (best for Adafruit/SparkFun stock), 秋月電子通商,
+千石電商, マルツ. ⚠ Seeed's own **Grove** (`グローブ`) connector is 2.0mm
+pitch and **does not mate with Qwiic** — search `Grove - Qwiic 変換` if you
+ever need to bridge the two.
+
+**Pull-ups compound down a chain:** each QT board brings its own. Two 10K
+sets → 5K, three → 3.3K, four → 2.5K. Fine at two or three, over-driven by
+four or five; many boards have a solder jumper to cut theirs.
 
 **BOM note that cuts in the DS3231's favour:** the SRAM pressure driving
 the XIAO-C3 → S3/C6 upgrade (`docs/insights.md` §11) exists *because of
