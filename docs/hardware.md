@@ -225,6 +225,43 @@ tag reads fine — another reason cork is the chosen first closure.
 
 ---
 
+## DS3231 RTC — candidate part evaluated (2026-08-18, nothing bought)
+
+**Candidate:** Adafruit **DS3231 Precision RTC Breakout**, product
+[#3013](https://www.adafruit.com/product/3013). Specs below verified
+against Adafruit's own product page and pinout guide, not assumed.
+
+| Property | Value | Verdict for this build |
+|---|---|---|
+| Supply / logic | **2.3–5.5V**, "no regulator or level shifter for 3.3V or 5V logic" | ✅ drives straight off the XIAO's 3V3, same rail as the IMU |
+| Interface | I²C | ✅ shares SDA/SCL with the IMU |
+| I²C address | **0x68** (fixed in the DS3231 silicon) | ✅ **no conflict** — the LSM6DSV16X sits at 0x6A/0x6B |
+| Onboard pull-ups | 10K on both SCL and SDA | ⚠ see note below |
+| Size | **23 × 17.6 × 7.2 mm** | ✅ comparable to the IMU breakout (24.5 × 17 mm) — if that fits an enclosure, this should too. Height (7.2mm, coin cell included) is the new dimension to check |
+| Backup cell | CR1220, **not included** | ⚠ order separately — it's the entire point (survives power loss, unlike the ESP32's internal RTC) |
+| STEMMA QT / Qwiic | **No** on #3013 | see below |
+
+**⚠ Two sets of pull-ups on one bus.** The IMU breakout brings its own,
+and these are 10K — in parallel that's ~5K, which is comfortably inside
+I²C spec at 400kHz (roughly 1K–10K is the usable band), so this is a note
+rather than a problem. It would only matter if a third pulled-up device
+joined the same bus.
+
+**Worth considering instead: Adafruit #5188**, the same RTC with **STEMMA
+QT** connectors. The AE-LSM6DSV16X already has a Qwiic-compatible socket,
+so a QT part would let the RTC **daisy-chain off the IMU** — one 4-wire
+run from the board, zero extra solder joints, and it sidesteps the
+one-GND-pad splice problem entirely (see § Build technique). Given this
+build's single-GND-pad constraint, that's a real assembly advantage over
+saving a few hundred yen.
+
+**BOM note that cuts in the DS3231's favour:** the SRAM pressure driving
+the XIAO-C3 → S3/C6 upgrade (`docs/insights.md` §11) exists *because of
+WiFi*. Adding a DS3231 removes the reason to run WiFi at all, so the
+extra cost of the roomier board is **partially offset by no longer
+needing it** — the two decisions are coupled, not independent line items.
+Weigh them together.
+
 ## IMU — LSM6DSV16X (wake/sleep interaction layer)
 
 **Purpose:** tap-gesture detection — see `docs/contracts/gesture-envelope.md`
