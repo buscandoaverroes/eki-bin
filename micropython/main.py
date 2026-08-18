@@ -1125,6 +1125,22 @@ class ApproachContract(DisplayContract):
         self._arm_a = [_TrainState() for _ in range(N_TRAINS)]
         self._arm_b = [_TrainState() for _ in range(N_TRAINS)]
 
+    def set_line_color(self, color):
+        """Point this contract at one line's colour. Shadows the class-level
+        default with an instance attribute; passing None restores it.
+
+        This is what makes a line identifiable **at a glance**, which is the
+        whole requirement: the premise is looking over at a random moment, so
+        identity has to live in the static view rather than in a cue that
+        only fires when you cycle (gesture-envelope.md §11). The anchor stays
+        neutral — set ANCHOR_COLOR to white — and the moving train dots carry
+        the colour, exactly like a metro map.
+
+        LINE_SATURATION still applies, so a per-enclosure desaturation
+        setting keeps working across every line rather than being defeated by
+        the schedule's nominal colours."""
+        self.line_color = desaturate(color or LINE_COLOR, LINE_SATURATION)
+
     def render(self, signal, phase_ms):
         """Phase 1 — single direction. Kept as its own method (not
         render_dual with a None second signal) so a phase-1 config's
@@ -2259,6 +2275,19 @@ def sync_ntp():
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────
+def _apply_line_color(contract, line):
+    """Point the contract at this line's colour, when both sides support it.
+
+    Same capability-probe pattern _render_dispatch uses for render_dual: a
+    contract that has no concept of a per-line colour (every arc/urgency
+    contract — their palette means URGENCY, not identity) is simply left
+    alone, as is a line that declares no colour. So this is a no-op for
+    every pre-existing config rather than something they must opt out of."""
+    color = line.get("color")
+    if color and hasattr(contract, "set_line_color"):
+        contract.set_line_color(tuple(color))
+
+
 def _render_dispatch(contract, signal, signal_b):
     """Pick render() vs render_dual() based on whether signal_b is given AND
     the contract actually implements render_dual — phase-2 bidirectional
@@ -2320,6 +2349,7 @@ def _run_classic_loop(schedule_data, led):
         # first line — better than showing nothing, which is what reading
         # the top level gave once departures moved inside lines[].
         line = schedule_lines(schedule_data)[0]
+        _apply_line_color(ACTIVE_CONTRACT, line)
         directions = line.get(period, {})
 
         print(DIVIDER)
@@ -2427,6 +2457,7 @@ def _run_interactive_loop(schedule_data, led):
     # with fewer lines can't leave it dangling.
     lines = schedule_lines(schedule_data)
     line_index = 0
+    _apply_line_color(ACTIVE_CONTRACT, lines[0])
     if len(lines) > 1:
         print(f"  Lines: {', '.join(l.get('name', '?') for l in lines)}  (tap to cycle)")
 
@@ -2540,6 +2571,7 @@ def _run_interactive_loop(schedule_data, led):
                             # whose effect appears half a minute later reads
                             # as a broken tap, not a slow one.
                             last_refresh = None
+                            _apply_line_color(ACTIVE_CONTRACT, lines[line_index])
                             print(f"  [LINE] {lines[line_index].get('name', '?')}")
                         trigger_buffer = []  # the window covered this stretch
                         last_render = None  # force a repaint after the jolt
