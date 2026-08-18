@@ -87,6 +87,19 @@ CONTRACT = "breathing"  # "sandtimer" | "color" | "breathing"
 #                         | "breathing_exponent" | "breathing_inverse" | "echo"
 #                         | "approach"
 COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
+#   ⚠ ARC CONTRACTS ONLY — inert under CONTRACT = "approach".
+#   The two paradigms use colour for different jobs, and it's worth being
+#   explicit about which:
+#     · arc contracts (sandtimer/breathing*/echo/color) — colour means
+#       URGENCY. A short strip can't express time positionally, so hue has
+#       to carry it. This is the 8-LED-stick lineage and still correct there.
+#     · approach — colour means LINE IDENTITY (from schedule.json's
+#       lines[].color), and URGENCY is carried by POSITION: distance from
+#       the anchor already is the time. Using hue for both would make a
+#       line's colour non-constant, which breaks the whole point of being
+#       identifiable on a random glance (gesture-envelope.md §11).
+#   URGENCY_THRESHOLDS is likewise unused for approach RENDERING — it still
+#   classifies the LEVEL shown in console output, nothing more.
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
 GAMMA = 2.2  # perceptual brightness curve (higher = smoother dim-end fades)
