@@ -297,6 +297,24 @@ WAKE_JOLT_MS = getattr(config, "WAKE_JOLT_MS", 500)  # confirmed-wake jolt
 #   duration, no input accepted — flagged too slow as-is (§11), timing is
 #   a feel question to iterate visually, not a logic one
 WAKE_JOLT_BRIGHTNESS_MULT = getattr(config, "WAKE_JOLT_BRIGHTNESS_MULT", 2.0)
+
+# Tap-strength → brightness, "hardware-defined software": a harder tap reads
+# brighter on both the ACK peak (the "up") and the shelf it settles onto (the
+# "down"). Every one of these defaults was tuned on real hardware across five
+# rounds — bare strip first, then IN-BOTTLE, which needed a wider range
+# because frosted glass compresses contrast. Full history:
+# gesture-envelope.md §11. Per-enclosure, like every amplitude number here.
+STRENGTH_MIN_DEV_MG = getattr(config, "STRENGTH_MIN_DEV_MG", TAP_TRIGGER_THRESHOLD_MG)
+STRENGTH_MAX_DEV_MG = getattr(config, "STRENGTH_MAX_DEV_MG", 460)
+ACK_PEAK_FLOOR = getattr(config, "ACK_PEAK_FLOOR", 0.35)  # lightest-tap ACK peak
+ACK_PEAK_CEIL = getattr(config, "ACK_PEAK_CEIL", 6.0)  # hardest-tap ACK peak.
+#   ⚠ Bounded by SATURATION, not taste: once BRIGHTNESS * mult * channel
+#   hits 255 every harder tap renders identically. 10.0 did exactly that
+#   past ~65% strength. tests/test_gesture_sandbox.py guards this.
+SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.08)  # dim, deliberately not dark
+SHELF_CEIL = getattr(config, "SHELF_CEIL", 0.25)  # stays under ACK_PEAK_FLOOR
+ACK_HOLD_MS = getattr(config, "ACK_HOLD_MS", 400)  # rise+dip duration. 150ms
+#   was too brief to perceive a strength difference before it settled.
 WAKE_SETTLE_MS = getattr(config, "WAKE_SETTLE_MS", 1500)  # post-jolt
 #   debounce, no input accepted — prevents the same physical contact that
 #   triggered WAKE from also registering as an immediate CYCLE
@@ -1776,6 +1794,73 @@ _GESTURE_TRIGGER_BUFFER_LEN = 8  # rolling context for the trigger's cheap
 #   extract_gesture_features()'s own median-of-the-whole-capture baseline
 _GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
 #   _capture_gesture_window's docstring for the honest simplification this is
+
+GESTURE_POLL_MS = getattr(config, "GESTURE_POLL_MS", 4)
+#   ⚠ The trigger MUST poll faster than FRAME_MS. Every validated recognizer
+#   number (95-98%, insights.md §8-9) was measured at 4ms/240Hz, and
+#   gesture_sandbox.py's header records that polling at FRAME_MS (16ms)
+#   instead was "a real cause of missed taps, not a hardware limit."
+#   _run_interactive_loop therefore ticks at THIS rate and time-gates its
+#   render at FRAME_MS — one more elapsed-gated task in the same cooperative
+#   super-loop, not a second loop.
+
+I2C_ERROR_PRINT_INTERVAL_MS = 1000
+
+
+def _safe_read_accel(i2c, addr, now_ms, last_error_print):
+    """Returns (raw_xyz_or_None, updated last_error_print). A jostled
+    connection — plausible in a device whose input method is being tapped —
+    raises OSError mid-read; skip that one sample rather than taking the
+    whole display down. Ported from gesture_sandbox.py, where this was
+    found the hard way (insights.md §10). Diagnostic throttled so a truly
+    dead sensor can't flood the console at the poll rate."""
+    try:
+        return _imu_read_accel_raw(i2c, addr), last_error_print
+    except OSError as e:
+        if time.ticks_diff(now_ms, last_error_print) >= I2C_ERROR_PRINT_INTERVAL_MS:
+            print(f"  ⚠ IMU read failed ({e}) — skipping sample; check wiring if this repeats")
+            last_error_print = now_ms
+        return None, last_error_print
+
+
+def _tap_strength(dev_mg):
+    """0..1, how hard the triggering contact read AT THE MOMENT OF CONTACT.
+    Deliberately uses `dev` (deviation from the rolling baseline) rather
+    than `energy`: energy is the accurate signal but isn't known until the
+    capture window closes ~1.2s later, and the ACK has to render NOW. See
+    gesture-envelope.md §11."""
+    span = STRENGTH_MAX_DEV_MG - STRENGTH_MIN_DEV_MG
+    if span <= 0:
+        return 1.0
+    return max(0.0, min(1.0, (dev_mg - STRENGTH_MIN_DEV_MG) / span))
+
+
+def _ack_flick(phase_ms, peak_mult, shelf_mult, ack_ms):
+    """Rise to peak, then settle onto the "continental shelf" — a dim but
+    NON-ZERO hold, not black. Real-hardware finding: dropping to black made
+    ACK and CONFIRM read as two disconnected blips with a stall between
+    them instead of one continuous gesture (gesture-envelope.md §11)."""
+    half = ack_ms / 2
+    if phase_ms < half:
+        return (phase_ms / half) * peak_mult
+    if phase_ms < ack_ms:
+        return peak_mult + (shelf_mult - peak_mult) * ((phase_ms - half) / half)
+    return shelf_mult
+
+
+def _confirm_jolt_mult(phase_ms, start_mult):
+    """Rises FROM the shelf (not from black) to WAKE_JOLT_BRIGHTNESS_MULT,
+    then decays all the way to 0 — the shelf meant "still deciding", so
+    decaying past it means "decided, done". Same rise:decay ratio as the
+    boot burst, scaled to WAKE_JOLT_MS."""
+    rise_ms = WAKE_JOLT_MS * (STARTUP_BURST_MS / (STARTUP_BURST_MS + STARTUP_FADE_MS))
+    decay_ms = WAKE_JOLT_MS - rise_ms
+    if phase_ms < rise_ms:
+        return start_mult + (phase_ms / rise_ms) * (WAKE_JOLT_BRIGHTNESS_MULT - start_mult)
+    decay_elapsed = phase_ms - rise_ms
+    if decay_elapsed >= decay_ms:
+        return 0.0
+    return WAKE_JOLT_BRIGHTNESS_MULT * (1.0 - decay_elapsed / decay_ms)
 
 
 def _capture_gesture_window(i2c, addr, start_ms):

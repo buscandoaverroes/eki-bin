@@ -461,3 +461,56 @@ def test_tap_cycle_acknowledge_sets_pending_flag(load_main):
     assert state.ack_pending is True
     state.resolve(0, valid=True)
     assert state.ack_pending is False
+
+
+# ── jolt render math, ported from gesture_sandbox into main ──────
+
+
+def test_tap_strength_clamps_and_is_monotonic(load_main):
+    m = load_main()
+    assert m._tap_strength(m.STRENGTH_MIN_DEV_MG - 100) == 0.0
+    assert m._tap_strength(m.STRENGTH_MAX_DEV_MG + 999) == 1.0
+    devs = [0, 60, 150, 300, 460, 900]
+    strengths = [m._tap_strength(d) for d in devs]
+    assert strengths == sorted(strengths)
+
+
+def test_ack_flick_settles_exactly_on_the_shelf(load_main):
+    # The "continental shelf": ACK must land ON shelf_mult, not near it and
+    # not at 0 — a hand-off discontinuity into the static shelf write is
+    # what the real-hardware "dive to black" bug looked like.
+    m = load_main()
+    assert m._ack_flick(0, 1.0, 0.2, 400) == 0.0
+    assert m._ack_flick(200, 1.0, 0.2, 400) == 1.0  # peak at the midpoint
+    assert abs(m._ack_flick(400, 1.0, 0.2, 400) - 0.2) < 1e-9
+    assert abs(m._ack_flick(9999, 1.0, 0.2, 400) - 0.2) < 1e-9  # holds
+
+
+def test_confirm_jolt_starts_from_the_shelf_and_decays_to_black(load_main):
+    # Rises FROM the shelf rather than from 0 (that continuity is the whole
+    # point), and must reach exactly 0 so "decided, done" reads as done.
+    m = load_main()
+    assert m._confirm_jolt_mult(0, 0.2) == 0.2
+    assert m._confirm_jolt_mult(m.WAKE_JOLT_MS, 0.2) == 0.0
+    peak = max(m._confirm_jolt_mult(t, 0.2) for t in range(0, m.WAKE_JOLT_MS, 5))
+    assert abs(peak - m.WAKE_JOLT_BRIGHTNESS_MULT) < 0.05
+
+
+def test_ack_peak_ceiling_does_not_saturate(load_main):
+    # Same invariant tests/test_gesture_sandbox.py guards for the sandbox —
+    # asserted here too now that main.py owns these constants for real.
+    m = load_main(BRIGHTNESS=0.15)
+    assert max(m.STARTUP_COLOR) * m.BRIGHTNESS * m.ACK_PEAK_CEIL < 255
+
+
+def test_shelf_stays_below_the_ack_peak_floor(load_main):
+    m = load_main()
+    assert m.SHELF_CEIL < m.ACK_PEAK_FLOOR
+
+
+def test_gesture_poll_is_faster_than_the_render_frame(load_main):
+    # The recognizer's 95-98% numbers were measured at 4ms. Polling at
+    # FRAME_MS (16ms) was documented as a real cause of missed taps, so the
+    # interactive loop ticks at GESTURE_POLL_MS and time-gates its render.
+    m = load_main()
+    assert m.GESTURE_POLL_MS < m.FRAME_MS
