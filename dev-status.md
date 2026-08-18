@@ -610,9 +610,16 @@ sleeps, no fourth gesture.
       the real main loop are both untouched by this work
 - [ ] **`grab_and_tap` stays parked** — inconsistent across sessions,
       root cause unconfirmed, not built on (`docs/insights.md` §9)
-- [ ] **Station-cycling display logic** — CYCLE needs a "current station
-      index" concept that doesn't exist anywhere in `main.py` yet; a real,
-      separate piece of scope, not resolved by any of the above
+- [ ] **Line-cycling display logic** (corrected 2026-08-18 — it's *lines*,
+      not stations: the bin sits in one room so the station is fixed, and
+      direction is already handled by `ApproachContract`'s two arms). CYCLE
+      selects which line at that station is shown; identity is carried by
+      **line colour on the train dots**, anchor stays neutral white, so it
+      reads on a random glance rather than only at cycle time. Needs an
+      optional `lines[]` in `schedule.json` — design in
+      `docs/contracts/schedule-json.md` § Multiple lines, including the
+      measured tinted-glass palette constraint. Picks up the long-deferred
+      "Line-color palette / metro-line static color scheme" item below.
 - [ ] **Not pushed to `dev`/`main`**
 
 ### LED status messages (errors + acknowledgments) ✅ implemented, local only
