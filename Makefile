@@ -30,7 +30,7 @@ PICO_FIRMWARE  := $(wildcard $(FIRMWARE_DIR)/RPI_PICO2_W-*.uf2)
 ESP32_FIRMWARE := $(wildcard $(FIRMWARE_DIR)/SEEED_XIAO_ESP32C3-*.bin)
 SRC_DIR      := micropython
 
-STATION ?= mystation
+STATION ?= testbench
 
 
 # ── Setup ─────────────────────────────────────────────────────────

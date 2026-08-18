@@ -2132,6 +2132,30 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     return resolved
 
 
+def schedule_lines(schedule_data):
+    """PURE: normalize EITHER schedule shape to a list of line dicts, so no
+    caller ever has to branch on which format it was handed.
+
+    Contract: docs/contracts/schedule-json.md § Multiple lines at one
+    station. A file with `lines` returns it directly. A file without one is
+    a single-line station, and the document itself IS that line — that shape
+    is not deprecated, and normalizing here rather than at every use site is
+    what keeps every pre-existing schedule working untouched (principle #9).
+
+    Returns at least one entry, so `lines[i % len(lines)]` is always safe.
+    Each entry may carry an optional "color" — the line's NOMINAL colour,
+    which is what makes a line identifiable at a glance rather than only at
+    the moment you cycle to it (gesture-envelope.md §11)."""
+    lines = schedule_data.get("lines")
+    if lines:
+        return lines
+    single = {"name": schedule_data.get("station", "line")}
+    for period in ("weekday", "weekend"):
+        if period in schedule_data:
+            single[period] = schedule_data[period]
+    return [single]
+
+
 def _all_signals_hidden(signal, signal_b):
     """True if every active direction's LeaveSignal is HIDDEN (no catchable
     trains) — the trigger for the wake-to-no-data acknowledgment."""
@@ -2291,7 +2315,12 @@ def _run_classic_loop(schedule_data, led):
 
         now, weekday = local_time()
         period = current_period(weekday)
-        directions = schedule_data.get(period, {})
+        # Line 0 always: this loop has no gestures, so there is nothing to
+        # cycle with. A multi-line schedule still works, it just shows the
+        # first line — better than showing nothing, which is what reading
+        # the top level gave once departures moved inside lines[].
+        line = schedule_lines(schedule_data)[0]
+        directions = line.get(period, {})
 
         print(DIVIDER)
         print(
@@ -2392,6 +2421,15 @@ def _run_interactive_loop(schedule_data, led):
     last_error_print = time.ticks_ms()
     last_render = None
 
+    # Which line is on show. CYCLE advances it (gesture-envelope.md §11) —
+    # the station is fixed (the bin lives in one room), so the line is what
+    # varies. Kept as a plain index, wrapped at use, so a schedule reload
+    # with fewer lines can't leave it dangling.
+    lines = schedule_lines(schedule_data)
+    line_index = 0
+    if len(lines) > 1:
+        print(f"  Lines: {', '.join(l.get('name', '?') for l in lines)}  (tap to cycle)")
+
     last_refresh = None
     now = 0
     signal = LeaveSignal([])
@@ -2411,11 +2449,13 @@ def _run_interactive_loop(schedule_data, led):
 
             now, weekday = local_time()
             period = current_period(weekday)
-            directions = schedule_data.get(period, {})
+            line = lines[line_index % len(lines)]
+            directions = line.get(period, {})
 
             print(DIVIDER)
             print(
-                f"  {hb}  {fmt_time(now)} JST   {period}   {schedule_data['station']}   #{loop_count}"
+                f"  {hb}  {fmt_time(now)} JST   {period}   "
+                f"{schedule_data['station']}/{line.get('name', '?')}   #{loop_count}"
             )
             print(DIVIDER)
 
@@ -2493,6 +2533,14 @@ def _run_interactive_loop(schedule_data, led):
                             i2c, imu_addr, tick_now, dev, tap_state,
                             signal, signal_b, status_message,
                         )
+                        if response == "cycle" and len(lines) > 1:
+                            line_index = (line_index + 1) % len(lines)
+                            # Recompute NOW rather than waiting up to
+                            # LOOP_INTERVAL_SECS for the slow task: a tap
+                            # whose effect appears half a minute later reads
+                            # as a broken tap, not a slow one.
+                            last_refresh = None
+                            print(f"  [LINE] {lines[line_index].get('name', '?')}")
                         trigger_buffer = []  # the window covered this stretch
                         last_render = None  # force a repaint after the jolt
 

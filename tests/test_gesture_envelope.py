@@ -528,3 +528,48 @@ def test_gesture_enabled_accepts_either_config_name(load_main):
 def test_gesture_enabled_new_name_wins(load_main):
     m = load_main(GESTURE_ENABLED=False, WAKE_INTERACTION_ENABLED=True)
     assert m.WAKE_INTERACTION_ENABLED is False
+
+
+# ── multi-line schedules — schedule-json.md § Multiple lines ─────
+
+
+def test_schedule_lines_wraps_a_single_line_file(load_main):
+    # No `lines` key = the document IS the line. This is the shape every
+    # schedule predating multi-line support has, and it must keep working.
+    m = load_main()
+    data = {"station": "mystation",
+            "weekday": {"a": [300], "b": [310]},
+            "weekend": {"a": [400]}}
+    lines = m.schedule_lines(data)
+    assert len(lines) == 1
+    assert lines[0]["name"] == "mystation"
+    assert lines[0]["weekday"]["a"] == [300]
+    assert lines[0]["weekend"]["a"] == [400]
+
+
+def test_schedule_lines_passes_multi_line_through(load_main):
+    m = load_main()
+    data = {"station": "s", "lines": [
+        {"name": "green", "color": [0, 255, 0], "weekday": {"a": [300]}},
+        {"name": "red", "color": [255, 0, 0], "weekday": {"a": [310]}},
+    ]}
+    lines = m.schedule_lines(data)
+    assert [l["name"] for l in lines] == ["green", "red"]
+    assert lines[1]["color"] == [255, 0, 0]
+
+
+def test_schedule_lines_always_returns_at_least_one(load_main):
+    # Guarantees `lines[i % len(lines)]` can never ZeroDivisionError, which
+    # is what the cycling index relies on.
+    m = load_main()
+    for data in ({}, {"station": "s"}, {"station": "s", "lines": []}):
+        assert len(m.schedule_lines(data)) >= 1
+
+
+def test_schedule_lines_missing_period_is_absent_not_empty(load_main):
+    # A station with no weekend service should not gain an empty weekend
+    # key — current_period() looks the period up and "absent" is the honest
+    # answer, distinct from "runs, but no trains".
+    m = load_main()
+    lines = m.schedule_lines({"station": "s", "weekday": {"a": [300]}})
+    assert "weekend" not in lines[0]
