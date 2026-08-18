@@ -656,6 +656,20 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
       reconsideration, not blocking this build)
 - [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
       block any of the above
+- [ ] **Repo hygiene pass — branch protection + CI** (flagged 2026-08-18 by a
+      GitHub warning that `main` is unprotected). Deliberately tabled to do
+      **comprehensively in one go** rather than clicking one setting. Scope
+      when picked up: protect `main` (and decide whether `dev` too) via
+      `gh api` so the rules are version-controlled and reproducible, not
+      click-ops; decide required status checks — `make test` is the obvious
+      candidate but **there is no CI workflow yet**, so this likely means
+      adding one first; note `schedules/*.json` is gitignored and generated,
+      so CI must run `make schedule` before `make test` (already recorded in
+      Known issues); decide review requirements given this is a solo repo
+      (self-approval rules differ); and consider whether the several stale
+      local branches (`feature/wake-interaction-layer`,
+      `feature/ios-nfc-spike`, `feature/qi-bringup`, …) should be pruned or
+      archived in the same pass.
 
 ---
 
