@@ -113,3 +113,72 @@ def test_error_mult_never_goes_fully_dark(load_main):
     m = load_main(ERROR_BREATHE_PERIOD_MS=4000)
     samples = [m._startup_error_mult(t) for t in range(0, 4001, 200)]
     assert all(s >= 0.15 for s in samples)  # floor=0.15, never truly off
+
+
+# ── failure colours stay distinguishable ─────────────────────────
+
+
+def test_failure_colours_are_all_distinct(load_main):
+    # docs/contracts/led-status-messages.md's stated principle: "different
+    # failure CAUSES get visually distinct colours. One universal
+    # 'something's wrong, breathe red' for every failure defeats that."
+    # Three terminal failures exist now — WiFi/NTP, schedule load, and (new)
+    # a bad config value — and the whole point is telling them apart with no
+    # laptop attached, so a copy-paste that collapsed two of them into the
+    # same colour would silently undo the feature.
+    m = load_main()
+    colours = [m.ERROR_COLOR, m.SCHEDULE_ERROR_COLOR, m.CONFIG_ERROR_COLOR]
+    assert len(set(colours)) == len(colours), (
+        f"failure colours must be distinguishable, got {colours}"
+    )
+
+
+# ── TIME_SOURCE ──────────────────────────────────────────────────
+
+
+def test_time_source_defaults_to_wifi(load_main):
+    m = load_main()
+    assert m.TIME_SOURCE == "wifi"  # V1 behaviour unchanged for existing configs
+
+
+def test_wifi_creds_optional_so_a_wifi_free_unit_can_boot():
+    # TIME_SOURCE="rtc" units (the only way to run a full app on the XIAO
+    # ESP32-C3 — docs/insights.md §11) have no reason to carry credentials.
+    # These were a hard `config.WIFI_SSID` read, which AttributeError'd at
+    # import before main() could explain anything.
+    #
+    # Built directly rather than via load_main, because that fixture always
+    # merges DEFAULT_CONFIG — and OMITTING the keys is the whole point here.
+    import importlib
+    import sys
+    import types
+
+    import conftest
+
+    conftest._install_device_fakes()
+    cfg = types.ModuleType("config")
+    for key, value in conftest.DEFAULT_CONFIG.items():
+        if key not in ("WIFI_SSID", "WIFI_PASS"):
+            setattr(cfg, key, value)
+    cfg.TIME_SOURCE = "rtc"
+    sys.modules["config"] = cfg
+    sys.modules.pop("main", None)
+    if conftest.MICROPYTHON_DIR not in sys.path:
+        sys.path.insert(0, conftest.MICROPYTHON_DIR)
+
+    m = importlib.import_module("main")  # must not raise
+    assert m.WIFI_SSID is None
+    assert m.TIME_SOURCE == "rtc"
+
+
+def test_rtc_time_source_does_not_double_apply_the_utc_offset(load_main):
+    # `mpremote rtc --set` writes the host's LOCAL time, unlike NTP which
+    # writes UTC. Applying UTC_OFFSET_HOURS on top put the first real
+    # TIME_SOURCE="rtc" boot 9 hours ahead.
+    m = load_main(TIME_SOURCE="rtc", UTC_OFFSET_HOURS=9)
+    assert m._UTC_OFFSET_APPLIED == 0
+
+
+def test_wifi_time_source_still_applies_the_utc_offset(load_main):
+    m = load_main(TIME_SOURCE="wifi", UTC_OFFSET_HOURS=9)
+    assert m._UTC_OFFSET_APPLIED == 9

@@ -3,12 +3,23 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: v1.4 — boot ceremony (branch `feature/startup-sequence`)
+## Current phase: gesture envelope (branch `feature/gesture-envelope`, not yet pushed)
 
-> `feature/positional-display` (ApproachContract — see below) is merged to
-> `dev`. Current branch builds the startup/boot sequence design doc'd in
-> `docs/contracts/startup-sequence.md` — implemented, host-tested,
-> **not yet validated on real hardware**.
+> **Supersedes the wake/sleep interaction layer below** — same sensor
+> (AE-LSM6DSV16X), a redesigned interaction model. Real-hardware testing
+> (many sessions, two bottles, a sandbox toolchain built specifically to
+> answer "what can this hardware actually support") found the original
+> multi-gesture wake-interaction design's harder pieces (position
+> disambiguation, flick-vs-handling) genuinely unreliable, while tap-vs-noise
+> discrimination alone was consistently strong (95-98%+). Scoped down to a
+> minimal "light switch"-reliable contract instead of the fuller vocabulary —
+> full rationale in `docs/contracts/gesture-envelope.md`'s "Scope pivot"
+> callout and §11. IMU is now **physically wired and extensively validated**
+> on the Pico 2W + AE-WS2812B-STICK8 (not the stub `wake-interaction.md`
+> describes) — see the new subsection below, after "Wake/sleep interaction
+> layer," for the full account. 185 tests passing. **Not yet pushed**, **not
+> yet on the XIAO/full LED tape/actual bottle** (that's the next step before
+> merge to `dev`).
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -465,11 +476,182 @@ byte-identical.
       tests total, all passing
 - [ ] **Not yet validated on real hardware** — host tests only so far
 
+### Wake/sleep interaction layer (IMU tap gestures) — superseded, see below
+
+⚠ **Superseded by the "Gesture envelope" section immediately below.** Kept
+here as history, not deleted — the state-machine/safety-gate patterns
+(`WAKE_INTERACTION_ENABLED`-style opt-in gating, cooperative-loop
+concurrency) carried forward correctly into the new design; what changed
+is the *gesture vocabulary* itself, after real hardware showed the
+multi-gesture plan below was more than this sensor could reliably support.
+
+Branch: `feature/wake-interaction-layer` (not pushed, per instruction).
+Full design: `docs/contracts/wake-interaction.md`. Not the simple "tap
+extends the timer" idea first floated — that turned out to be too simple on
+reflection (a tap while awake needs to do something *else*, and extending
+needs its own gesture plus a confirmation cue, or a missed extend is
+indistinguishable from a registered one).
+
+- **Sensor picked:** AE-LSM6DSV16X (Akizuki g130950) — the breakout board,
+  not the bare LGA14L chip (g130032, same sensor, not hand-solderable).
+  I2C on D4/SDA (GPIO6) + D5/SCL (GPIO7), same bus already earmarked for a
+  future DS3231 RTC. Only GND is shared with the LED strip's wiring —
+  bundled into one solder joint, no contention with SDA/SCL/3V3
+- **Two states:** AWAKE (countdown running, contract renders normally) and
+  ASLEEP (all LEDs off). Boot always enters AWAKE — placing the jar on a Qi
+  pad *is* an intentional wake trigger, same logic as a deliberate tap
+- **State-dependent gestures:** ASLEEP + any tap → wake (replays
+  `_play_startup_burst()` as-is). AWAKE + single tap → `_run_secondary_action()`
+  (default: `_cycle_brightness()` through `BRIGHTNESS_PRESETS`). AWAKE +
+  double tap → extend the countdown + a confirmation overlay
+- **Real, named cost:** distinguishing single vs. double tap needs a
+  `DOUBLE_TAP_WINDOW_MS` disambiguation window, so a single tap can't fire
+  until that window elapses — trades away the ~50ms "instant" feel a
+  bare single-gesture design would have had, in exchange for two gestures
+  on one sensor
+- **Concurrency:** confirmed no RTOS/threading needed — implemented as
+  `_run_interactive_loop()`, a cooperative super-loop (one `FRAME_MS` tick,
+  several elapsed-time-gated tasks). XIAO ESP32-C3 is single-core anyway, so
+  an RTOS would only be time-slicing one core, same real-world result
+- **Safety gate added during implementation, not in the original design:**
+  `WAKE_INTERACTION_ENABLED` (default `False`). With `_imu_tap_detected()`
+  still stubbed (always `False` — no IMU wired), enabling this
+  unconditionally would leave the display permanently ASLEEP after
+  `WAKE_MINUTES` with no way to wake it again — a real regression for
+  `config_friend1.py` and any other IMU-less deployment. `main()` now
+  branches: `False` runs `_run_classic_loop()` (the *original* loop, moved
+  but byte-for-byte unchanged); `True` runs the new
+  `_run_interactive_loop()`. Every existing deployment is unaffected by
+  default
+- [x] `_TapClassifier`, `_WakeState`, `_StatusMessage`, `_classify_wake_response`,
+      `_all_signals_hidden`, `_cycle_brightness`/`_run_secondary_action` — all
+      pure, all host-tested (27 tests, `tests/test_wake_interaction.py`)
+- [x] **Deviation from the original doc:** the extend confirmation was
+      specified as an ANIMATED `pulse()`/`breathe()`; implemented instead as
+      the same non-blocking `_StatusMessage` overlay the two new status
+      messages use (one shared mechanism, and a blocking animated pulse
+      would stall tap classification for its duration)
+- [ ] **Not yet on real hardware** — no IMU physically wired;
+      `TAP_THRESHOLD`/`DOUBLE_TAP_WINDOW_MS` are untested guesses pending a
+      real sensor
+- [ ] **Not pushed to `dev`/`main`** — kept local per instruction
+
+### Gesture envelope (IMU tap gestures, v2) ✅ implemented, extensively real-hardware validated, not yet pushed
+
+Branch: `feature/gesture-envelope` (not pushed). Full design + the complete
+real-hardware iteration log: `docs/contracts/gesture-envelope.md` (§11
+specifically covers everything below in full detail — this is the
+proportionate summary). Field-note synthesis: `docs/insights.md` §8-9.
+
+**The sensor is now really wired**, not the stub the section above
+describes — AE-LSM6DSV16X on the Pico 2W (`pinouts/pico2w.md`, now
+✅ Verified, combined IMU+LED wiring documented with an explicit
+3.3V/5V power-rail safety note). A purpose-built sandbox toolchain
+(`micropython/vibration_sandbox.py`, `imu_test.py`, `handling_test.py`,
+`orientation_test.py`, plus host-side `scripts/analyze_taps.py` /
+`prepare_tap_dataset.py` / `train_tap_classifier.py`) ran across many
+sessions and two bottles to empirically determine what this hardware could
+actually support, rather than assuming the original design's harder
+gestures (position disambiguation, flick-vs-handling) would just work.
+They didn't hold up reliably at scale; tap-vs-noise did (95-98%+,
+98.4% for tap-vs-all-pooled-handling-noise). **Scope pivot:** rather than
+force the fuller multi-gesture vocabulary, built a minimal "light
+switch"-reliable contract instead — tap wakes, tap cycles, timeout
+sleeps, no fourth gesture.
+
+- [x] **`classify_valid_input`** — energy-threshold tap-vs-noise
+      recognizer, pure, host-tested, 98.4% lab accuracy
+- [x] **`_TapCycleState`** — two-phase ACK/CONFIRM state machine
+      (ASLEEP→WAKING→SETTLING→AWAKE; tap=WAKE when asleep, tap=CYCLE when
+      awake, timeout back to ASLEEP), pure, host-tested
+- [x] **`micropython/gesture_sandbox.py`** — new sandbox, `import main`s
+      the real recognizer/state-machine (never re-derives it) but tunes
+      the trigger/capture timing independently (240Hz/4ms vs. `main.py`'s
+      debug loop's 16ms, a real cause of missed taps found on hardware)
+- [x] **Real-hardware validation, terminal-only first:** 10/10 consecutive
+      real taps correctly resolved; the one live miss matched the
+      already-known 3/180 failure-mode rate, not a new problem; `SETTLING`
+      correctly filters taps landing right after `WAKE`
+- [x] **LED jolt UX, then wired to a real tap** — ACK (instant, live
+      during the ~1.2s capture window itself, before the recognizer has a
+      verdict) → CONFIRM (WAKE gets a fuller rise/decay jolt; CYCLE gets a
+      simpler flash+cut). Five real-hardware iteration rounds refined this
+      from a first pass to something confirmed working well in-bottle:
+      the "continental shelf" (ACK settles to a dim held brightness
+      instead of black, so ACK and CONFIRM read as one gesture instead of
+      two disconnected blips with a stall between them); tap-strength
+      scaling (`dev` at trigger time — the only signal available before
+      `energy` is known — drives both the ACK peak and the shelf level,
+      "hardware-defined software"); a real saturation bug (an
+      over-widened brightness ceiling clamped every hard tap to
+      identical pure white, silently losing differentiation — found, fixed,
+      and **hardened with regression tests**, `tests/test_gesture_sandbox.py`);
+      a real rendering bug (`gamma()` crushing the ACK's low-range descent
+      to near-black before the shelf's linearly-rendered brightness took
+      over — "dive underground to 0, then back up to a plateau"); and
+      non-interactive I2C error resilience (a jostled breadboard
+      connection — same finding `vibration_sandbox.py` made first — no
+      longer crashes the whole script; a sustained failure escalates to a
+      persistent-breathe LED cue, matching `led-status-messages.md`'s own
+      "errors are persistent and unambiguous" principle rather than a
+      brief flash that would work against it)
+- [x] 185 tests passing (`tests/test_gesture_envelope.py`,
+      `tests/test_gesture_sandbox.py`)
+- [ ] **Not yet on the target hardware** — everything above is Pico 2W +
+      AE-WS2812B-STICK8 (8 LEDs, bare strip). The actual target is the
+      XIAO ESP32-C3 + full LED tape, inside the real frosted bottle —
+      genuinely different diffusion/contrast characteristics already
+      proven to matter (the bare-strip-tuned brightness range needed
+      widening again once first tested in-bottle). This is the explicit
+      next step before merge
+- [ ] **Not wired into `main.py`'s real production loop** — the jolt only
+      exists in `gesture_sandbox.py`'s sandbox integration so far;
+      `_run_gesture_debug_loop` (the terminal-only §4-10 exerciser) and
+      the real main loop are both untouched by this work
+- [ ] **`grab_and_tap` stays parked** — inconsistent across sessions,
+      root cause unconfirmed, not built on (`docs/insights.md` §9)
+- [ ] **Station-cycling display logic** — CYCLE needs a "current station
+      index" concept that doesn't exist anywhere in `main.py` yet; a real,
+      separate piece of scope, not resolved by any of the above
+- [ ] **Not pushed to `dev`/`main`**
+
+### LED status messages (errors + acknowledgments) ✅ implemented, local only
+
+Full design: `docs/contracts/led-status-messages.md`. Spun out of the
+wake-interaction doc's quiet-hours question, which turned out to need a
+proper shared vocabulary rather than a yes/no — formalizes the existing
+boot-ceremony/connect-failure pattern and extends it to three new cases:
+
+- **Quiet-hours tap acknowledgment** — a tap during quiet hours never fully
+  wakes the display (quiet hours always wins on whether it lights up), but
+  isn't ignored either: one purple LED at `STATUS_LED_INDEX` (a new,
+  deliberately contract-agnostic "middle-ish" position — `NUM_LEDS // 2`,
+  NOT `ApproachContract`'s `ANCHOR_INDEX`, so this vocabulary works under any
+  `CONTRACT`) for a few seconds, then dark again
+- **Wake-to-no-data acknowledgment** — if a wake ceremony resolves and every
+  active direction is genuinely `HIDDEN` (no catchable trains), a tap
+  shouldn't feel like it did nothing — same `STATUS_LED_INDEX` mechanism, a
+  different colour. Confirmed to repeat every time, not just once
+- **Schedule-load failure** — confirmed in scope: a missing/corrupt
+  `schedule.json` used to crash with a console print and zero LED
+  indication; `load_schedule()` now also catches malformed JSON
+  (`ValueError`, a pre-existing gap — only `OSError`/missing-file was
+  handled before), and `main()` routes either failure into
+  `_run_startup_failure_forever(SCHEDULE_ERROR_COLOR)` — the same
+  persistent-breathe mechanism WiFi failure already used, now generalized
+  to take a colour. Confirmed: error on failure, no indicator needed on
+  success
+- Stated as an explicit design rule, not just for this doc: never blend
+  between states (STATIC or the established ANIMATED path only) — the third
+  time this session a low-brightness blend has caused a real bug, worth
+  promoting to a standing rule rather than re-deriving per-feature
+- [x] Colours shipped as proposed, confirmed to iterate on real glass rather
+      than in the abstract
+- [ ] **Not yet on real hardware**; **not pushed to `dev`/`main`**
+
 ### Deferred to later sessions
 
 - [ ] Line-color palette / metro-line static color scheme
-- [ ] IMU tap/shake interaction layer (see Open decisions — planned as a
-      *runtime* interaction layer, not a provisioning mechanism)
 - [ ] NFC / any provisioning mechanism (see Open decisions — under
       reconsideration, not blocking this build)
 - [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
@@ -525,13 +707,18 @@ byte-identical.
 |---|---|---|
 | Level shifter for OSTW3535C1A | ⏳ test first | 3.3V may work in practice |
 | Jar form factor | ⏳ leaning thick+coloured | Brown jar = V1 reference; clear/medium read badly (see `docs/insights.md` §3) |
+| XIAO board upgrade — **reframed 2026-08-18: may not be needed at all** | ⏳ test the C3 + DS3231 before buying anything | **The board upgrade exists only to make room for WiFi.** With a DS3231 and `TIME_SOURCE="rtc"`, `network.WLAN()` is never called, the ~40KB `esp_wifi` allocation never happens, and MicroPython keeps the whole SRAM — the app's live data is 37KB. **The already-soldered C3 becomes adequate**, salvaging that work. Test this before spending. If a new board *is* wanted, **XIAO RP2350 beats S3/C6** for this project specifically: same silicon as the validated Pico 2W (firmware already proven), Embassy's RP2350 support is mature where ESP32's isn't (`dev-status.md` MCU table), PIO is what `rust-migration.md` already plans for WS2812B, and no radio means the contention can never recur. RP2350 over RP2040 (520KB vs 264KB, same form factor). Honest cost of going radio-free: NTP is gone permanently, so a dead CR1220 means reprovisioning — small, and aligned with the "no daily digital surface" principle rather than a sacrifice. **S3/C6 only make sense if keeping WiFi is the goal.** |
+| _(superseded)_ XIAO C3 → S3 or C6 | ⏳ see the row above (2026-08-18) | Driven by the SRAM finding (`docs/insights.md` §11): the C3 can't fit `esp_wifi` alongside an app this size. **All XIAO boards share the 21 × 17.5mm form factor**, so this is a drop-in physically — same footprint, same bottle fit, resolder the module only. What changes is `config.py`, since GPIO numbering differs per variant (C3's D0 = GPIO2; others differ) — exactly what `pinouts/` tracks. **S3 preferred over C6**: its PSRAM lets MicroPython put the GC heap there, *structurally* removing the competition for internal SRAM rather than merely having more of it. C6's 512KB would likely suffice but keeps one shared pool. ⚠ Coupled to the DS3231 decision — see the BOM note in `docs/hardware.md` § DS3231. |
+| DS3231 RTC | ⏳ candidate evaluated, not bought (2026-08-18) | Adafruit #3013 confirmed electrically compatible: 2.3–5.5V (no level shifter), I²C 0x68 so no conflict with the IMU's 0x6A/0x6B, 23 × 17.6 × 7.2mm. Needs a CR1220 (not included). **#5188 (STEMMA QT) worth the premium** — daisy-chains off the IMU's existing Qwiic socket, avoiding the one-GND-pad splice. Full evaluation: `docs/hardware.md` § DS3231. Removes the reason to run WiFi, which partially offsets the board-upgrade cost above. |
+| ESP32-C3 WiFi memory headroom | ⏳ **worked around, not solved** (2026-08-17) | `esp_wifi_init()` needs ~40KB, ~26KB of it from one capability-constrained SRAM region that has **32 bytes of spare margin at a bare boot** — measured, see `docs/insights.md` §11. Compiling a 115KB `main.py` on-device grows MicroPython's GC heap into that region and triggers `OSError: Wifi Out of Memory`. **Worked around** by bringing WiFi up before `load_schedule()`, which reclaims ~5.5KB — enough today, but a 5KB fix against a 32-byte margin is one feature away from breaking again. **Real fix** is to stop compiling on-device: `.mpy` via `mpy-cross` (no firmware build) or freezing into firmware (bigger win, needs a custom build). Deliberately deferred to keep `feature/gesture-envelope` focused. Note V2's no-WiFi/DS3231 plan retires this entirely, and gesture work already runs WiFi-free via `GESTURE_DEBUG_ENABLED`. |
+| Bottle vs. "glass stone on a stand" (eki-ishi) | 🔲 open, new (2026-08-16) | A form-factor proposal (`docs/glass-stone-concept.md`): a solid clear glass pebble on a crafted stand instead of electronics in a bottle neck. The argument is that ~every hard constraint in this project traces to an 18–19mm bore, and a stand retires four stalled threads at once (JJY time sync, onboard NFC *reader*, phone-free provisioning, and the whole battery/Qi power thread). Real cost: `ApproachContract` and arc-of-light don't survive — a new display contract is genuine unstarted scope, and the gesture jolt's tap-strength→brightness scaling would need to move to a different channel (duration/pulse/hue). Blocked on finding a candidate stand before anything else can be evaluated. **Explicitly parallel** to the bottle work per `docs/roadmap.md` § Form-Factor Philosophy — does not pause v1.1 or the v1.4 gift build. |
 | Cork vs screw cap | 🔲 open | Cork aesthetic; screw cap practical for access during dev |
 | LED direction / HAL abstraction | 🔲 open | Logical arc origin + reverse; full `led_drivers/` HAL deferred to ring arrival (`docs/insights.md` §4) |
 | Multi-train modality | 🔲 open | Spare LEDs show 2nd-closest train; data already in `LeaveSignal.ttls` |
 | Qi WCR viability | ✅ confirmed (2026-07-13) | Bare unbranded receiver, no FOD rejection on Belkin pad, works through glass, drives 120 LEDs. See `docs/hardware.md` bring-up log |
 | WCR power at full brightness | ✅ characterized (2026-07-13) | `BRIGHTNESS=1.0` full-white froze the Qi path (rail collapse) and tripped MacBook USB overcurrent. `0.15` is the stable ceiling on both — already visually "full" for the 120-LED tape. Real ceiling is ≈0.15 or lower; see `docs/hardware.md` |
 | LED tape mid-cut connector handling | 🔲 deferred | Until a soldering iron is in hand; factory pigtail + jumper-pin-in-innie trick is sufficient for bring-up (`docs/hardware.md`) |
-| NFC provisioning approach | ⏸ on hold (2026-07-23) | The custom-iOS-app plan (`docs/nfc-provisioning.md`) hit two stacked toolchain walls: the dev Mac (2019 Intel MacBook Air) is structurally capped below the macOS/Xcode version needed for iOS-26 builds, and iOS NFC reading needs the paid $99/yr Apple Developer Program regardless. Reconsidering the whole provisioning *mechanism*, not just working around the walls — candidates include ESP32 SoftAP + browser form (no app, cross-platform) and passive NTAG213 (Type-2, not Type-5 — iOS Shortcuts *does* work on Type-2) station cards, closer to the original concept. Longer-term direction leans toward an Embedded Swift/Matter rewrite (own track, own timeline — see below), which would remove the custom-app requirement entirely: settings live in Matter attributes edited from the Home app, no Xcode/App Store gate. Not blocking the v1.4 gift build. |
+| NFC provisioning approach | ⏸ still on hold — **candidate unblock identified 2026-08-16, not yet verified** | **New:** `docs/nfc-provisioning.md` §8 proposes skipping the phone entirely — a USB NFC reader/writer on the Mac + a `nfcpy` script writes NTAG213 (Type-2) stickers directly, which would clear every wall below at once. Deliberately **not** marked resolved: nothing is bought, written, or tested, and the path carries its own unverified toolchain assumption (dongle + `nfcpy` on this specific Mac — ACR122U in particular has known macOS PC/SC driver friction). §8.3 records the one-command falsification to run before trusting it. Flipping this row to ✅ requires that test passing, not the proposal existing. **Original blockage below.** The custom-iOS-app plan hit two stacked toolchain walls: the dev Mac (2019 Intel MacBook Air) is structurally capped below the macOS/Xcode version needed for iOS-26 builds, and iOS NFC reading needs the paid $99/yr Apple Developer Program regardless. Reconsidering the whole provisioning *mechanism*, not just working around the walls — candidates include ESP32 SoftAP + browser form (no app, cross-platform) and passive NTAG213 (Type-2, not Type-5 — iOS Shortcuts *does* work on Type-2) station cards, closer to the original concept. Longer-term direction leans toward an Embedded Swift/Matter rewrite (own track, own timeline — see below), which would remove the custom-app requirement entirely: settings live in Matter attributes edited from the Home app, no Xcode/App Store gate. Not blocking the v1.4 gift build. |
 | iOS NFC app: separate repo? | ⏸ moot while approach is on hold | Was leaning yes if the custom-app plan resumes. `docs/nfc-provisioning.md` §7 |
 | Tag payload: NDEF vs private format | ⏸ moot while approach is on hold | Was leaning private (length+CRC+JSON). `docs/nfc-provisioning.md` §4, §7 |
 | V2 rewrite target: Rust/Embassy vs. Embedded Swift/Matter | 🔲 open, new (2026-07-23) | Two independent V2 candidates now on the table, arrived at from different directions. Embedded Swift/Matter would also solve provisioning (Home app UI, no custom app, no entitlement gate) but the toolchain is experimental (not source-stable, real setup friction reported) and means re-deriving the whole display pipeline (contracts, gamma/dither, config) from scratch. Not deciding yet — V1.4/V1.5 firmware work doesn't depend on this. |

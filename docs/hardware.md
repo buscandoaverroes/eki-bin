@@ -222,3 +222,217 @@ tag reads fine — another reason cork is the chosen first closure.
 > The firmware **settings hot-reload** design and the **iOS app** (the phone-side
 > writer) are firmware/UX, not hardware — they live in `docs/nfc-provisioning.md`,
 > along with the tag data contract both sides share.
+
+---
+
+## DS3231 RTC — candidate part evaluated (2026-08-18, nothing bought)
+
+**Candidate:** Adafruit **DS3231 Precision RTC Breakout**, product
+[#3013](https://www.adafruit.com/product/3013). Specs below verified
+against Adafruit's own product page and pinout guide, not assumed.
+
+| Property | Value | Verdict for this build |
+|---|---|---|
+| Supply / logic | **2.3–5.5V**, "no regulator or level shifter for 3.3V or 5V logic" | ✅ drives straight off the XIAO's 3V3, same rail as the IMU |
+| Interface | I²C | ✅ shares SDA/SCL with the IMU |
+| I²C address | **0x68** (fixed in the DS3231 silicon) | ✅ **no conflict** — the LSM6DSV16X sits at 0x6A/0x6B |
+| Onboard pull-ups | 10K on both SCL and SDA | ⚠ see note below |
+| Size | **23 × 17.6 × 7.2 mm** | ✅ comparable to the IMU breakout (24.5 × 17 mm) — if that fits an enclosure, this should too. Height (7.2mm, coin cell included) is the new dimension to check |
+| Backup cell | CR1220, **not included** | ⚠ order separately — it's the entire point (survives power loss, unlike the ESP32's internal RTC) |
+| STEMMA QT / Qwiic | **No** on #3013 | see below |
+
+**⚠ Two sets of pull-ups on one bus.** The IMU breakout brings its own,
+and these are 10K — in parallel that's ~5K, which is comfortably inside
+I²C spec at 400kHz (roughly 1K–10K is the usable band), so this is a note
+rather than a problem. It would only matter if a third pulled-up device
+joined the same bus.
+
+### Chain topology (what actually matters) vs. connector choice
+
+**Take #3013 for this build.** An earlier version of this note recommended
+#5188 (the STEMMA QT variant) — that was optimizing for the wrong
+constraint, corrected here:
+
+- **The benefit is the TOPOLOGY, not the connector.** What avoids a 3-way
+  GND splice is routing `RTC → IMU → XIAO` instead of wiring RTC and IMU
+  each back to the board. **Soldered wire achieves that identically to a
+  QT cable.** #3013 gets the same win.
+- QT's real advantage is *solderless, reversible* assembly — and this
+  build solders everything, because header pins don't fit through the
+  bottle. That's a benefit there's no way to spend.
+- **Soldered is arguably safer here.** JST SH is a friction fit, and this
+  device's input method is *being tapped*. Intermittent `OSError EIO` from
+  a jostled connection has already cost real debugging time
+  (`docs/insights.md` §10). A plug-in connector inside an object designed
+  to be knocked invites that failure mode permanently; a solder joint
+  can't unseat.
+
+So: **#3013 + CR1220, no QT cables.** The QT route below stays documented
+for a future solderless/breadboard rig, where it's genuinely the nicer
+option.
+
+#### Wiring it (either connector choice)
+
+I²C is a **bus**: every device sits in *parallel* on the same SDA/SCL,
+distinguished purely by address (RTC 0x68, IMU 0x6A/0x6B). "Daisy-chaining"
+is not electrically a chain — Qwiic/STEMMA QT boards simply carry **two
+sockets wired straight through to each other**, so a cable in from upstream
+and another out to the next device taps the same bus. Nothing active, no
+hub. Qwiic (SparkFun) and STEMMA QT (Adafruit) are the same 4-pin JST SH
+1.0mm connector (GND/3.3V/SDA/SCL) and interoperate; the AE-LSM6DSV16X's
+socket is compatible.
+
+```
+XIAO ──(A)── IMU ──(B)── DS3231
+        ↑         ↑
+        └─────────┴── soldered wire (#3013) or QT cable (#5188)
+```
+
+| Link | Soldered build (**#3013 — recommended**) | Solderless (#5188 + QT) |
+|---|---|---|
+| **A** XIAO → IMU | 4 wires to the IMU's through-holes: `3V3→VCC`, `GND→GND`, `D4→SDA`, `D5→SCL` | QT plug one end, bare wire the other (cut a QT-to-QT cable, or reuse the Qwiic lead Akizuki ships with the IMU) |
+| **B** IMU → RTC | 4 wires, hole to hole: `SDA↔SDA`, `SCL↔SCL`, `VCC↔VCC`, `GND↔GND` | QT-to-QT cable, plug in |
+
+Either way the XIAO only ever sees **four** I²C wires — the IMU is the
+junction. That's the whole point.
+
+**Order (soldered):** 1× DS3231 #3013, 1× CR1220. No cables needed.
+**Order (solderless):** 1× #5188, 2× QT-to-QT cable (cut one for Link A),
+1× CR1220.
+
+⚠ **Buy 50–100mm, not 300mm.** Switch Science's own listing warns the
+300mm cable is marginal above 400kHz — and `main.py` runs the bus at
+exactly `freq=400000`. Two of them is 600mm of bus capacitance on a build
+that has *already* produced intermittent `OSError EIO` (see
+`docs/insights.md` §10). Inside a bottle, 50–100mm is ample.
+
+**What the chain buys, stated accurately:** it takes GND from a **3-way
+splice down to 2-way** (LED strip + chain, instead of strip + IMU + RTC)
+and cuts the I²C run from eight wires to four. It does **not** eliminate
+the splice — the LED strip still needs its own GND straight to the pad
+(see § Build technique). Keep I²C on thin wire (0.3sq / ~28AWG is right
+for signalling and the RTC's trickle draw) and leave the strip its own
+thicker 5V/GND run — the mixed-gauge rule in § Build technique.
+
+**Search terms (JP):** `Qwiic ケーブル` / `STEMMA QT ケーブル` /
+`JST SH 1.0mm 4ピン ケーブル` / `Qwiic 変換ケーブル` /
+`DS3231 モジュール` / `リアルタイムクロック モジュール`.
+Shops: スイッチサイエンス (best for Adafruit/SparkFun stock), 秋月電子通商,
+千石電商, マルツ. ⚠ Seeed's own **Grove** (`グローブ`) connector is 2.0mm
+pitch and **does not mate with Qwiic** — search `Grove - Qwiic 変換` if you
+ever need to bridge the two.
+
+**Pull-ups compound down a chain:** each QT board brings its own. Two 10K
+sets → 5K, three → 3.3K, four → 2.5K. Fine at two or three, over-driven by
+four or five; many boards have a solder jumper to cut theirs.
+
+**BOM note that cuts in the DS3231's favour:** the SRAM pressure driving
+the XIAO-C3 → S3/C6 upgrade (`docs/insights.md` §11) exists *because of
+WiFi*. Adding a DS3231 removes the reason to run WiFi at all, so the
+extra cost of the roomier board is **partially offset by no longer
+needing it** — the two decisions are coupled, not independent line items.
+Weigh them together.
+
+## IMU — LSM6DSV16X (wake/sleep interaction layer)
+
+**Purpose:** tap-gesture detection — see `docs/contracts/gesture-envelope.md`
+(the current design; supersedes `wake-interaction.md`'s original
+multi-gesture plan). **In hand as of 2026-08-03**, and as of 2026-08-16
+**wired and extensively validated on the Pico 2W** — real recognizer, real
+LED response, not the `_imu_tap_detected()` stub `wake-interaction.md`
+describes. Wiring: `pinouts/pico2w.md` (including combined IMU+LED wiring
+and its 3.3V/5V power-rail warning). Bring-up: `micropython/imu_test.py`.
+Not yet wired on the XIAO — that's the pending next step.
+
+**Part:** ST **LSM6DSV16X** — 6-axis (3-axis accelerometer + 3-axis
+gyroscope, no magnetometer). Bought as Akizuki's **AE-LSM6DSV16X** breakout
+board (g130950), *not* the bare LGA14L chip (g130032, same silicon,
+3×2.5mm, not hand-solderable — see `docs/contracts/wake-interaction.md`'s
+"IMU brainstorm" origin for that comparison). Breakout is 24.5×17mm,
+through-hole headers + a Qwiic-compliant connector; arrived with both a
+Qwiic-style clip/jumper cable **and** loose header pins to solder if
+preferred. I²C, SPI, and MIPI I3C capable — this project uses I²C only,
+same bus already earmarked for a future DS3231 RTC and shared (so far) with
+nothing else currently wired.
+
+Notable but **deliberately unused so far**: the chip has an onboard Machine
+Learning Core / Finite State Machine that can do gesture/tap recognition
+*inside the sensor itself*, independent of the host MCU. `wake-interaction.md`
+explicitly chose plain polled reads + software threshold logic over this for
+the first pass — simpler, and this project isn't chasing deep-sleep battery
+life where the MLC/FSM's power savings would actually matter. Worth
+revisiting if either of those change.
+
+**Reference links:**
+- Board (Akizuki): <https://akizukidenshi.com/catalog/g/g130950/>
+- Bare chip, for comparison (not what was bought): <https://akizukidenshi.com/catalog/g/g130032/>
+- ST product page: <https://www.st.com/en/mems-and-sensors/lsm6dsv16x.html>
+- ST's own register-level driver source (used to verify every hex value
+  below — not guessed): <https://github.com/STMicroelectronics/lsm6dsv16x-pid/blob/master/lsm6dsv16x_reg.h>
+
+**Register facts** (verified against the driver source above, not the
+Akizuki product page — it doesn't state these):
+- WHO_AM_I register `0x0F`, expected value `0x70`
+- 7-bit I²C address is **`0x6A`** (SA0/SDO strapped low) or **`0x6B`**
+  (strapped high) — the breakout brings SA0 out as a solder pad, and
+  Akizuki's page doesn't say which way it defaults, so `imu_test.py` scans
+  the bus rather than assuming one
+- `CTRL1` register `0x10`: lower 4 bits select the accelerometer's output
+  data rate, bits 4–6 select operating mode. `0x05` = 60Hz in
+  high-performance mode (`ODR_OFF`/`0x00` = powered down)
+- Accelerometer output: 6 consecutive bytes from `0x28` (`OUTX_L_A`), X/Y/Z
+  low+high pairs, little-endian, two's-complement
+- Sensitivity at the power-on-default ±2g full scale: 0.061 mg/LSB
+  (standard across the whole ST LSM6DS family) — `imu_test.py` uses this for
+  an approximate mg readout; it never explicitly sets `FS_XL`
+
+**MicroPython driver status:** none off-the-shelf, same situation the ST25DV
+was in. `micropython/imu_test.py` is the bring-up smoke test — scans the
+bus, confirms `WHO_AM_I`, enables the accelerometer, and streams X/Y/Z so
+you can watch numbers move when you tap or tilt the board. Deliberately
+does **not** attempt tap classification itself — that's `main.py`'s job
+(`classify_valid_input` / `extract_gesture_features`, real and host-tested
+as of 2026-08-16); this script's only job is proving the chip talks.
+
+**Wiring (I²C):** ✅ **done on the Pico 2W** — `GP0`/`GP1` (I²C0), per
+`pinouts/pico2w.md`. (That table previously named the reserved sensor
+"MPU-6050", an older placeholder from early V2 planning; corrected to
+LSM6DSV16X.) ⬜ **Not yet on the XIAO** — planned for `D4`/`D5`
+(`GPIO6`/`GPIO7`, same pins already used for the ST25DV above) for the real
+gift-jar integration. The smoke test itself is board-agnostic except for two
+pin constants at the top of the file — same "SET PER BOARD" pattern
+`led_test.py` already uses.
+
+---
+
+## Build technique — wiring the XIAO permanently (2026-08-16)
+
+Notes from planning the permanent XIAO + IMU + LED build. **Technique, not
+pin facts** — the pin assignments themselves live in `pinouts/`.
+
+**The one-GND-pad problem.** The XIAO ESP32-C3 breaks out exactly one GND
+pad, but the permanent build needs *two* grounds on it (LED strip and IMU;
+see `pinouts/pico2w.md`'s combined-wiring section for why GND is the one
+rail that's shared and the power rails are not). Two separate joints on one
+small pad tends to lift the pad or leave a cold joint when the second is
+made.
+
+**Do a twisted splice instead:** strip both ground wires, twist them
+together into a single lead, solder the twist so it behaves as one
+conductor, heat-shrink it, then make **one** joint from that lead to the
+pad. One clean joint on the fragile pad instead of two competing ones.
+
+**Wire gauge — Japanese "sq" notation.** Japanese suppliers size wire in
+**sq** = mm² of conductor cross-section, not AWG:
+
+| Japanese | ≈ AWG | Use here |
+|---|---|---|
+| 0.3sq | ≈ AWG22 | Signal lines (LED DIN, I²C SDA/SCL) — flexible enough not to strain a pad |
+| **0.5sq** | ≈ **AWG20** | VCC/GND for a ~20-LED strip. Fine for the current, but **stiff** — a stiff signal wire levers against its solder joint every time the assembly moves |
+
+**Mix gauges deliberately**: thicker for power, thinner for signal. Using
+0.5sq for everything is a common instinct and it makes the signal joints
+fragile. **Silicone-insulated** stranded wire is worth the small premium
+here — it stays flexible, tolerates soldering-iron contact far better than
+PVC, and this build has wires that must flex as the assembly goes into an
+enclosure.

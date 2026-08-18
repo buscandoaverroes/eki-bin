@@ -21,13 +21,20 @@ See [docs/concept.md](docs/concept.md) for the full design rationale.
 - Drives the 8-LED stick through a two-stage display pipeline
   `time → LeaveSignal → DisplayContract → LEDs`
   ([docs/contracts/display-contract.md](docs/contracts/display-contract.md))
-- Six display contracts (`sandtimer`, `color`, `breathing` + exponent/inverse, `echo`),
-  colour schemes, an animation/smoothing stack (perceptual **gamma** + temporal
-  **dithering** + seamless clock), night quiet-hours — all driven by ~19
-  `config.py` knobs, no firmware edits to tune
+- Seven display contracts (`sandtimer`, `color`, `breathing` + exponent/inverse,
+  `echo`, `approach`), colour schemes, an animation/smoothing stack (perceptual
+  **gamma** + temporal **dithering** + seamless clock), night quiet-hours — all
+  driven by `config.py` knobs, no firmware edits to tune
 - Host **test suite** (`make test`) guards the logic; runs before every upload
 
 See [docs/reflections/v1-reflections.md](docs/reflections/v1-reflections.md) for a brief update on how the project is going so far.
+
+**In progress (`feature/gesture-envelope` branch, not yet merged):** IMU
+(LSM6DSV16X) tap-gesture recognition + a two-phase ACK/CONFIRM LED jolt —
+tap wakes the display, tap cycles it, timeout sleeps it. Extensively
+validated on real hardware (Pico 2W + LED stick); XIAO + full LED tape +
+the actual bottle is the next validation step before merge. See
+[docs/contracts/gesture-envelope.md](docs/contracts/gesture-envelope.md).
 
 **Next:** v1.1 — move everything inside the bottle, Qi-powered (see
 [docs/roadmap.md](docs/roadmap.md)). **V2** rewrites the firmware in Rust (Embassy)
@@ -42,22 +49,38 @@ eki-bin/
 ├── README.md                     ← you are here
 ├── CLAUDE.md                     ← guidance for Claude Code (Rust teaching directive)
 ├── dev-status.md                 ← running log: done / next / open decisions
-├── Makefile                      ← setup, flash, schedule, led-test, upload
+├── Makefile                      ← setup, flash, schedule, led-test, imu-test, upload
 ├── requirements.txt              ← host Python tools (mpremote, pyyaml)
 │
 ├── docs/
 │   ├── concept.md                ← design rationale (the "why")
-│   ├── hardware.md               ← parts in hand, voltage compatibility
+│   ├── design-principles.md      ← guiding principles (some stubs)
+│   ├── hardware.md               ← parts in hand, voltage compatibility, build technique
 │   ├── roadmap.md                ← v1.1/v1.2 hardware plan, form-factor threads
+│   ├── insights.md               ← field notes, why-decisions, parked ideas
+│   ├── provisioning-runbook.md   ← bare board → running unit, one-glance checklist
+│   ├── nfc-provisioning.md       ← NFC provisioning workstream (bench record + current path)
 │   ├── rust-migration.md         ← V1 → V2 (MicroPython → Embassy) map
+│   ├── reflections/              ← periodic "how's it going" write-ups
+│   │
+│   │   ── proposals / research (not decided, not scheduled) ──
+│   ├── glass-stone-concept.md    ← eki-ishi: alternate "glass stone on a stand" form factor
+│   ├── jjy-time-signal.md        ← JJY radio time sync: requirements + sourcing memo
+│   ├── surface-as-input.md       ← could the object's own surface be the input layer?
+│   │
 │   └── contracts/
 │       ├── schedule-json.md      ← schema for the generated schedule
 │       ├── config.md             ← schema for config.py fields
-│       └── display-contract.md   ← LED pipeline: LeaveSignal → contracts
+│       ├── display-contract.md   ← LED pipeline: LeaveSignal → contracts
+│       ├── approach-contract.md  ← positional/approach display paradigm
+│       ├── startup-sequence.md   ← boot ceremony LED sequence
+│       ├── gesture-envelope.md   ← IMU tap-gesture recognition + ACK/CONFIRM jolt
+│       ├── wake-interaction.md   ← original IMU design (partially superseded above)
+│       └── led-status-messages.md ← LED error/acknowledgment vocabulary
 │
 ├── pinouts/                       ← per-board pin assignments (source of truth)
-│   ├── pico2w.md                  ← ✅ verified — V1 wiring
-│   └── xiao_esp32c3.md            ← ✅ verified — v1.2 checkpoint passed
+│   ├── pico2w.md                  ← ✅ verified — V1 wiring + IMU (gesture branch)
+│   └── xiao_esp32c3.md            ← ✅ verified — v1.2 checkpoint passed; IMU not yet wired here
 │
 ├── schedules/
 │   ├── mystation.example.yaml    ← committed sample (copy → mystation.yaml)
@@ -66,16 +89,25 @@ eki-bin/
 │
 ├── scripts/
 │   ├── convert_schedule.py       ← YAML → minutes-since-midnight arrays
-│   └── select_port.sh            ← USB device picker for `make screen`
+│   ├── select_port.sh            ← USB device picker for `make screen`
+│   ├── analyze_taps.py           ← gesture capture → tap/position feature analysis
+│   ├── prepare_tap_dataset.py    ← gesture capture → engineered-feature CSV
+│   ├── train_tap_classifier.py   ← hardcoded-threshold vs. classifier comparisons
+│   └── clear_vibes.sh            ← clean up on-device gesture capture files
 │
 ├── tests/                        ← host-side logic tests (`make test`)
 │   ├── conftest.py               ← device-module fakes + config loader
-│   └── test_*.py                 ← stage1, render, primitives, quiet-hours, config
+│   └── test_*.py                 ← stage1, render, primitives, gesture envelope, config…
 │
 ├── micropython/                  ← V1 firmware
 │   ├── main.py                   ← main loop
 │   ├── led_test.py               ← hardware bring-up for the WS2812B stick
-│   ├── led_sandbox.py            ← quick colour/animation A-B comparisons
+│   ├── led_sandbox.py            ← colour/animation A-B comparisons + gesture-jolt prototyping
+│   ├── gesture_sandbox.py        ← live gesture recognizer + LED jolt sandbox (real IMU + LEDs)
+│   ├── imu_test.py               ← IMU bring-up: I2C scan, register confirm, accel stream
+│   ├── vibration_sandbox.py      ← position × gesture batch data collection
+│   ├── handling_test.py          ← false-positive-risk data collection (pickup, carry, bump…)
+│   ├── orientation_test.py       ← live gravity-vector / orientation monitor
 │   ├── config.example.py         ← committed template
 │   └── config.py                 ← gitignored; real WiFi creds (see Secrets)
 │
@@ -120,6 +152,15 @@ for what's wired where, kept in sync with `config.py`. Then:
 make led-test           # cycle colours + chase across all 8 LEDs
 ```
 
+Bringing up the IMU (LSM6DSV16X, for tap-gesture recognition — see
+`docs/contracts/gesture-envelope.md`)? Wire SDA/SCL/3V3/GND per
+`docs/hardware.md` and `pinouts/<board>.md` (combined IMU+LED wiring, with a
+3.3V/5V power-rail safety note, is documented in `pinouts/pico2w.md`), then:
+
+```bash
+make imu-test            # scan I2C, confirm the chip, stream accel readings
+```
+
 ---
 
 ## Tuning the display
@@ -130,7 +171,7 @@ the rendering model: [docs/contracts/display-contract.md](docs/contracts/display
 
 | Knob | What it does |
 |---|---|
-| `CONTRACT` | Visual strategy: `sandtimer` · `color` · `breathing` (+ `_exponent` / `_inverse`) · `echo` |
+| `CONTRACT` | Visual strategy: `sandtimer` · `color` · `breathing` (+ `_exponent` / `_inverse`) · `echo` · `approach` |
 | `COLOR_SCHEME` | Palette: `default` · `sunset` · `mono` |
 | `BRIGHTNESS` | Global ceiling (ambient, not blinding) |
 | `WALK_TO_STATION_MINS` | Subtracted from each departure → "time to leave"; uncatchable trains hidden |

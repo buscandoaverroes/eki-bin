@@ -8,6 +8,7 @@
 # "What's the urgency?" is computed once per tick and is independent of "how do
 # we show it?" — swap visual strategies by changing CONTRACT in config.py.
 
+import gc
 import json
 import math
 import time
@@ -15,16 +16,21 @@ import time
 import config
 import network
 import ntptime
-from machine import Pin
+from machine import I2C, Pin
 from neopixel import NeoPixel
 
 # ─────────────────────────────────────────────────────────────
 # Settings (from config.py)
 # ─────────────────────────────────────────────────────────────
-# WiFi creds are *required* for V1 — import directly so a missing value fails
-# loudly rather than silently defaulting to nonsense.
-WIFI_SSID = config.WIFI_SSID
-WIFI_PASS = config.WIFI_PASS
+# WiFi creds are required only when TIME_SOURCE = "wifi" (the default), so
+# they can't be a hard `config.WIFI_SSID` any more — a deliberately
+# WiFi-free unit (TIME_SOURCE="rtc", the only way to run on the XIAO
+# ESP32-C3; see docs/insights.md §11) has no reason to carry credentials,
+# and a bare attribute read would AttributeError at import before main()
+# could explain why. Default to None and let connect_wifi() do the
+# complaining, where there's an LED path to complain THROUGH.
+WIFI_SSID = getattr(config, "WIFI_SSID", None)
+WIFI_PASS = getattr(config, "WIFI_PASS", None)
 
 # Everything else is optional with a default. getattr(config, "NAME", default)
 # returns the default when the field is absent, so a config.py written before a
@@ -137,6 +143,168 @@ ERROR_COLOR = getattr(config, "ERROR_COLOR", (255, 0, 0))  # persistent
 ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 #   deliberately separate from BREATHE_PERIOD_MS — retuning a contract's
 #   breathing feel should never touch the failure state's.
+
+# Wake/sleep interaction layer — docs/contracts/wake-interaction.md. OFF by
+# default: WAKE_INTERACTION_ENABLED=False means the display behaves exactly
+# as before (always "awake", no countdown) — safe for every existing
+# deployment (e.g. config_friend1.py) that has no IMU wired. Flipping it on
+# with no real _imu_tap_detected() implementation (still stubbed — see below)
+# would put the display permanently ASLEEP after WAKE_MINUTES with no way to
+# wake it again, so this must stay opt-in until a real sensor read exists.
+WAKE_INTERACTION_ENABLED = getattr(config, "WAKE_INTERACTION_ENABLED", False)
+WAKE_MINUTES = getattr(config, "WAKE_MINUTES", 30)  # active-display window
+#   after any wake/extend trigger
+DOUBLE_TAP_WINDOW_MS = getattr(config, "DOUBLE_TAP_WINDOW_MS", 400)  # max gap
+#   between two taps to count as a double-tap — GUESS, tune against real
+#   sensor data once the IMU is wired
+TAP_THRESHOLD = getattr(config, "TAP_THRESHOLD", 2.0)  # accelerometer
+#   magnitude delta for "a tap happened" — UNTESTED GUESS, no IMU wired yet;
+#   _imu_tap_detected() doesn't even use this yet (still stubbed), kept here
+#   so the real implementation has an obvious knob to read
+SECONDARY_ACTION = getattr(config, "SECONDARY_ACTION", "brightness_cycle")  #
+#   pluggable — what a single tap while AWAKE does (see _run_secondary_action)
+BRIGHTNESS_PRESETS = getattr(config, "BRIGHTNESS_PRESETS", (0.15, 0.35, 0.6))
+EXTEND_CONFIRM_COLOR = getattr(config, "EXTEND_CONFIRM_COLOR", STARTUP_COLOR)
+EXTEND_CONFIRM_MS = getattr(config, "EXTEND_CONFIRM_MS", 600)
+
+# LED status messages — docs/contracts/led-status-messages.md. Shared
+# "middle-ish" position for brief single-LED acknowledgments, deliberately
+# NOT ApproachContract's ANCHOR_INDEX (which defaults to 0, not the middle,
+# under every other CONTRACT) — this vocabulary works the same regardless of
+# which CONTRACT is active.
+STATUS_LED_INDEX = getattr(config, "STATUS_LED_INDEX", NUM_LEDS // 2)
+QUIET_TAP_COLOR = getattr(config, "QUIET_TAP_COLOR", (128, 0, 200))  # purple
+QUIET_TAP_DURATION_MS = getattr(config, "QUIET_TAP_DURATION_MS", 2500)
+NO_DATA_COLOR = getattr(config, "NO_DATA_COLOR", (200, 160, 0))  # gold/amber
+NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
+SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
+#   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
+#   cause should look like a different failure, not the same red for anything
+TIME_SOURCE = getattr(config, "TIME_SOURCE", "wifi")
+#   "wifi" — connect + NTP at boot (V1 default, needs ~40KB of SRAM for
+#            esp_wifi; fine on the Pico 2W, does NOT fit on the XIAO
+#            ESP32-C3 alongside an app this size — docs/insights.md §11)
+#   "rtc"  — skip WiFi/NTP; trust the board's own RTC, set at provisioning
+#            time (`make set-time`). Survives soft reset, not power loss.
+#            The direction V2 goes permanently, via a DS3231.
+
+# NTP writes UTC to the RTC; `mpremote rtc --set` writes the HOST'S LOCAL
+# time. So UTC_OFFSET_HOURS must only be applied in the "wifi" case —
+# adding it to an already-local clock puts the display UTC_OFFSET_HOURS
+# ahead, which is exactly what happened on the first real "rtc" boot.
+# Derived here rather than making the user also remember to zero
+# UTC_OFFSET_HOURS: two knobs that must agree is a footgun, one that
+# follows from the other isn't.
+_UTC_OFFSET_APPLIED = 0 if TIME_SOURCE == "rtc" else UTC_OFFSET_HOURS
+CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
+#   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
+#   such alias, which raises ValueError: invalid pin). Previously this class
+#   of failure crashed before any LED code ran, so a misconfigured unit on a
+#   wall adapter looked identical to a dead one — no serial console, no
+#   indication, nothing. That's the worst possible failure mode for a device
+#   meant to be handed to someone else. Same persistent-breathe treatment as
+#   the other two, its own colour per led-status-messages.md.
+
+# Gesture envelope — docs/contracts/gesture-envelope.md. Evidence-based,
+# from real sandbox data (docs/insights.md §8-9), unlike WAKE_INTERACTION's
+# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS above (both flagged guesses when
+# written, no IMU in hand yet). Every GESTURE_*_ENABLED flag is a hardware
+# capability, off by default until something concrete backs it up — same
+# safety-gate precedent WAKE_INTERACTION_ENABLED already set.
+IMU_I2C_ID = getattr(config, "IMU_I2C_ID", 0)
+IMU_SDA_PIN = getattr(config, "IMU_SDA_PIN", 0)  # Pico 2W default — see
+IMU_SCL_PIN = getattr(config, "IMU_SCL_PIN", 1)  #   pinouts/pico2w.md
+
+GESTURE_FLIP_ENABLED = getattr(config, "GESTURE_FLIP_ENABLED", False)  #
+#   requires wired (USB) power — flipping a Qi-mounted jar breaks inductive
+#   coupling, see gesture-envelope.md §5
+GESTURE_POSITION_ENABLED = getattr(config, "GESTURE_POSITION_ENABLED", False)  #
+#   shoulder-vs-base disaggregation — ~78-81% even on a bottle it's tuned
+#   for (insights.md §8-9); off by default, opt-in per physical unit
+GESTURE_FLICK_ENABLED = getattr(config, "GESTURE_FLICK_ENABLED", True)  #
+#   best-validated signal after tap presence — on by default
+
+# Per-bottle calibrated thresholds — chianti-bottle values derived from the
+# sandbox tooling's pooled data (insights.md §8-9), NOT guesses, but also
+# NOT universal: amplitude features don't transfer across bottles (§9's
+# cross-bottle test: 0% for position). Re-derive per physical unit via
+# vibration_sandbox.py + scripts/analyze_taps.py before flashing a
+# different bottle.
+TAP_TRIGGER_THRESHOLD_MG = getattr(config, "TAP_TRIGGER_THRESHOLD_MG", 50)  #
+#   cheap first-pass gate only — deliberately permissive (real handling
+#   motion overlaps this range too, see insights.md §9's handling_test.py
+#   findings), the real discrimination happens in the recognizer layer
+#   below, not at this trigger
+FLICK_MAGNITUDE_THRESHOLD_MG = getattr(config, "FLICK_MAGNITUDE_THRESHOLD_MG", 328)  #
+#   RECALIBRATED against shoulder+base taps (95.2% separability) — the
+#   original 140 was calibrated against BODY taps only (median 50mg), which
+#   badly undershoots shoulder's own normal tap force (median 215mg) — real
+#   hardware testing found 79% of ordinary shoulder taps already exceeded
+#   140mg on their own. See gesture-envelope.md §10.
+FLICK_SPACING_STDEV_THRESHOLD_MS = getattr(config, "FLICK_SPACING_STDEV_THRESHOLD_MS", 5)
+#   flick vs. hard handling when spacing IS computable — magnitude alone
+#   caps ~80% (setdown_firm is just as hard as a deliberate flick); this
+#   shape feature helps when available, see insights.md §9. NOT available
+#   most of the time in practice (needs >=3 crossings; ~70% of real flicks
+#   and ~25% of hard handling events don't have that many) — see
+#   classify_tap_or_flick's own docstring for how the missing case is
+#   handled, and gesture-envelope.md §10 for why a classifier doesn't do
+#   any better here (~80% ceiling either way).
+POSITION_THRESHOLD_MG = getattr(config, "POSITION_THRESHOLD_MG", 151)  #
+#   only read if GESTURE_POSITION_ENABLED
+ORIENTATION_STABLE_MG = getattr(config, "ORIENTATION_STABLE_MG", 700)  #
+#   below this, treat orientation as "mid-motion", not a resting state —
+#   matches orientation_test.py's proven STABLE_READING_MG
+ORIENTATION_MAP = getattr(config, "ORIENTATION_MAP", (
+    # (state name, dominant axis, sign) — chianti-bottle mounting, from
+    # orientation_test.py's real readings (insights.md §9): Y+ ≈ 965mg
+    # upright, Z- ≈ 950mg horizontal, Y- ≈ 870mg upside-down. Per-bottle:
+    # the IMU's mounting orientation on the glass determines this mapping,
+    # not the gesture logic — re-derive with orientation_test.py per unit.
+    ("upright", "y", 1),
+    ("horizontal", "z", -1),
+    ("upside_down", "y", -1),
+))
+
+# Scrollwheel / menu — gesture-envelope.md §7. Sketch, not a spec: the real
+# option list is a product decision, not a hardware one (§9) — validating
+# the mechanism doesn't need real content, same as wake-interaction.md
+# shipped its state machine before settling SECONDARY_ACTION's content.
+GESTURE_MENU_OPTIONS = getattr(config, "GESTURE_MENU_OPTIONS", ("Item 1", "Item 2", "Item 3"))
+GESTURE_MODE_TIMEOUT_MS = getattr(config, "GESTURE_MODE_TIMEOUT_MS", 15_000)  #
+#   bounded return to ambient — same "must not be a state you can get stuck
+#   in" philosophy WAKE_MINUTES already established
+
+# Terminal-only validation loop — deliberately its OWN flag, not
+# WAKE_INTERACTION_ENABLED: this exercises a different, newer subsystem and
+# should stay fully isolated from the existing tested loop. OFF by default,
+# same safety-gate precedent as everything else opt-in here.
+GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
+
+# V1 minimal gesture contract — gesture-envelope.md §11. A deliberate
+# SPECIALIZATION of the recognizer/scrollwheel above (tap-vs-noise only,
+# GESTURE_POSITION_ENABLED/GESTURE_FLICK_ENABLED stay False), not a
+# replacement — see that section for why. TAP_ENERGY_THRESHOLD is the one
+# threshold this path needs; the timing knobs below drive the two-phase
+# ACK/CONFIRM state machine (_TapCycleState).
+TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
+#   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
+#   (chianti bottle), see §11
+ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
+#   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
+#   hardware allow
+WAKE_JOLT_MS = getattr(config, "WAKE_JOLT_MS", 500)  # confirmed-wake jolt
+#   duration, no input accepted — flagged too slow as-is (§11), timing is
+#   a feel question to iterate visually, not a logic one
+WAKE_JOLT_BRIGHTNESS_MULT = getattr(config, "WAKE_JOLT_BRIGHTNESS_MULT", 2.0)
+WAKE_SETTLE_MS = getattr(config, "WAKE_SETTLE_MS", 1500)  # post-jolt
+#   debounce, no input accepted — prevents the same physical contact that
+#   triggered WAKE from also registering as an immediate CYCLE
+AWAKE_MINUTES = getattr(config, "AWAKE_MINUTES", 15)  # bounded-window,
+#   same philosophy as WAKE_MINUTES — no EXTEND gesture, no runtime
+#   adjustment, deliberately simpler than the old wake-interaction design
+CYCLE_TRANSITION_MS = getattr(config, "CYCLE_TRANSITION_MS", 200)  # flash,
+#   then a hard cut to the next station — no crossfade, see §11
 
 # Status heartbeat LED — board-specific, unlike the WS2812B data line above.
 # "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
@@ -986,7 +1154,10 @@ def load_schedule(filename):
     """
     Load schedule.json from device filesystem.
     Returns the full parsed dict (station, weekday, weekend).
-    Halts with a clear message if file is missing or malformed.
+    Raises (OSError: missing file; ValueError: malformed JSON) rather than
+    halting itself — the caller decides what "failed to load" looks like on
+    the LEDs (see main()'s call site and
+    docs/contracts/led-status-messages.md's schedule-load-failure entry).
     """
     try:
         with open(filename) as f:
@@ -994,6 +1165,10 @@ def load_schedule(filename):
     except OSError:
         print(f"✗ Schedule file not found: {filename}")
         print("  Upload it with: make upload")
+        raise
+    except ValueError:
+        print(f"✗ Schedule file malformed (bad JSON): {filename}")
+        print("  Regenerate it with: make schedule && make upload")
         raise
 
 
@@ -1006,18 +1181,23 @@ def local_time():
     Return (minutes_since_midnight, weekday) in local time.
     weekday: 0=Monday … 6=Sunday (MicroPython convention)
 
-    NTP sets the Pico RTC to UTC. We add UTC_OFFSET_HOURS to get local
-    time — and also account for the day boundary, so the correct weekday
-    is used when UTC and local time are on different calendar days.
+    NTP sets the RTC to UTC, so we add UTC_OFFSET_HOURS to get local time —
+    and also account for the day boundary, so the correct weekday is used
+    when UTC and local time are on different calendar days.
     (e.g. UTC 22:00 Thursday = JST 07:00 Friday)
+
+    With TIME_SOURCE="rtc" the clock is ALREADY local (`mpremote rtc --set`
+    writes host local time), so no offset is applied — see
+    _UTC_OFFSET_APPLIED. Reading the raw clock as UTC in that case would
+    put the display UTC_OFFSET_HOURS ahead of reality.
     """
-    utc = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
-    utc_minutes = utc[3] * 60 + utc[4]
-    local_minutes_abs = utc_minutes + UTC_OFFSET_HOURS * 60
+    raw = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
+    utc_minutes = raw[3] * 60 + raw[4]
+    local_minutes_abs = utc_minutes + _UTC_OFFSET_APPLIED * 60
 
     day_overflow = local_minutes_abs // (24 * 60)  # 0 or 1
     local_minutes = local_minutes_abs % (24 * 60)
-    local_weekday = (utc[6] + day_overflow) % 7
+    local_weekday = (raw[6] + day_overflow) % 7
 
     return local_minutes, local_weekday
 
@@ -1111,17 +1291,23 @@ def _startup_error_mult(elapsed_ms):
     return breathe(elapsed_ms, ERROR_BREATHE_PERIOD_MS, floor=0.15)
 
 
-def _run_startup_failure_forever():
-    """Persistent red breathe — a genuine DEAD END, not a retry loop, by
-    design (see docs/contracts/startup-sequence.md § Failure recovery).
+def _run_startup_failure_forever(color=None):
+    """Persistent breathe — a genuine DEAD END, not a retry loop, by design
+    (see docs/contracts/startup-sequence.md § Failure recovery).
     Distinguishes "broken, needs help" from every other state at a glance,
     and doesn't pretend to work when it can't. Needs a physical reset/
-    power-cycle to leave this state; never returns on its own."""
-    print("  ✗ Startup failed — check config.py / WiFi. Reset to retry.")
+    power-cycle to leave this state; never returns on its own.
+
+    `color` defaults to ERROR_COLOR (WiFi/NTP connect failure) — pass
+    SCHEDULE_ERROR_COLOR for a schedule-load failure instead. Different
+    failure CAUSES get visually distinct colours on purpose, so whoever's
+    looking at a dead jar with no laptop handy can tell which one happened
+    — see docs/contracts/led-status-messages.md."""
+    color = ERROR_COLOR if color is None else color
     start = time.ticks_ms()
     while True:
         elapsed = time.ticks_diff(time.ticks_ms(), start)
-        _write_frame([(ERROR_COLOR, _startup_error_mult(elapsed))] * NUM_LEDS)
+        _write_frame([(color, _startup_error_mult(elapsed))] * NUM_LEDS)
         time.sleep_ms(FRAME_MS)
 
 
@@ -1130,12 +1316,723 @@ def run_startup_sequence():
     success burst, then returns — the main loop takes over immediately
     after. On WiFi failure: _run_startup_failure_forever(), which NEVER
     RETURNS (see its docstring) — this function correspondingly never
-    returns either, in that case."""
+    returns either, in that case.
+
+    TIME_SOURCE="rtc" skips WiFi and NTP entirely and trusts whatever the
+    board's RTC already holds (set it at provisioning time with
+    `make set-time`). Added because the ESP32-C3 genuinely cannot fit
+    esp_wifi alongside a MicroPython app this size — see docs/insights.md
+    §11 — so on that board this is the difference between a working unit
+    and no unit. It also happens to be the direction V2 is going anyway
+    (DS3231 RTC, no WiFi in normal operation), so this is a step toward
+    the planned architecture rather than a detour around a bug."""
+    if TIME_SOURCE == "rtc":
+        print("  TIME_SOURCE='rtc' — skipping WiFi/NTP, trusting the board clock.")
+        print("  (Set it with `make set-time`; it survives soft reset, NOT power loss.)")
+        _play_startup_burst()
+        return
     if not connect_wifi():
-        _run_startup_failure_forever()
+        print("  ✗ WiFi failed — check config.py. Reset to retry.")
+        _run_startup_failure_forever(ERROR_COLOR)
     if not sync_ntp():
         print("  Warning: time may be wrong.")
     _play_startup_burst()
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (IMU HAL) — docs/contracts/gesture-envelope.md §2
+# The only code below that touches i2c.readfrom_mem/writeto_mem — same
+# seam the LED side already has (_paint/clear are the only code touching
+# np[i]). Register facts verified against ST's own driver source, same as
+# imu_test.py/vibration_sandbox.py — see those files' headers for the
+# reference. NOT host-testable (real I/O), same category
+# _imu_tap_detected() below already is. Lazily constructed, not built at
+# import time like `np` — this is opt-in hardware, unlike the LED strip
+# which every deployment has.
+# ─────────────────────────────────────────────────────────────
+_IMU_WHO_AM_I_REG = 0x0F
+_IMU_WHO_AM_I_EXPECTED = 0x70
+_IMU_CTRL1_REG = 0x10
+_IMU_CTRL1_240HZ_HIGH_PERF = 0x07
+_IMU_CTRL1_POWER_DOWN = 0x00
+_IMU_OUTX_L_A = 0x28
+_IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
+
+_imu_i2c = None  # lazy singleton — see _get_imu()
+_imu_addr = None
+
+
+def _imu_find_device(i2c):
+    """Scan the bus, confirm WHO_AM_I. Returns the confirmed 7-bit address,
+    or None — mirrors imu_test.py's _find_device exactly."""
+    found = i2c.scan()
+    for addr in _IMU_CANDIDATE_ADDRS:
+        if addr not in found:
+            continue
+        who = i2c.readfrom_mem(addr, _IMU_WHO_AM_I_REG, 1)[0]
+        if who == _IMU_WHO_AM_I_EXPECTED:
+            return addr
+    return None
+
+
+def _get_imu():
+    """Lazily construct + confirm the IMU, caching the result. Returns
+    (i2c, addr), or (None, None) if no sensor responds — callers must
+    handle the "not found" case, not assume hardware is present."""
+    global _imu_i2c, _imu_addr
+    if _imu_i2c is None:
+        i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN), freq=400000)
+        addr = _imu_find_device(i2c)
+        if addr is None:
+            return None, None
+        i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        _imu_i2c, _imu_addr = i2c, addr
+    return _imu_i2c, _imu_addr
+
+
+def _imu_read_accel_raw(i2c, addr):
+    """One burst read, signed int16 LSB counts — no unit conversion here
+    (see _gesture_magnitude_mg in the feature-extraction layer below),
+    matching vibration_sandbox.py's _read_accel_raw exactly."""
+    data = i2c.readfrom_mem(addr, _IMU_OUTX_L_A, 6)
+    x = int.from_bytes(data[0:2], "little")
+    y = int.from_bytes(data[2:4], "little")
+    z = int.from_bytes(data[4:6], "little")
+    return tuple(v - 65536 if v > 32767 else v for v in (x, y, z))
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (feature extraction) — gesture-envelope.md §3
+# PURE — a raw sample buffer in, an engineered-feature dict out. Same math
+# as scripts/prepare_tap_dataset.py's engineer_features(), ported from host
+# Python to MicroPython (no numpy/statistics module on either side — both
+# avoid it already). Host-tested with synthetic sample lists, same
+# "separate the decision logic from real-time I/O" split
+# _render_dispatch/_classify_wake_response already established.
+# samples: list of (t_ms, x, y, z) raw int16 LSB tuples — the HAL's
+# _imu_read_accel_raw() output, not the dict shape the host scripts use
+# (that shape only exists because JSON round-trips through dicts; on-device
+# there's no reason to pay for it).
+# ─────────────────────────────────────────────────────────────
+_GESTURE_CROSSING_FRAC = 0.3  # matches prepare_tap_dataset.py's
+#   CROSSING_THRESHOLD_FRAC exactly — see that file for why 0.3, not
+#   analyze_taps.py's stricter 0.5 (this wants to see every excursion,
+#   including rocking echoes, not just plausible "real" taps)
+_GESTURE_SETTLE_FRAC = 0.1  # matches prepare_tap_dataset.py's SETTLE_FRAC
+
+
+def _gesture_magnitude_mg(sample):
+    """0.061 mg/LSB at power-on-default full-scale (±2g) — same
+    approximation imu_test.py/vibration_sandbox.py already use."""
+    _, x, y, z = sample
+    return math.sqrt(x * x + y * y + z * z) * 0.061
+
+
+def _gesture_median(values):
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 0:
+        return (s[mid - 1] + s[mid]) / 2
+    return s[mid]
+
+
+def _gesture_mean(values):
+    return sum(values) / len(values)
+
+
+def _gesture_stdev(values):
+    """Sample standard deviation. Caller's responsibility to only call this
+    with len(values) >= 2 — same contract prepare_tap_dataset.py's
+    statistics.stdev() usage already has."""
+    m = _gesture_mean(values)
+    variance = sum((v - m) ** 2 for v in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _gesture_dominant_axis(sample):
+    _, x, y, z = sample
+    axis, value = "x", x
+    if abs(y) > abs(value):
+        axis, value = "y", y
+    if abs(z) > abs(value):
+        axis, value = "z", z
+    return axis
+
+
+def extract_gesture_features(samples):
+    """PURE: raw (t_ms, x, y, z) samples → the same feature set
+    prepare_tap_dataset.py validated (docs/insights.md §8-9). `samples`
+    must have at least 2 entries — the caller (the capture-window logic in
+    the recognizer layer) guarantees this, same as the sandbox tools always
+    captured at least one sample before returning."""
+    mags = [_gesture_magnitude_mg(s) for s in samples]
+    baseline = _gesture_median(mags)
+    deviations = [m - baseline for m in mags]
+
+    peak_dev = max(deviations)
+    peak_idx = deviations.index(peak_dev)
+    peak_t = samples[peak_idx][0]
+    duration_ms = samples[-1][0]
+
+    energy = sum(d * d for d in deviations if d > 0)
+
+    ring_down_ms = None
+    settle_dev = _GESTURE_SETTLE_FRAC * peak_dev
+    for i in range(peak_idx, len(samples)):
+        if deviations[i] < settle_dev:
+            ring_down_ms = samples[i][0] - peak_t
+            break
+
+    # peak_dev <= 0 means no real excursion at all (a perfectly flat
+    # buffer — never happens with real sensor noise, but a threshold of 0
+    # would otherwise register every sample as "above" it). No crossings,
+    # not a divide-by-zero, just nothing happened.
+    threshold = _GESTURE_CROSSING_FRAC * peak_dev
+    crossing_times = []
+    above = False
+    for i in range(len(samples) if peak_dev > 0 else 0):
+        dev = deviations[i]
+        if not above and dev >= threshold:
+            above = True
+            crossing_times.append(samples[i][0])
+        elif above and dev < threshold:
+            above = False
+    gaps = [crossing_times[i + 1] - crossing_times[i] for i in range(len(crossing_times) - 1)]
+
+    return {
+        "peak_deviation_mg": peak_dev,
+        "ring_down_ms": ring_down_ms,
+        "energy": energy,
+        "duration_ms": duration_ms,
+        "dominant_axis": _gesture_dominant_axis(samples[peak_idx]),
+        "num_crossings": len(crossing_times),
+        "spacing_mean_ms": _gesture_mean(gaps) if gaps else None,
+        "spacing_stdev_ms": _gesture_stdev(gaps) if len(gaps) > 1 else None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (recognizer) — gesture-envelope.md §4
+# PURE — classifies WHAT physically happened (tap/flick/position/
+# orientation), agnostic of current interaction state. What that means
+# (an abstract GestureEvent, state-dependent) is the scrollwheel layer's
+# job below, same split _classify_wake_response already draws for the
+# older tap-count design. Every threshold here is a bare module global,
+# same pattern _TapClassifier.advance already uses for DOUBLE_TAP_WINDOW_MS
+# — not passed as a parameter, read directly, and overridable per-test via
+# load_main(...) config overrides.
+# ─────────────────────────────────────────────────────────────
+def classify_tap_or_flick(features):
+    """"tap", "flick", or None (below the trigger floor). Real-hardware
+    testing found a real bug in an earlier version: treating "spacing_stdev
+    unavailable" (< 3 crossings — true for ~70% of real flicks and ~25% of
+    hard handling events, see FLICK_SPACING_STDEV_THRESHOLD_MS's comment)
+    as automatic REJECTION silently killed almost every hard tap/flick,
+    which is why shoulder taps never registered as anything at all
+    (gesture-envelope.md §10). Fixed: when spacing IS computable, it's
+    still the primary discriminator, unchanged. When it ISN'T,
+    num_crossings is the best available single feature in that regime
+    (~80%, 1 crossing leans flick, 2+ leans hard-handling) — not great,
+    but confirmed via a cross-validated classifier on every available
+    feature to be a real ceiling here, not a "combine more features" gap
+    (gesture-envelope.md §10 has the full analysis)."""
+    peak = features["peak_deviation_mg"]
+    if peak < TAP_TRIGGER_THRESHOLD_MG:
+        return None
+    if peak >= FLICK_MAGNITUDE_THRESHOLD_MG:
+        spacing = features["spacing_stdev_ms"]
+        if spacing is not None:
+            return "flick" if spacing >= FLICK_SPACING_STDEV_THRESHOLD_MS else None
+        return "flick" if features["num_crossings"] <= 1 else None
+    return "tap"
+
+
+def classify_position(features):
+    """"shoulder" or "base" — only meaningful if GESTURE_POSITION_ENABLED
+    (insights.md §9: ~78-81% pooled even on a bottle it's tuned for, an
+    optional signal, not a reliable one on its own). Returns None when the
+    capability is off, same "capability flag gates the whole path" pattern
+    GESTURE_FLIP_ENABLED uses for classify_orientation below."""
+    if not GESTURE_POSITION_ENABLED:
+        return None
+    return "shoulder" if features["peak_deviation_mg"] >= POSITION_THRESHOLD_MG else "base"
+
+
+def classify_orientation(sample):
+    """One of ORIENTATION_MAP's state names, or "unclear" (mid-motion, or
+    an axis/sign combination not in the map). A single steady-state
+    (t, x, y, z) reading, NOT a captured window — different code path from
+    classify_tap_or_flick/classify_position on purpose (gesture-envelope.md
+    §3: orientation is steady-state, not a transient to window/classify)."""
+    _, x, y, z = sample
+    values = {"x": x * 0.061, "y": y * 0.061, "z": z * 0.061}
+    axis = max(values, key=lambda a: abs(values[a]))
+    value = values[axis]
+    if abs(value) < ORIENTATION_STABLE_MG:
+        return "unclear"
+    sign = 1 if value > 0 else -1
+    for name, map_axis, map_sign in ORIENTATION_MAP:
+        if map_axis == axis and map_sign == sign:
+            return name
+    return "unclear"
+
+
+def classify_valid_input(features):
+    """V1 minimal contract (gesture-envelope.md §11) — deliberate touch
+    vs. ambient handling, the ONLY distinction this path needs. energy
+    alone: 98.4% across pooled tap sessions vs. pooled handling-noise
+    sessions (pickup/carry/setdown/bump) — not a single-session number, and
+    a much bigger margin than anything classify_tap_or_flick/
+    classify_position ever reached (median tap energy ~27K vs. median
+    handling-noise energy ~2.3M, nearly two orders of magnitude apart, not
+    a close call). Deliberately does NOT distinguish tap from flick or
+    classify position — this is the specialization gesture-envelope.md §11
+    describes, not a replacement for classify_tap_or_flick, which stays
+    defined and tested for when GESTURE_FLICK_ENABLED/GESTURE_POSITION_
+    ENABLED come back on."""
+    return features["energy"] < TAP_ENERGY_THRESHOLD
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (scrollwheel) — gesture-envelope.md §7
+# The interaction state machine — what an abstract event MEANS, not what
+# physically happened (that's the recognizer above). Same split
+# _classify_wake_response already draws for the old design: "gesture A
+# doesn't always mean X" happens here, not in the recognizer.
+# ─────────────────────────────────────────────────────────────
+class _GestureMenu:
+    """The scrollwheel's own state — separate from _WakeState's
+    AWAKE/ASLEEP (this is a layer on top: GESTURE_MODE is a state you can
+    only be in while the display is otherwise AWAKE, per gesture-
+    envelope.md §7). Same class-based pure-state-mutation style
+    _WakeState/_StatusMessage already use."""
+
+    def __init__(self, options):
+        self.options = options
+        self.active = False
+        self.cursor = 0
+        self.entered_at = None
+
+    def wake(self, now_ms):
+        """Enter GESTURE_MODE at cursor 0. Idempotent — waking while
+        already active resets the cursor and the timeout, same "wake()
+        also handles re-entry" pattern _WakeState.wake() uses."""
+        self.active = True
+        self.cursor = 0
+        self.entered_at = now_ms
+
+    def scroll(self, now_ms, direction):
+        """direction: +1 or -1. No-op if not active. Wraps around the
+        option list rather than clamping — a scrollwheel, not a slider.
+        Refreshes the idle timeout (now_ms) — deliberately different from
+        _WakeState's WAKE_MINUTES countdown, which does NOT auto-refresh
+        (that's a power-budget decision, extending it needs its own
+        deliberate double-tap gesture). GESTURE_MODE_TIMEOUT_MS is an idle
+        timeout on an active interaction, not a power budget — a
+        scrollwheel that can time out mid-browse just because the session
+        ran long has no upside, same as an ATM or screensaver idle timer
+        resets on activity, not on a fixed session clock."""
+        if not self.active:
+            return
+        self.cursor = (self.cursor + direction) % len(self.options)
+        self.entered_at = now_ms
+
+    def select(self):
+        """Returns the selected option's label, or None if not active.
+        Exits GESTURE_MODE — one-shot, not sticky, same spirit as the old
+        SECONDARY_ACTION dispatch firing once per tap."""
+        if not self.active:
+            return None
+        selected = self.options[self.cursor]
+        self.exit()
+        return selected
+
+    def exit(self):
+        self.active = False
+        self.entered_at = None
+
+    def is_expired(self, now_ms):
+        # Plain subtraction, not time.ticks_diff — same choice _WakeState
+        # and _TapClassifier already made for comparisons over this short
+        # a window (see their is_expired()/advance()).
+        return (
+            self.active
+            and self.entered_at is not None
+            and now_ms - self.entered_at >= GESTURE_MODE_TIMEOUT_MS
+        )
+
+
+def _classify_menu_response(menu_active, physical_gesture):
+    """PURE: given whether the menu is currently active and what the
+    recognizer detected this tick, decide the abstract response —
+    "wake"/"select"/"scroll"/None. Mirrors _classify_wake_response's role
+    for the old design exactly. Caller applies the resulting mutation via
+    menu.wake()/.scroll()/.select() — this function only decides, same
+    split as before."""
+    if physical_gesture is None:
+        return None
+    if not menu_active:
+        if physical_gesture in ("tap", "flick"):
+            return "wake"
+        return None
+    if physical_gesture == "flick":
+        return "select"
+    if physical_gesture == "tap":
+        return "scroll"
+    return None
+
+
+def _scroll_direction(position):
+    """tap-shoulder = up/back, tap-base = down/forward — gesture-
+    envelope.md §6's SCROLL(direction). Defaults to always-forward (+1)
+    when GESTURE_POSITION_ENABLED is off or position wasn't classified,
+    matching the design doc's stated fallback ("otherwise SCROLL fires
+    with no direction" — a scrollwheel that only goes one way is still a
+    scrollwheel, just a slower one)."""
+    if position == "base":
+        return -1
+    return 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Gesture envelope (v1 minimal contract) — gesture-envelope.md §11
+# The two-phase ACK/CONFIRM state machine. Separate class from
+# _GestureMenu/_WakeState above — those drive the richer scrollwheel
+# design; this is the narrower, actually-shipping v1 path, built
+# alongside them, not replacing them.
+# ─────────────────────────────────────────────────────────────
+class _TapCycleState:
+    """ASLEEP -> WAKING -> SETTLING -> AWAKE, with CYCLING as a brief
+    same-phase action rather than its own state (a flash+cut, not
+    somewhere you can get stuck). Two-phase because classify_valid_input
+    needs the full ~1200ms capture window to decide anything, which fails
+    the "instant" feel a wake gesture needs on its own (§11's latency
+    finding). acknowledge() marks a trigger the INSTANT it fires, before
+    any verdict exists; resolve() applies the verdict once the window's
+    capture completes — same class-based pure-state-mutation style
+    _WakeState/_GestureMenu already use."""
+
+    def __init__(self):
+        self.awake = False  # v1 starts ASLEEP — no lights until a real tap
+        #   wakes it, unlike the classic loop (which starts AWAKE)
+        self.phase = "asleep"  # "asleep" | "waking" | "settling" | "awake"
+        self.phase_started_at = None
+        self.awake_until = None
+        self.ack_pending = False
+
+    def accepts_input(self):
+        """False during WAKING/SETTLING — the debounce gesture-envelope.md
+        §11 calls for, so the same physical contact that triggered WAKE
+        can't also register as an immediate CYCLE."""
+        return self.phase in ("asleep", "awake")
+
+    def acknowledge(self):
+        """Call the instant a trigger fires (caller already checked
+        accepts_input() first) — before the capture window or any verdict
+        exists. Purely a bookkeeping flag; the caller's own immediate
+        ACK-flash print/render doesn't depend on this."""
+        self.ack_pending = True
+
+    def resolve(self, now_ms, valid):
+        """Call once classify_valid_input's verdict on the completed
+        capture is known. Returns "wake", "cycle", or None (noise, or a
+        trigger that landed while WAKING/SETTLING — re-checked here since
+        the capture window can outlast a phase change)."""
+        self.ack_pending = False
+        if not valid or not self.accepts_input():
+            return None
+        if not self.awake:
+            self.awake = True
+            self.phase = "waking"
+            self.phase_started_at = now_ms
+            return "wake"
+        return "cycle"
+
+    def advance(self, now_ms):
+        """Call every tick — advances WAKING->SETTLING->AWAKE on their own
+        timers, and AWAKE->ASLEEP on AWAKE_MINUTES timeout. Returns the
+        phase just entered, or None if nothing changed this tick. Plain
+        subtraction, not time.ticks_diff — same choice _WakeState/
+        _TapClassifier/_GestureMenu already made for windows this short."""
+        if self.phase == "waking" and now_ms - self.phase_started_at >= WAKE_JOLT_MS:
+            self.phase = "settling"
+            self.phase_started_at = now_ms
+            return "settling"
+        if self.phase == "settling" and now_ms - self.phase_started_at >= WAKE_SETTLE_MS:
+            self.phase = "awake"
+            self.awake_until = now_ms + AWAKE_MINUTES * 60_000
+            return "awake"
+        if self.phase == "awake" and self.awake_until is not None and now_ms >= self.awake_until:
+            self.awake = False
+            self.phase = "asleep"
+            self.awake_until = None
+            return "asleep"
+        return None
+
+
+_GESTURE_TRIGGER_BUFFER_LEN = 8  # rolling context for the trigger's cheap
+#   "local baseline" — small and cheap, NOT the same thing as
+#   extract_gesture_features()'s own median-of-the-whole-capture baseline
+_GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
+#   _capture_gesture_window's docstring for the honest simplification this is
+
+
+def _capture_gesture_window(i2c, addr, start_ms):
+    """Real hardware I/O — NOT host-testable, same category
+    _imu_read_accel_raw already is. Fixed-duration capture, not adaptive
+    settling-detection like the sandbox tools' human-gated stop-on-Enter —
+    a real simplification worth naming: every validated recognizer
+    threshold (insights.md §8-9) was tuned against sandbox captures that
+    could run longer when a gesture needed it. Revisit if recognizer
+    accuracy here doesn't match the sandbox numbers."""
+    samples = []
+    while True:
+        now = time.ticks_ms()
+        elapsed = now - start_ms
+        samples.append((elapsed,) + _imu_read_accel_raw(i2c, addr))
+        if elapsed >= _GESTURE_WINDOW_MS:
+            break
+        time.sleep_ms(4)  # matches vibration_sandbox.py's SAMPLE_INTERVAL_MS
+    return samples
+
+
+def _run_gesture_debug_loop():
+    """Terminal-only validation of the gesture envelope
+    (docs/contracts/gesture-envelope.md §7) — prints state transitions
+    instead of touching LEDs, so the scrollwheel mechanism can be exercised
+    over `make screen` before any real LED wiring exists for it. Gated by
+    GESTURE_DEBUG_ENABLED, not WAKE_INTERACTION_ENABLED — a different,
+    newer subsystem, deliberately isolated from the existing tested loop.
+
+    Trigger design, honestly simplified for this first draft: a rolling
+    buffer of recent magnitudes gives a cheap "local baseline" to compare
+    the newest sample against at FRAME_MS cadence. Real handling motion
+    crosses this too (insights.md §9's handling_test.py findings) — that's
+    expected, the recognizer layer above (not this trigger) is what
+    actually tells a gesture from noise. On trigger, captures a fixed
+    _GESTURE_WINDOW_MS window at the sandbox tools' proven 240Hz rate —
+    this blocks the loop for ~1.2s, the same accepted-tradeoff category
+    the boot burst already established (a rare, bounded stall)."""
+    i2c, addr = _get_imu()
+    if addr is None:
+        print("  ✗ No LSM6DSV16X found — check wiring (see imu_test.py)")
+        return
+
+    print("\n══ eki-bin gesture debug ═════════════════════════")
+    print(f"  IMU confirmed at {hex(addr)}")
+    print(f"  menu: {GESTURE_MENU_OPTIONS}")
+    print(
+        f"  flip: {GESTURE_FLIP_ENABLED}   position: {GESTURE_POSITION_ENABLED}"
+        f"   flick: {GESTURE_FLICK_ENABLED}"
+    )
+    print("  tap/flick to interact — Ctrl+C to stop\n")
+
+    menu = _GestureMenu(GESTURE_MENU_OPTIONS)
+    trigger_buffer = []
+    last_orientation = None
+
+    try:
+        while True:
+            now_ms = time.ticks_ms()
+            sample = (now_ms,) + _imu_read_accel_raw(i2c, addr)
+
+            if GESTURE_FLIP_ENABLED:
+                orientation = classify_orientation(sample)
+                if orientation != last_orientation and orientation != "unclear":
+                    print(f"  [ORIENTATION] {orientation}")
+                    last_orientation = orientation
+
+            mag = _gesture_magnitude_mg(sample)
+            triggered = False
+            if len(trigger_buffer) >= _GESTURE_TRIGGER_BUFFER_LEN:
+                baseline = _gesture_median(trigger_buffer)
+                triggered = abs(mag - baseline) >= TAP_TRIGGER_THRESHOLD_MG
+
+            trigger_buffer.append(mag)
+            if len(trigger_buffer) > _GESTURE_TRIGGER_BUFFER_LEN:
+                trigger_buffer.pop(0)
+
+            if triggered:
+                samples = _capture_gesture_window(i2c, addr, now_ms)
+                trigger_buffer = []  # the window already covers this stretch
+                features = extract_gesture_features(samples)
+                physical = classify_tap_or_flick(features)
+                if physical == "flick" and not GESTURE_FLICK_ENABLED:
+                    physical = None  # capability off — treat as noise
+                if physical is not None:
+                    position = classify_position(features)
+                    response = _classify_menu_response(menu.active, physical)
+                    now_ms = time.ticks_ms()  # stale after the blocking capture
+                    if response == "wake":
+                        menu.wake(now_ms)
+                        print(f"  [WAKE] gesture mode active — cursor: {menu.options[menu.cursor]}")
+                    elif response == "select":
+                        selected = menu.select()
+                        print(f"  [SELECT] {selected}")
+                    elif response == "scroll":
+                        direction = _scroll_direction(position)
+                        menu.scroll(now_ms, direction)
+                        arrow = "+" if direction > 0 else "-"
+                        print(f"  [SCROLL {arrow}] cursor: {menu.options[menu.cursor]}")
+
+            if menu.is_expired(now_ms):
+                menu.exit()
+                print("  [TIMEOUT] gesture mode exited")
+
+            time.sleep_ms(FRAME_MS)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n  gesture debug stopped")
+
+
+# ─────────────────────────────────────────────────────────────
+# Wake/sleep interaction layer — docs/contracts/wake-interaction.md
+# LED status messages — docs/contracts/led-status-messages.md
+# Gated by WAKE_INTERACTION_ENABLED (see its docstring above) — every class
+# and function below is inert unless main() actually drives it.
+# ─────────────────────────────────────────────────────────────
+def _imu_tap_detected():
+    """Whether a NEW tap edge occurred since the last call. STUBBED — no IMU
+    is physically wired yet (see docs/contracts/wake-interaction.md). Always
+    returns False, so the rest of the interaction layer runs correctly (and
+    is fully testable) with the display simply never receiving a tap, rather
+    than crashing or fabricating sensor data. Replace with a real
+    LSM6DSV16X I2C read once the sensor is wired — TAP_THRESHOLD needs real
+    bench tuning at that point too; it isn't used by this stub."""
+    return False
+
+
+class _TapClassifier:
+    """Turns a stream of discrete tap-edge events into "single"/"double"
+    classifications, using DOUBLE_TAP_WINDOW_MS to disambiguate. PURE
+    decision logic — see wake-interaction.md's "why single vs double needs
+    its own state machine" section. Only classifies an already-detected
+    edge; _imu_tap_detected() (real sensor I/O, not host-testable) is a
+    separate concern."""
+
+    def __init__(self):
+        self._pending_since = None  # ms an unresolved first tap arrived, or None
+
+    def advance(self, now_ms, tap_edge):
+        """Call once per poll tick with whether a NEW tap edge occurred this
+        tick. Returns "single", "double", or None (nothing to report yet)."""
+        if self._pending_since is not None:
+            if tap_edge:
+                self._pending_since = None
+                return "double"
+            if now_ms - self._pending_since >= DOUBLE_TAP_WINDOW_MS:
+                self._pending_since = None
+                return "single"
+            return None
+        if tap_edge:
+            self._pending_since = now_ms
+        return None
+
+
+class _WakeState:
+    """AWAKE/ASLEEP state for the whole display — one instance, unlike
+    ApproachContract's per-train state, since this gates EVERYTHING, not one
+    contract's own rendering. See wake-interaction.md's state machine."""
+
+    def __init__(self):
+        self.awake = True  # boot always enters AWAKE — see run_startup_sequence()
+        self.wake_until = None  # set by wake(); None until the first wake() call
+
+    def wake(self, now_ms):
+        """Enter (or re-enter) AWAKE, resetting the countdown to
+        WAKE_MINUTES from now. Used for boot, wake-from-sleep, AND extend —
+        the same operation whether the display was already awake or not."""
+        self.awake = True
+        self.wake_until = now_ms + WAKE_MINUTES * 60_000
+
+    def sleep(self):
+        self.awake = False
+        self.wake_until = None
+
+    def is_expired(self, now_ms):
+        """True once the countdown has run out — caller (main()) is
+        responsible for actually calling sleep() and clearing the strip;
+        this only reports the fact."""
+        return self.awake and self.wake_until is not None and now_ms >= self.wake_until
+
+
+class _StatusMessage:
+    """A brief single-LED acknowledgment (see
+    docs/contracts/led-status-messages.md) — non-blocking by design: set
+    once via show(), then rendered by the normal fast-tick loop until it
+    expires, rather than its own blocking sleep loop (which would stall tap
+    classification and schedule refresh for its whole duration)."""
+
+    def __init__(self):
+        self.color = None
+        self.expires_at = None
+
+    def show(self, now_ms, color, duration_ms):
+        self.color = color
+        self.expires_at = now_ms + duration_ms
+
+    def active(self, now_ms):
+        return self.expires_at is not None and now_ms < self.expires_at
+
+
+def _classify_wake_response(is_quiet_now, tap_event, currently_awake):
+    """PURE: given quiet-hours state, a classified tap event, and whether
+    the display is currently awake, decide what should happen. Does NOT
+    decide the no-data acknowledgment — that depends on the live signal(s),
+    resolved separately right after a wake ceremony completes (see main()).
+    Precedence matches docs/contracts/led-status-messages.md exactly: quiet
+    hours is checked before gesture classification, and quiet hours always
+    wins on whether the display lights up — a tap during quiet hours is
+    never ignored outright, it just gets the smaller message."""
+    if tap_event is None:
+        return None
+    if is_quiet_now:
+        return "quiet_tap_ack"  # ANY tap during quiet hours, no exceptions
+    if not currently_awake:
+        return "wake_ceremony"  # ASLEEP + any tap = wake, no ambiguity
+    if tap_event == "double":
+        return "extend"
+    return "secondary_action"  # AWAKE + single tap
+
+
+def _all_signals_hidden(signal, signal_b):
+    """True if every active direction's LeaveSignal is HIDDEN (no catchable
+    trains) — the trigger for the wake-to-no-data acknowledgment."""
+    if signal.urgency is not HIDDEN:
+        return False
+    if signal_b is not None and signal_b.urgency is not HIDDEN:
+        return False
+    return True
+
+
+def _cycle_brightness():
+    """Advance BRIGHTNESS to the next value in BRIGHTNESS_PRESETS, wrapping
+    around — the default SECONDARY_ACTION (a single tap while AWAKE). The
+    visible brightness change IS the confirmation; no separate flash needed
+    (see wake-interaction.md). Mutates the module-level BRIGHTNESS global
+    directly — every render path already reads it fresh each frame (it was
+    never a frozen import-time constant in practice, just never mutated
+    until now), so nothing else needs to change to pick this up."""
+    global BRIGHTNESS
+    try:
+        next_index = (BRIGHTNESS_PRESETS.index(BRIGHTNESS) + 1) % len(BRIGHTNESS_PRESETS)
+    except ValueError:
+        next_index = 0  # current BRIGHTNESS isn't one of the presets — start over
+    BRIGHTNESS = BRIGHTNESS_PRESETS[next_index]
+    return BRIGHTNESS
+
+
+def _run_secondary_action():
+    """Dispatch whatever SECONDARY_ACTION is configured. Only
+    "brightness_cycle" exists today; deliberately pluggable rather than
+    hardcoded to one behaviour (see wake-interaction.md) — an unrecognised
+    SECONDARY_ACTION is a silent no-op, matching this codebase's
+    getattr-default tolerance elsewhere (e.g. _render_dispatch's hasattr
+    guard for render_dual)."""
+    if SECONDARY_ACTION == "brightness_cycle":
+        _cycle_brightness()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1147,6 +2044,25 @@ def connect_wifi():
     _draw_startup_circle) while polling — replaced a blocking `sleep(1)`
     poll loop that drew nothing at all, the main piece of real engineering
     the boot ceremony needed (the animation math itself was nothing new)."""
+    # Reclaim before bringing the radio up. esp_wifi allocates real buffers
+    # at active(True) and raises `OSError: Wifi Out of Memory` if the heap
+    # can't serve them — a failure seen for real on the XIAO ESP32-C3 once
+    # main.py passed ~2300 lines. Cheap insurance at a genuine high-water
+    # mark; costs nothing on the roomier Pico 2W.
+    #
+    # ⚠ This does NOT rescue `mpremote run main.py` (i.e. `make run`), which
+    # ships the whole ~115KB source over stdin to be held in RAM AND compiled
+    # there — that peak happens before this line is ever reached. Run a file
+    # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
+    # to soft-reset. See docs/provisioning-runbook.md § 6.
+    if not WIFI_SSID:
+        # Reachable only with TIME_SOURCE="wifi" and no credentials set —
+        # a config mistake, not a runtime failure. Say so plainly rather
+        # than handing esp_wifi a None to choke on.
+        print("  ✗ TIME_SOURCE='wifi' but WIFI_SSID is unset in config.py.")
+        print("    Set credentials, or use TIME_SOURCE='rtc' + `make set-time`.")
+        return False
+    gc.collect()
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(WIFI_SSID, WIFI_PASS)
@@ -1219,32 +2135,119 @@ def render_for_interval(contract, signal, seconds, signal_b=None):
         time.sleep_ms(contract.frame_ms)
 
 
-def main():
-    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+def _run_classic_loop(schedule_data, led):
+    """The original main loop, unchanged: schedule refresh once every
+    LOOP_INTERVAL_SECS, contract renders for the interval via
+    render_for_interval(). Used whenever WAKE_INTERACTION_ENABLED is False
+    (the default) — every deployment without an IMU wired (e.g.
+    config_friend1.py) keeps behaving exactly as it always has, byte for
+    byte. See _run_interactive_loop for the wake/sleep + status-message
+    version."""
     heartbeat = False
+    DIVIDER = "─" * 50
+    loop_count = 0
 
-    print("\n══ eki-bin ═══════════════════════════════════════")
+    while True:
+        heartbeat = not heartbeat
+        if led:
+            led.value(heartbeat)
+        loop_count += 1
+        hb = "●" if heartbeat else "○"
 
-    schedule_data = load_schedule(SCHEDULE_FILE)
-    print(
-        f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
-        f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+        now, weekday = local_time()
+        period = current_period(weekday)
+        directions = schedule_data.get(period, {})
 
-        f"  N trains: {N_TRAINS} "
-        f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
-    )
+        print(DIVIDER)
+        print(
+            f"  {hb}  {fmt_time(now)} JST   {period}   {schedule_data['station']}   #{loop_count}"
+        )
+        print(DIVIDER)
 
-    try:
-        run_startup_sequence()  # boot ceremony — never returns on WiFi
-        #   failure (persistent red breathe instead), so everything below
-        #   only ever runs after a successful connect + burst.
+        if not directions:
+            print(
+                f"  No schedule for {period!r} — run: make schedule && make upload"
+            )
+        else:
+            for direction, departures in directions.items():
+                upcoming = next_departures(departures, now)
+                marker = "  ← ring" if direction == DISPLAY_DIRECTION else ""
+                print(f"\n  {direction}{marker}")
+                if not upcoming:
+                    print("    —  no more trains today")
+                    continue
+                for i, until in enumerate(upcoming):
+                    arrow = "→" if i == 0 else " "
+                    print(
+                        f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
+                    )
 
-        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+        # ── Drive the LED ring ───────────────────────────────────
+        # One ring → one direction (no magnetometer in V1) — or two, for
+        # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
+        # Build the abstract signal(s), then let whichever contract is
+        # active interpret them.
+        signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
+        if signal.ttls:
+            leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
+            print(f"\n  ring: leave in [{leaves}] min  →  {signal.urgency.name}")
+        else:
+            print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
 
-        DIVIDER = "─" * 50
-        loop_count = 0
+        signal_b = None
+        if DISPLAY_DIRECTION_B is not None:
+            signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+            if signal_b.ttls:
+                leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+            else:
+                print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
-        while True:
+        # Night → dark + sleep. Otherwise the contract renders for the interval
+        # (static returns at once → we sleep; animated runs its own frame loop).
+        if is_quiet(now):
+            print("  (quiet hours — display off)")
+            clear()
+            time.sleep(LOOP_INTERVAL_SECS)
+        else:
+            render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
+            if ACTIVE_CONTRACT.frame_ms is None:
+                time.sleep(LOOP_INTERVAL_SECS)
+
+
+def _run_interactive_loop(schedule_data, led):
+    """Wake/sleep interaction layer + LED status messages — active only
+    when WAKE_INTERACTION_ENABLED is True. See
+    docs/contracts/wake-interaction.md and
+    docs/contracts/led-status-messages.md.
+
+    Structurally different from _run_classic_loop: ONE fast (FRAME_MS-paced)
+    tick drives everything — schedule refresh (slow, elapsed-time-gated),
+    tap classification, wake/message dispatch, and rendering — rather than
+    one iteration per LOOP_INTERVAL_SECS. This is the cooperative
+    "super-loop" pattern the wake-interaction design doc's concurrency
+    section settled on: no RTOS, no threads, just several time-gated tasks
+    sharing one tick."""
+    heartbeat = False
+    DIVIDER = "─" * 50
+    loop_count = 0
+
+    wake_state = _WakeState()
+    wake_state.wake(time.ticks_ms())  # boot = the first wake trigger
+    tap_classifier = _TapClassifier()
+    status_message = _StatusMessage()
+
+    last_refresh = None
+    now = 0
+    signal = LeaveSignal([])
+    signal_b = None
+
+    while True:
+        tick_now = time.ticks_ms()
+
+        # ── slow task: schedule refresh, ~LOOP_INTERVAL_SECS ──────────
+        if last_refresh is None or time.ticks_diff(tick_now, last_refresh) >= LOOP_INTERVAL_SECS * 1000:
+            last_refresh = tick_now
             heartbeat = not heartbeat
             if led:
                 led.value(heartbeat)
@@ -1279,11 +2282,6 @@ def main():
                             f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
                         )
 
-            # ── Drive the LED ring ───────────────────────────────────
-            # One ring → one direction (no magnetometer in V1) — or two, for
-            # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
-            # Build the abstract signal(s), then let whichever contract is
-            # active interpret them.
             signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
             if signal.ttls:
                 leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
@@ -1300,16 +2298,121 @@ def main():
                 else:
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
-            # Night → dark + sleep. Otherwise the contract renders for the interval
-            # (static returns at once → we sleep; animated runs its own frame loop).
-            if is_quiet(now):
-                print("  (quiet hours — display off)")
-                clear()
-                time.sleep(LOOP_INTERVAL_SECS)
-            else:
-                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
-                if ACTIVE_CONTRACT.frame_ms is None:
-                    time.sleep(LOOP_INTERVAL_SECS)
+        # ── fast task: tap classification + wake/message dispatch ─────
+        quiet_now = is_quiet(now)
+        tap_event = tap_classifier.advance(tick_now, _imu_tap_detected())
+        response = _classify_wake_response(quiet_now, tap_event, wake_state.awake)
+
+        if response == "quiet_tap_ack":
+            status_message.show(tick_now, QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS)
+        elif response == "wake_ceremony":
+            wake_state.wake(tick_now)
+            _play_startup_burst()  # blocking, ~2.3s — reused as-is, see the doc
+            tick_now = time.ticks_ms()  # stale after the blocking burst above
+            if _all_signals_hidden(signal, signal_b):
+                status_message.show(tick_now, NO_DATA_COLOR, NO_DATA_DURATION_MS)
+        elif response == "extend":
+            wake_state.wake(tick_now)
+            status_message.show(tick_now, EXTEND_CONFIRM_COLOR, EXTEND_CONFIRM_MS)
+        elif response == "secondary_action":
+            _run_secondary_action()
+
+        if wake_state.is_expired(tick_now):
+            wake_state.sleep()
+
+        # ── render ──────────────────────────────────────────────────
+        if status_message.active(tick_now):
+            frame = [None] * NUM_LEDS
+            frame[STATUS_LED_INDEX] = (status_message.color, 1.0, "static")
+            _write_frame(frame)
+        elif quiet_now or not wake_state.awake:
+            clear()
+        else:
+            _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+
+        time.sleep_ms(FRAME_MS)
+
+
+def main():
+    print("\n══ eki-bin ═══════════════════════════════════════")
+
+    if GESTURE_DEBUG_ENABLED:
+        # No WiFi/schedule/boot-ceremony needed — this validates the
+        # gesture envelope in isolation, same "standalone, no dependency
+        # beyond the IMU" property the sandbox tools already have. Early
+        # return, deliberately bypassing everything below rather than
+        # threading a flag through the existing schedule/WiFi/boot flow.
+        try:
+            _run_gesture_debug_loop()
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # Config-value errors get an LED cue too. _heartbeat_pin is the known
+    # offender (HEARTBEAT_PIN="LED" is a Pico-2W-only alias; on any other
+    # board Pin("LED") raises ValueError) but this guards the whole class:
+    # a bad config value used to crash here, BEFORE run_startup_sequence()
+    # below ever runs, so nothing lit up at all. On USB you'd see the
+    # traceback; on a wall adapter the unit just looked dead.
+    #
+    # ⚠ Not everything is catchable here: LED_PIN/NUM_LEDS are consumed at
+    # IMPORT time to build `np`, so getting those wrong fails before main()
+    # is entered and no LED feedback is possible by construction. Those two
+    # stay a serial-console diagnosis.
+    try:
+        led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+    except (ValueError, TypeError) as e:
+        print(f"  ✗ Bad config value: HEARTBEAT_PIN={HEARTBEAT_PIN!r} ({e})")
+        print("    Pico 2W accepts \"LED\"; every other board needs a GPIO number")
+        print("    or bare None. See pinouts/<board>.md.")
+        _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
+
+    try:
+        # ⚠ ORDERING IS MEMORY-DRIVEN, NOT ARBITRARY — do not move WiFi back
+        # below load_schedule(). On the ESP32-C3, esp_wifi_init() needs
+        # ~40KB, and ~26KB of that must come from ONE specific SRAM region
+        # (measured: it drains regions 2 and 4 to 4 and 32 bytes free while
+        # leaving 111KB untouched in region 3, which can't satisfy its
+        # DMA/internal capability requirements). At a bare boot that region
+        # has just 26,448 bytes free against WiFi's 26,416 — **32 bytes of
+        # margin**. Anything allocated before WiFi comes up competes for it.
+        #
+        # Parsing schedule.json first cost ~5.5KB of exactly that region and
+        # made connect_wifi() raise `OSError: Wifi Out of Memory`. Bringing
+        # the radio up first lets MicroPython's heap grow into whatever's
+        # left over instead of the other way round.
+        #
+        # This buys margin; it does not create headroom. See
+        # docs/insights.md §11 for the real fix (stop compiling a 115KB
+        # module on-device) — this reorder is the cheap half.
+        run_startup_sequence()  # boot ceremony + WiFi/NTP — never returns on
+        #   WiFi failure (persistent red breathe instead), so everything
+        #   below only ever runs after a successful connect + burst.
+
+        try:
+            schedule_data = load_schedule(SCHEDULE_FILE)
+        except (OSError, ValueError):
+            # Different failure CAUSE, different colour — see
+            # docs/contracts/led-status-messages.md. A missing/corrupt
+            # schedule.json used to crash here with a console print and no
+            # LED indication at all; now gets the same persistent-failure
+            # treatment WiFi/NTP failure already had, just its own colour.
+            print("  ✗ Schedule failed to load. Reset to retry.")
+            _run_startup_failure_forever(SCHEDULE_ERROR_COLOR)  # never returns
+
+        print(
+            f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
+            f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+
+            f"  N trains: {N_TRAINS} "
+            f"LEDs: {NUM_LEDS} on GPIO{LED_PIN}"
+        )
+        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+
+        if WAKE_INTERACTION_ENABLED:
+            _run_interactive_loop(schedule_data, led)
+        else:
+            _run_classic_loop(schedule_data, led)
     except KeyboardInterrupt:
         pass
     finally:

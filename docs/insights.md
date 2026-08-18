@@ -118,6 +118,16 @@ is hidden by the medium.
   bring-up log). 2–3 pre-shift colour presets ("bins") could compensate for
   (or lean into) a given bottle's cast. Not built — parked until colour
   fidelity through glass matters again, e.g. a different/less-tinted bottle.
+- **Multiple eki-bins as a shelf display.** Floated during Qi bring-up
+  (2026-07-25): several jars, each independently configured for a different
+  favourite line/station, sitting dark and decorative on a shelf — placing
+  *one* on the Qi pad both powers it and selects it as "the line I'm
+  watching today," and removing it from the pad is a more natural "off"
+  gesture than a switch or unplug. Directly validates the wake/sleep design
+  in `docs/contracts/wake-interaction.md` as a real interaction model, not
+  just a power-saving trick — not something to build now, no code implication
+  beyond what that doc already covers, just a product-vision note worth
+  keeping.
 
 ---
 
@@ -163,6 +173,12 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
 - Too bright **even in the brown bottle**.
 - We already have Unix time → modulate brightness by **sunrise/sunset**.
 - Later: **IMU "shake to adjust brightness"** if glare is the main complaint.
+  **Grown into a full design (2026-07-25)**, motivated by real Qi bring-up
+  findings (thermal cutoff on long runs; "off 80% of the time" as the actual
+  desired aesthetic, not a compromise) — see
+  `docs/contracts/wake-interaction.md`: a bounded wake window per tap/boot,
+  single vs. double tap doing different things, and the boot ceremony's
+  burst reused as a "waking up" cue rather than rebuilt.
 - Be prudent about *when* it glows at all: if **no train within "N-LED" reach**,
   go dark — no reason to shine at 3 a.m. This is smarter than fixed quiet hours
   (the schedule itself defines the on/off envelope).
@@ -275,3 +291,457 @@ ST25DV tag. It doesn't work — and the *reason* is a reusable trap worth keepin
 - **Consequence:** a minimal first-party app became unavoidable — not a failure of
   the no-app principle, just the reality of this tag class on iOS. Decision +
   tag data contract: `docs/nfc-provisioning.md`.
+
+---
+
+## 8. Tap-gesture tuning: hardware-informed limits, not assumed ones (2026-08-04)
+
+**Setup:** built `micropython/vibration_sandbox.py` (batch data collection —
+position × tap-count reps, streamed to flash as JSON Lines) and
+`scripts/analyze_taps.py` (peak magnitude / ring-down / hysteresis-based tap
+counting on the host) to answer "what tap gestures can this hardware actually
+support" empirically, instead of assuming `docs/contracts/wake-interaction.md`'s
+original single-vs-double-tap design would just work. This sandbox is what
+will inform that contract's still-stubbed `_imu_tap_detected()`.
+
+Muji glass jar, blue-tack mount, 240Hz sampling, 60 clean reps (10 per
+position×tap-count combo, controlled technique — pad only, bottle secured
+without a bracing hand):
+
+| Signal | Result |
+|---|---|
+| Position (neck vs. body), best single threshold | **98.3%** (~390mg cutoff) |
+| 1-tap | **100%** |
+| 2-tap | 70% overall — **80% at neck, 60% at body** |
+| 3-tap | 40% overall — 50% at neck, 30% at body |
+
+**Headline takeaway:** position (neck vs. body) is a far more reliable signal
+than tap-count beyond one tap. The original design leans on the *weaker* of
+the two axes (single vs. double tap). "Single tap at neck" vs. "single tap at
+body" would likely be both simpler to implement (no timing-based counting)
+and more reliable (98%+ vs. 70%) than double-tap. Not yet decided whether to
+redesign around this — see open questions below.
+
+**Why 2-/3-tap degrade:** looks like an algorithm limit so far, not a hard
+sensor one. The hysteresis-based peak counter can't split two strikes that
+happen close enough together that the signal never drops back below
+threshold between them. Ring-down itself is fast (4-10ms), and successful
+2-tap reps cluster at 232-327ms spacing — so real taps spaced like that
+should be resolvable in principle. Not yet confirmed whether faster failures
+are a fixable detection gap or a human motor-control floor.
+
+**Methodology notes** (matter for reading the numbers above):
+- Absolute peak magnitudes are ~3-5x larger at 240Hz than an earlier 60Hz
+  pass on the *same* bottle — finer sampling catches a fast transient's true
+  peak that 60Hz was under-sampling. **Thresholds are ODR-dependent — don't
+  mix data collected at different sample rates.**
+- Tap technique (nail vs. pad, whether a hand braced the bottle) measurably
+  moves position separability — an uncontrolled-technique run on this same
+  jar showed neck/body ranges overlapping; only the controlled-technique run
+  above hit 98.3%.
+
+**Open questions (mid-investigation — testing a wine bottle next):**
+- **How much generalizes across bottles?** Glass mass/thickness/geometry
+  plausibly shifts the *absolute* mg thresholds per bottle (this jar's
+  ~390mg cutoff probably won't transfer). The *relative* pattern (neck >
+  body — less material near the neck to absorb the shock) might generalize
+  even if the absolute numbers don't. A second, physically different bottle
+  is the first real data point on this either way.
+- **Where does calibration happen?** If thresholds are bottle-specific,
+  something has to set them per unit: **(a) dev-time** — the maker runs this
+  same sandbox once per physical jar, bakes the result into that unit's
+  `config.py` (fits the existing ~19-knob config philosophy, zero runtime
+  complexity); **(b) runtime** — the device self-calibrates from a few taps
+  on first boot (robust to bottle swaps/drift, but needs a real on-device
+  calibration UX with no laptop in the loop). Leaning toward (a) for V1.5
+  given the scale (a handful of gift units, not a product line) — (b) reads
+  more like a V2/Rust-era feature, and would be a natural use for the
+  LSM6DSV16X's onboard MLC/FSM (deliberately unused so far — see
+  `docs/hardware.md`).
+- **Would ML "solve" the heterogeneity?** Skeptical on principle: a model
+  trained on raw absolute features inherits the same bottle-specificity
+  hardcoded thresholds have — it has no more physics knowledge than the data
+  it's given. The more promising lever is *feature engineering* (e.g.
+  normalizing peak magnitude against a same-session reference tap, so it's a
+  ratio rather than a raw mg value), independent of whether the final
+  classifier is a threshold or a trained model. Whether a normalized feature
+  actually generalizes across bottles is itself an empirical question the
+  multi-bottle testing will answer — not something to assume either way.
+
+**Update (2026-08-04, later same day) — the classifier earns its keep once
+the features are right.** Rebuilt the matrix based on the findings above:
+dropped 3-tap (consistently the worst result everywhere), kept neck (best
+position separator despite being the worst tap-count position), added
+**shoulder** (the neck/body transition — angled tap vector, hypothesized to
+excite less rocking) and **base** (grounded contact point, same reasoning).
+Built `scripts/prepare_tap_dataset.py` (raw signal → engineered-feature CSV:
+energy, duration, spacing regularity, etc. — deliberately *not* reusing
+`detected_taps`, since training on that would just teach a model to imitate
+the hysteresis algorithm's mistakes) and `scripts/train_tap_classifier.py`
+(cross-validated comparison against the hand-tuned baselines).
+
+Chianti bottle, 240 clean reps (60 per position, 120 per tap-count), 5-fold CV:
+
+| Question | Hand-tuned baseline | Trained classifier (random forest) |
+|---|---|---|
+| Tap count (1 vs. 2) | ~55% (hysteresis peak-counter) | **91-92%** |
+| Position (4-way: neck/shoulder/body/base) | ~73-100% pairwise, weakest at neck-vs-shoulder | **85%** (single 4-way model) |
+
+Tap-count result is the headline: the classifier didn't just edge out the
+threshold approach, it solved a problem the threshold genuinely can't —
+distinguishing "one tap plus rocking echo" from "two real taps" needs
+*multiple* signal properties considered together (spacing regularity, total
+energy, crossing count), which a single hysteresis threshold has no way to
+combine. Feature importances confirm this isn't black-box magic: the top
+features are exactly the physics-motivated ones (`spacing_mean_ms`,
+`spacing_stdev_ms`, `energy`) designed specifically around the rocking
+discovery above — **the feature engineering did the real work; the
+classifier's contribution was combining several such features into one
+decision, which a threshold structurally cannot do.** This refines rather
+than contradicts the earlier "ML isn't a shortcut" take: on muji (clean,
+non-rocking, single dominant feature) the simple threshold still *beat* the
+classifier (98.3% vs. 95-97%) — the classifier only earns its complexity
+when the underlying signal genuinely needs more than one feature to explain,
+which rocking-prone bottles apparently do and calm ones don't.
+
+Position-by-tap-count breakdown, same session — extends the original "is
+1-tap reliable" question with data the earlier 2-position matrix didn't
+have:
+
+| | 1-tap | 2-tap |
+|---|---|---|
+| base | **100%** | 73% |
+| shoulder | 83% | 60% |
+| body | 47% | 33% |
+| neck | 23% | 23% |
+
+Clean physical ordering (base > shoulder > body > neck) matching distance
+from the grounded contact point. Base and shoulder clear the 80-90%
+reliability bar for 1-tap; neck and body don't, and 2-tap doesn't clear it
+anywhere (though base at 73% narrows the gap a lot). Note: **neck is the
+best-*separated* position but the worst for tap-count *reliability*** — the
+two properties don't track together, so "pick the most distinctive-looking
+position" isn't the same question as "pick a position where tap detection
+actually works."
+
+**Cross-bottle generalization test — added `--train-bottle`/`--test-bottle`
+to `train_tap_classifier.py` (train on one bottle entirely, test on another
+entirely, no pooling/shuffling across — stricter than k-fold on pooled data,
+which can leak bottle identity across folds).** Trained on chianti-3 (240
+reps), tested on muji's original session, restricted to the positions/tap-
+counts both bottles actually share (neck/body, 1-2 taps); confirmed first
+that both sessions ran at the same effective sample rate (~215Hz) so this
+isn't just the earlier ODR-mismatch problem resurfacing:
+
+| Target | Cross-bottle accuracy (train chianti-3 → test muji) |
+|---|---|
+| Position (neck/body) | **0%** — worse than random guessing |
+| Tap count (1 vs. 2) | **85%** (random forest) |
+
+This is a real, decisive answer to the "universal vs. per-bottle" question,
+not just a hint, and it splits cleanly along feature *type*, not target
+difficulty: **position relies on amplitude features (peak magnitude,
+energy), which are bound to a specific bottle's glass mass/geometry — a
+boundary learned on chianti's scale is meaningless on muji's (muji's
+absolute magnitudes run 3-5x higher at the same position, entirely
+different range). Tap-count relies mostly on timing features (spacing
+regularity) — how fast a human physically taps twice doesn't depend on the
+bottle's physical response, so it survives the bottle swap.** Practical
+read: amplitude-based classification (position) needs per-bottle
+calibration, no way around it; timing-based classification (tap-count) may
+not, or may need much less. Worth testing directly once a matching
+shoulder/base muji session exists — this test so far only covers the two
+positions/tap-counts the two bottles happened to already share.
+
+**Follow-up (same day) — a dedicated shoulder+base, 1-tap-only, n=80/side
+session landed, and it complicates the shoulder/base pairing specifically,
+while strongly confirming tap-count reliability:**
+
+- **Tap presence: 157/160 = 98.1%.** Rock solid at scale — the base/shoulder
+  choice for reliable single-tap detection holds up completely.
+- **Shoulder-vs-base separability dropped from 96.7% (chianti-3, n=60/side)
+  to 71.2% (chianti-4, n=80/side) on the same bottle.** Checked whether this
+  was small-sample luck or real drift by comparing the two sessions' raw
+  numbers directly: shoulder mean 265mg→193mg, base mean 65mg→115mg — the
+  ordering held (shoulder > base, both sessions) but the *gap* narrowed
+  substantially. That's genuine session-to-session variability in the
+  physical measurement, not a sampling artifact — matches the pattern
+  already seen with the neck/body 3-tap flip between the two earlier
+  chianti sessions (§8 above). **Pooling both sessions gives ~81.4%**,
+  probably the more honest current estimate than either session alone.
+- Tried normalizing each capture's peak magnitude against that session's own
+  median before pooling, hoping to cancel out the drift — **didn't help**
+  (still 81.4%). Should have seen that coming: a per-session linear rescale
+  doesn't change a distribution's *relative* overlap, so it can't move a
+  best-threshold split. The drift isn't a simple scale/offset the two
+  sessions disagree on — more likely genuine variability in exact tap
+  location/technique within "shoulder" and "base" as target zones, which
+  normalization can't fix.
+- **Practical implication:** shoulder-vs-base, at ~81% pooled, is currently
+  a weaker position pair than neck-vs-body (100%), neck-vs-base (93%),
+  shoulder-vs-body (100%), or body-vs-base (91%) — though those are each
+  still only a single session's read, and this same finding says single-
+  session reads can't be trusted at face value. **Open question, not yet
+  answered:** whether those other pairs hold up as well as shoulder/base
+  didn't once tested across multiple independent sessions the same way.
+
+---
+
+## 9. Tap/gesture envelope — final synthesis (2026-08-04)
+
+§8 above is the full field log — a sandbox toolchain
+(`micropython/vibration_sandbox.py`, `imu_test.py`, `handling_test.py`,
+`orientation_test.py`, plus host-side `scripts/analyze_taps.py` /
+`prepare_tap_dataset.py` / `train_tap_classifier.py`) built and run across
+~15 sessions and two physically different bottles (muji jar, chianti wine
+bottle) to answer "what can this hardware actually support" empirically
+instead of assuming the original wake-interaction.md design would just
+work. This section is the decision-ready summary. The design built on it
+lives in **`docs/contracts/gesture-envelope.md`**.
+
+**The winners:**
+
+| Modality | Reliability | Recognizer | Hardware dependency |
+|---|---|---|---|
+| Flip/orientation (upright/horizontal/upside-down) | Visually unambiguous, steady-state | Hardcoded: dominant axis + sign | Wired power only — Qi breaks on flip |
+| Tap presence @ base | 98% (167/170) | Hardcoded: peak-magnitude threshold | none |
+| Tap presence @ shoulder | 95% (161/170) | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. soft tap | 91-94% | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. hard handling | 100% via `spacing_stdev_ms` (magnitude alone caps ~80%) | Hardcoded threshold, but on a *shape* feature, not magnitude | none |
+| Position: shoulder vs. base | ~81.5% pooled across 3 sessions (71-97% range per session) | Hardcoded ≈ trained classifier — no ML benefit found | optional/toggle, per-bottle calibrated |
+
+**What didn't pan out — kept here so it isn't silently re-attempted:**
+- Tap presence @ neck (23%) and @ body (51%), un-held — ruled out.
+- 2-tap and 3-tap counting — never cleared a usable reliability bar at any
+  position on either bottle; replaced by gesture-*type* (tap/flick) instead
+  of tap-*count* as the second signal dimension.
+- `grab_and_tap` — an n=10 pilot showed 51%→90% reliability at body,
+  genuinely exciting; **did not replicate at n=30 across all 4 positions**
+  (neck improved 23%→63% but still weak; shoulder, body, and base all got
+  *worse*; position-discrimination *within* grab_and_tap collapsed further
+  than free-tap's). A trained classifier didn't rescue it either (75% vs.
+  free-tap's 85% for position). Root cause unconfirmed — likely the same
+  session-to-session technique drift seen elsewhere, not a settled physical
+  effect. Parked, not built on, until the inconsistency is understood.
+  One piece *did* generalize: separating a deliberate held-tap from
+  accidental handling via `energy` scored 90-98% regardless of position —
+  reusable as a general noise-rejection technique even though the specific
+  gesture didn't pan out.
+
+**The recurring methodology lesson, worth stating once, plainly, since it
+showed up at least four separate times in §8:** a small sample (n=10) in
+this investigation *consistently* looked better than it turned out to be
+at scale — shoulder-vs-base separability alone swung 96.7% (n=60) → 71.2%
+(n=80) → 81.7% (n=60) across three independent sessions on the same
+bottle, and `grab_and_tap`'s exciting n=10 pilot reversed at n=30. **Treat
+anything validated at n<30 or in a single session as a hypothesis, not a
+result** — this cost real rework more than once here, and the fix each
+time was the same: collect more, pool across sessions, and only trust
+numbers that hold up when re-checked.
+
+---
+
+## 10. ACK/CONFIRM LED jolt — real-hardware iteration (2026-08-16)
+
+§9's fuller gesture vocabulary (position, flick-vs-tap, etc.) didn't get
+built on directly — real-hardware testing the day after §9 was written
+found that every one of its harder problems was *additional*
+discrimination on top of tap-vs-noise, which was never actually
+unreliable (95-98%+). Scoped down instead to a minimal "light switch"
+contract: tap wakes, tap cycles, timeout sleeps. Full design + rationale:
+`docs/contracts/gesture-envelope.md` §11 ("Scope pivot"). This section is
+the field-note synthesis of what came after that pivot — designing and
+tuning the LED response to that contract, across five real-hardware
+rounds in one day, once `main.py`'s recognizer + state machine were
+already validated on their own.
+
+**The core UX finding — brightness has to bridge the gap, not just mark
+the endpoints:** the two-phase design (instant ACK the moment a tap is
+felt, ~1.2s later a CONFIRM once the recognizer has a verdict) is
+necessary — that gap is however long the recognizer actually takes to
+decide, not a rendering choice, and no capture window shorter than that
+stays accurate (§11's own latency/accuracy table: ~94-98% at 1200ms down
+to ~70% at 50ms). But the *naive* rendering of that gap — ACK flashes,
+drops to black, CONFIRM flashes later — read as two disconnected blips
+with a stall in between, not one continuous gesture. Fix: ACK settles
+onto a dim-but-non-zero "continental shelf," held for the rest of the
+gap, that CONFIRM then rises *from* instead of from black. The shelf is
+doing real communicative work ("still here, deciding") that a hard cut to
+off can't.
+
+**"Hardware-defined software" as a genuine UX win, not just a slogan:**
+tap strength (`dev`, the triggering sample's deviation from baseline —
+the only signal available before `energy` is known) scales both the ACK
+peak *and* the shelf level, so a harder tap reads brighter on both the
+"up" and the "down." Took real tuning to land, though — the brightness
+range needed widening **three separate times** as testing moved from a
+bare LED strip to inside the actual frosted jar: 0.5-1.0x (2x spread,
+imperceptible) → 0.4-1.6x (4x, worked bare) → 0.35-2.2x (in-bottle, the
+frosted glass compresses contrast a bare strip never showed) → pulled
+back to 0.35-6.0x after a saturation bug was found (see below). **The
+in-bottle jump is the one to remember**: a diffuser you haven't tested
+through yet will always make a bare-strip-tuned range look flatter than
+it is — 駅瓶's whole premise is the frosted glass, so bare-strip numbers
+were never more than a rough starting point.
+
+**Two real rendering bugs, both traced to the same root cause — gamma
+correction misapplied to a low-brightness or held value:**
+- A brightness ceiling that looked fine in isolated tests (`10.0x`)
+  turned out to **clamp every hard tap to identical pure white** past
+  roughly 65% strength — losing exactly the differentiation the whole
+  feature exists for. Not obvious from watching single taps one at a
+  time; only showed up comparing two different hard taps side by side.
+  Fixed, then **hardened with a pytest regression test**
+  (`tests/test_gesture_sandbox.py`) checked against the actual
+  historical bad value — the saturation point is a pure property of the
+  brightness constants + `BRIGHTNESS`/`STARTUP_COLOR`, fully verifiable
+  without hardware, unlike whether real taps' `dev` values *cluster* in
+  practice (that's empirical, stays a documented on-hardware thing to
+  watch, not something a unit test can know).
+- The ACK's descent (rendered through the normal gamma+dither path)
+  visibly dove to near-black *before* reaching the shelf's own
+  (deliberately linear, un-gamma'd) brightness, then jumped back up once
+  the static shelf write took over — "dive underground to 0, then back
+  up to a plateau." Root cause: `gamma(mult)` for `mult` below roughly
+  0.3 is *much* smaller than `mult` itself, and the ACK's whole range
+  sat mostly in that zone. Fixed by rendering the whole ACK shape without
+  gamma correction — the same fix already used for the shelf itself
+  (`MARKER_BRIGHTNESS`'s precedent, approach-contract.md), just extended
+  to cover the animated approach to that value, not only the held value.
+  **General lesson for this codebase, worth stating past this one
+  feature:** gamma correction is for genuinely wide, actively-perceived
+  brightness swings — apply it reflexively to a value that's mostly
+  *low* or *about to be held static*, and it actively works against you
+  instead of smoothing anything.
+
+**A real hardware-fragility finding, not a firmware bug:** `OSError EIO`
+from the IMU read, twice, both correlated with physical handling (moving
+the bottle, a fumbled tap) — the same "connection shaken loose by
+tapping" `vibration_sandbox.py` diagnosed first (§8). An initial read
+that it correlated with *light* taps specifically didn't hold up on more
+data — another small-sample-mislead instance, see above. `gesture_sandbox.py`
+now catches it, skips the one bad sample, and only escalates to a visible
+LED cue (a new, distinct persistent-breathe colour) if a read hasn't
+succeeded in over a second — a deliberate consequence of
+`led-status-messages.md`'s "errors are persistent and unambiguous, not
+almost-normal" principle: a brief flash for a single dropped sample would
+have worked against that, not honored it.
+
+---
+
+## 11. ESP32-C3 WiFi memory: two heaps, and only one of them counts (2026-08-17)
+
+Bringing the gesture dev unit up on the XIAO hit `OSError: Wifi Out of
+Memory` from `connect_wifi()`. Worth writing up because **two plausible
+diagnoses were wrong before the real one**, and the debugging method
+(measure the right pool) generalises well past this bug.
+
+### What it wasn't
+
+- **Not credentials.** `WIFI_SSID = config.WIFI_SSID` is direct attribute
+  access, so a missing value raises `AttributeError` at import — nowhere
+  near WiFi.
+- **Not (only) `mpremote run`.** `make run` ships the whole ~115KB source
+  over stdin to be held in RAM *and* compiled there; the traceback said
+  `File "<stdin>"`. Running from flash instead (`make upload` + soft reset)
+  was a genuine improvement and is now the documented path for a file this
+  size — but it did **not** fix the error. Right practice, wrong root cause.
+- **Not MicroPython heap exhaustion.** The obvious check says the opposite:
+
+  ```
+  gc.mem_free() → 155,824      GC total 175,872, used 37,632
+  ```
+
+  `main.py` — all 2355 lines — is **37KB of live data in a 172KB heap**.
+  There is no bloat problem in the sense you'd assume.
+
+### What it is
+
+**There are two separate heaps, and `gc.mem_free()` measures the wrong
+one.** MicroPython's GC heap holds Python objects. ESP-IDF's `malloc` heap
+is entirely separate, and `esp_wifi_init()` allocates from *that*. The two
+compete for the same physical SRAM, and on the ESP32 port MicroPython's GC
+heap **grows on demand by splitting chunks off the IDF heap and never
+returns them**.
+
+The right instrument is `esp32.idf_heap_info(esp32.HEAP_DATA)`, which
+returns one `(total, free, largest_free, min_free)` tuple **per region** —
+ESP-IDF manages SRAM as several disjoint ranges, not one pool, and a given
+`malloc` must be satisfied within a single region.
+
+Measured on a bare boot, bringing WiFi up by hand:
+
+| Region | free before | free after | WiFi took |
+|---|---|---|---|
+| 1 | 5,664 | 5,664 | 0 |
+| 2 | 10,160 | 4 | **10,156** |
+| 3 | 115,624 | 111,568 | 4,056 |
+| 4 | 26,448 | 32 | **26,416** |
+| | | **total** | **40,628** |
+
+**The distribution matters more than the total.** WiFi drained regions 2
+and 4 to 4 and 32 bytes while leaving 111KB untouched in region 3. That
+isn't the allocator being lazy — those buffers need DMA-capable internal
+SRAM, which region 3 doesn't provide. **Region 3's 111KB is essentially
+useless to WiFi.** Only regions 2 and 4 count.
+
+Which produces the number worth remembering: at a bare boot region 4 has
+26,448 bytes free and WiFi wants 26,416. **Thirty-two bytes of margin.**
+WiFi on this chip was always at the edge; compiling a `main.py` that had
+roughly doubled in size grew the GC heap ~5.5KB into region 4 and pushed it
+over. The IMU code didn't break it so much as consume the last slack.
+
+### How the allocator picks regions, and how much we can steer it
+
+`heap_caps_malloc(size, caps)` walks the registered heaps in a fixed
+priority order from the SoC's memory-layout table and takes the first that
+both satisfies the capability mask and has a large enough free block. It is
+**deterministic** for a given firmware and allocation sequence — but the
+sequence is exactly what changes between runs, which is why order matters
+so much here.
+
+From MicroPython, direct control is **not available**: you cannot request
+capabilities, and WiFi's allocations are internal to ESP-IDF. What is
+controllable:
+
+- **Ordering** — allocate the big, capability-constrained thing (WiFi)
+  before the flexible things (Python objects). Implemented; see below.
+- **Total pressure** — anything that stops the GC heap growing.
+- **Build-time `CONFIG_ESP32_WIFI_*`** — RX/TX buffer counts, static vs.
+  dynamic. This is the only real lever on WiFi's 40KB appetite, and it
+  needs a custom firmware build.
+
+### Fixed now (the cheap half)
+
+`main()` brings WiFi up **before** `load_schedule()`. The 8KB JSON parses
+into a much larger object graph that was previously held across WiFi init,
+costing ~5.5KB of precisely the contested region. Reordering lets
+MicroPython grow into what's left rather than the reverse.
+
+This buys margin. **It does not create headroom** — a fix that works by
+reclaiming 5KB against a 32-byte baseline margin is one feature away from
+breaking again.
+
+### The real fix, deliberately deferred
+
+Compiling a 115KB module on-device is a transient allocation spike that
+permanently enlarges the GC heap. Removing that spike is the durable
+answer, in rough order of effort:
+
+1. **Precompile to `.mpy`** (`mpy-cross`), with a two-line `main.py` that
+   imports it. No firmware build required.
+2. **Freeze into firmware** — bytecode lives in flash, not RAM. Biggest
+   win, needs a custom MicroPython build.
+3. **Split `main.py`** into modules so no single compile is huge. Helps
+   partly; the combined bytecode still lands in RAM.
+4. **Trim docstrings in hot modules.** Worth knowing: *comments are
+   stripped at compile time, docstrings are not* — they become live string
+   objects. This codebase's deliberately long docstrings therefore have a
+   real RAM cost, which is a genuine tension with its documentation ethos.
+   A marginal lever, listed for completeness rather than recommended.
+
+Deferred on purpose: `feature/gesture-envelope` is about getting gestures
+working on the XIAO, and the reorder unblocks that. Also worth noting the
+project's own roadmap retires this problem — V2 drops WiFi for a DS3231
+RTC, and gesture work needs no network at all (`GESTURE_DEBUG_ENABLED`
+already runs WiFi-free).

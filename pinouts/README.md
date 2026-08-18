@@ -30,6 +30,7 @@ this directory is where they're supposed to live instead.
 | [pico2w.md](pico2w.md) | Board — Raspberry Pi Pico 2W | ✅ Verified — wired and running (V1) |
 | [xiao_esp32c3.md](xiao_esp32c3.md) | Board — Seeed XIAO ESP32-C3 | ✅ Verified — wired and running (v1.2 checkpoint passed 2026-07-05) |
 | [v1.4-gift-jar-system.md](v1.4-gift-jar-system.md) | System — XIAO + 21-LED strip + Qi/USB-C power | ⬜ Proposed — one pad position needs a physical confirm |
+| [v1.4-imu-dev-unit.md](v1.4-imu-dev-unit.md) | System — the above **+ LSM6DSV16X IMU**; the gesture-envelope dev/validation unit | ✅ Verified — full from-scratch provisioning 2026-08-16 |
 
 ## Conventions
 

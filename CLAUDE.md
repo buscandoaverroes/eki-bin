@@ -49,8 +49,10 @@ When writing Rust code in this repo, take a teaching role:
 | Looking for… | File |
 |---|---|
 | Overview, quick start, every `make` target, workflows | `README.md` |
+| Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
 | What's done / next / open decisions | `dev-status.md` |
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
+| Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
 | Design rationale + full V2 hardware list | `docs/concept.md` |
@@ -60,10 +62,15 @@ When writing Rust code in this repo, take a teaching role:
 | `config.py` fields + secrets handling | `docs/contracts/config.md` |
 | LED display pipeline (LeaveSignal → contracts) | `docs/contracts/display-contract.md` |
 | Positional/approach display paradigm (new, in progress) | `docs/contracts/approach-contract.md` |
-| Boot/startup LED sequence (design only, not built) | `docs/contracts/startup-sequence.md` |
+| Boot/startup LED sequence (implemented, not yet on hardware) | `docs/contracts/startup-sequence.md` |
+| Tap-gesture recognition + two-phase ACK/CONFIRM LED jolt UX — implemented, extensively real-hardware validated (Pico 2W + LED stick), XIAO/full-tape/bottle validation still pending | `docs/contracts/gesture-envelope.md` |
+| IMU tap wake/sleep interaction (original design — partially superseded by `gesture-envelope.md`, still correct for its state-machine/safety-gate patterns) | `docs/contracts/wake-interaction.md` |
+| LED status-message vocabulary (errors, acknowledgments — design only) | `docs/contracts/led-status-messages.md` |
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
-| Quick colour/animation A-B comparisons on real hardware | `micropython/led_sandbox.py` |
+| Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
+| IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
 
 ---
@@ -71,19 +78,29 @@ When writing Rust code in this repo, take a teaching role:
 ## Current focus
 
 V1 firmware is **feature-complete**: the full `time → LeaveSignal →
-DisplayContract → LEDs` pipeline (five contracts, gamma + temporal dithering,
-seamless clock, ~19 `config.py` knobs), guarded by a host test suite. Remaining
-V1 work is **in-jar tuning via `config.py`**, not features — so prefer config
-changes over firmware edits, and keep `make test` green (it runs before
-`make upload`). The **v1.2 board-portability checkpoint passed**: the XIAO
+DisplayContract → LEDs` pipeline (six contracts including `approach`, gamma +
+temporal dithering, seamless clock, config-driven throughout), guarded by a
+host test suite. The **v1.2 board-portability checkpoint passed**: the XIAO
 ESP32-C3 runs the identical firmware via a `config.py` swap only — proof the
 board abstraction (`LED_PIN`, `HEARTBEAT_PIN`) holds up on real hardware.
-Current focus: **v1.1** (Qi power-path + soldering into the bottle) — see
-`docs/roadmap.md`. When touching board-specific pins, check/update
-`pinouts/<board>.md` alongside
-`config.py` — don't let pin facts drift out of that directory.
-Architecture: `docs/contracts/display-contract.md`; progress + open decisions:
-`dev-status.md`.
+
+**Active branch: `feature/gesture-envelope`** (not yet pushed or merged) —
+IMU (LSM6DSV16X) tap-gesture recognition + a two-phase ACK/CONFIRM LED jolt,
+replacing the earlier wake-interaction design after real-hardware testing
+found the original multi-gesture plan unreliable and scoped down to a
+minimal, "light switch"-reliable tap-or-noise contract instead. Extensively
+validated on real hardware (Pico 2W + AE-WS2812B-STICK8), including five
+rounds of live tuning against real taps — but that's still a bare LED strip,
+not the target XIAO + full LED tape inside the actual frosted bottle, which
+is the next validation step before merge. Full state: `docs/contracts/
+gesture-envelope.md` §11; progress log: `dev-status.md`.
+
+In parallel, separately: **v1.1** (Qi power-path + soldering into the
+bottle) — see `docs/roadmap.md`. When touching board-specific pins,
+check/update `pinouts/<board>.md` alongside `config.py` — don't let pin
+facts drift out of that directory. `make test` runs before every
+`make upload`, keep it green. Architecture: `docs/contracts/
+display-contract.md`; progress + open decisions: `dev-status.md`.
 
 ---
 
