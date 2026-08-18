@@ -514,3 +514,17 @@ def test_gesture_poll_is_faster_than_the_render_frame(load_main):
     # interactive loop ticks at GESTURE_POLL_MS and time-gates its render.
     m = load_main()
     assert m.GESTURE_POLL_MS < m.FRAME_MS
+
+
+def test_gesture_enabled_accepts_either_config_name(load_main):
+    # GESTURE_ENABLED is the name that matches the shipped contract;
+    # WAKE_INTERACTION_ENABLED still works so existing config.py files
+    # aren't broken (design principle #9).
+    assert load_main(GESTURE_ENABLED=True).WAKE_INTERACTION_ENABLED is True
+    assert load_main(WAKE_INTERACTION_ENABLED=True).WAKE_INTERACTION_ENABLED is True
+    assert load_main().WAKE_INTERACTION_ENABLED is False
+
+
+def test_gesture_enabled_new_name_wins(load_main):
+    m = load_main(GESTURE_ENABLED=False, WAKE_INTERACTION_ENABLED=True)
+    assert m.WAKE_INTERACTION_ENABLED is False
