@@ -87,6 +87,19 @@ CONTRACT = "breathing"  # "sandtimer" | "color" | "breathing"
 #                         | "breathing_exponent" | "breathing_inverse" | "echo"
 #                         | "approach"
 COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
+#   ⚠ ARC CONTRACTS ONLY — inert under CONTRACT = "approach".
+#   The two paradigms use colour for different jobs, and it's worth being
+#   explicit about which:
+#     · arc contracts (sandtimer/breathing*/echo/color) — colour means
+#       URGENCY. A short strip can't express time positionally, so hue has
+#       to carry it. This is the 8-LED-stick lineage and still correct there.
+#     · approach — colour means LINE IDENTITY (from schedule.json's
+#       lines[].color), and URGENCY is carried by POSITION: distance from
+#       the anchor already is the time. Using hue for both would make a
+#       line's colour non-constant, which breaks the whole point of being
+#       identifiable on a random glance (gesture-envelope.md §11).
+#   URGENCY_THRESHOLDS is likewise unused for approach RENDERING — it still
+#   classifies the LEVEL shown in console output, nothing more.
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
 GAMMA = 2.2  # perceptual brightness curve (higher = smoother dim-end fades)
@@ -161,20 +174,52 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                            LED can light. Those two need a serial console.
 # ERROR_BREATHE_PERIOD_MS = 4000    # separate from BREATHE_PERIOD_MS on purpose
 
-# ── Wake/sleep interaction layer — docs/contracts/wake-interaction.md ──
-# ⚠ SUPERSEDED by the gesture envelope below, and **leave this False**.
-# _imu_tap_detected() is still a stub that always returns False, so enabling
-# this puts the display permanently ASLEEP after WAKE_MINUTES with no way to
-# wake it — true even now that a real IMU is wired, because this older loop
-# doesn't read it. The newer gesture work lives in gesture_sandbox.py and is
-# not yet integrated into main()'s real loop.
-# WAKE_INTERACTION_ENABLED = False
-# WAKE_MINUTES = 30            # active-display window after any wake/extend
-# DOUBLE_TAP_WINDOW_MS = 400   # GUESS — tune against the real sensor
-# TAP_THRESHOLD = 2.0          # UNTESTED GUESS — not even read by the stub yet
-# SECONDARY_ACTION = "brightness_cycle"   # single tap while AWAKE
-# BRIGHTNESS_PRESETS = (0.15, 0.35, 0.6)  # SECONDARY_ACTION's levels
-# EXTEND_CONFIRM_COLOR = STARTUP_COLOR    # double-tap-while-AWAKE confirmation
+# ── Tap interaction — docs/contracts/gesture-envelope.md §11 ──────────
+# Set GESTURE_ENABLED = True to make the unit respond to taps: tap wakes
+# the display, tap again cycles the line, it sleeps after AWAKE_MINUTES.
+# Needs a wired IMU. Off by default, which is right for an IMU-less unit —
+# the display then behaves as it always has (always awake, no countdown).
+#
+# ⚠ Historical note: this gate used to be WAKE_INTERACTION_ENABLED, and
+# turning it on was actively harmful — it fronted a loop whose tap
+# detector was a stub returning False, so the display slept and could
+# never wake. That stub is gone. The old name still works for
+# compatibility, but prefer GESTURE_ENABLED.
+# GESTURE_ENABLED = False
+# AWAKE_MINUTES = 15           # how long the display stays lit after a tap
+# ACK_HOLD_MS = 400            # ACK rise+dip before it settles to the shelf
+# WAKE_JOLT_MS = 500           # CONFIRM jolt duration on WAKE
+# WAKE_SETTLE_MS = 1500        # post-jolt debounce; stops the same physical
+#                                contact registering again as a CYCLE
+# CYCLE_TRANSITION_MS = 200    # CYCLE's simpler flash
+
+# Tap-strength → brightness. A harder tap reads brighter on both the ACK
+# peak and the shelf it settles onto. ⚠ All PER-ENCLOSURE: these were
+# retuned three times as testing moved from a bare strip to inside frosted
+# glass, which compresses contrast (gesture-envelope.md §11).
+# STRENGTH_MAX_DEV_MG = 460    # `dev` of a deliberately hard tap
+# ACK_PEAK_FLOOR = 0.35        # lightest-tap ACK peak
+# ACK_PEAK_CEIL = 6.0          # hardest-tap ACK peak. ⚠ Bounded by
+#                                SATURATION, not taste — once
+#                                BRIGHTNESS * mult * channel hits 255,
+#                                every harder tap looks identical. 10.0 did
+#                                exactly that past ~65% strength.
+# SHELF_FLOOR = 0.08           # the "continental shelf" — dim, NOT dark:
+# SHELF_CEIL = 0.25            #   dropping to black made ACK and CONFIRM
+#                                read as two disconnected blips
+# GESTURE_POLL_MS = 4          # ⚠ must stay < FRAME_MS. Recognizer accuracy
+#                                was measured at 4ms/240Hz; polling at 16ms
+#                                was a documented cause of missed taps.
+
+# ── Superseded: wake-interaction layer — wake-interaction.md ──────────
+# Kept for reference. _cycle_brightness/_run_secondary_action still exist
+# and are tested, but nothing binds them now that AWAKE+tap means CYCLE.
+# WAKE_MINUTES = 30
+# DOUBLE_TAP_WINDOW_MS = 400
+# TAP_THRESHOLD = 2.0
+# SECONDARY_ACTION = "brightness_cycle"
+# BRIGHTNESS_PRESETS = (0.15, 0.35, 0.6)
+# EXTEND_CONFIRM_COLOR = STARTUP_COLOR
 # EXTEND_CONFIRM_MS = 600
 
 # ── Gesture envelope — docs/contracts/gesture-envelope.md ──────────────

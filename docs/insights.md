@@ -745,3 +745,70 @@ working on the XIAO, and the reorder unblocks that. Also worth noting the
 project's own roadmap retires this problem — V2 drops WiFi for a DS3231
 RTC, and gesture work needs no network at all (`GESTURE_DEBUG_ENABLED`
 already runs WiFi-free).
+
+---
+
+## 12. Low-PWM colour collapse, and colour in a real bottle (2026-08-18)
+
+First full in-bottle run of the assembled unit (XIAO C3 + IMU + 21-LED strip,
+approach contract, line-cycling on tap). Two findings, one a bug and one a
+constraint.
+
+### The bug: `(1,1,1)` is not gray
+
+Marker ticks were rendering **yellow**, not the dim neutral they're specified
+as. The arithmetic:
+
+```
+BRIGHTNESS 0.15 × MARKER_BRIGHTNESS 0.15 = 0.0225
+MARKER_COLOR (80,80,80) × 0.0225 → (1, 1, 1)
+```
+
+**One PWM step out of 255 per channel.** At that level WS2812B channel
+matching collapses — the R/G/B dies have different efficiencies and different
+minimum-drive behaviour, so equal values stop meaning neutral. Red and green
+dominate blue at the very bottom, and `(1,1,1)` reads warm yellow-green.
+
+**This was already in `docs/hardware.md`** as a brown-glass observation
+("Dim neutral gray → Yellow"). It was mis-attributed: the glass wasn't the
+cause, low PWM was. The glass merely made it easier to notice.
+
+**Generalised rule, worth applying anywhere a dim neutral is used:** below
+roughly 4-5/255 per channel, *hue is not controllable on this hardware*. It
+isn't a dithering artifact (it persisted with `DITHER = False`) and it isn't a
+dead pixel (`led-test` showed a uniform strip). Plan brightness so any colour
+that must read as a specific hue lands above that floor, or accept that it
+will skew warm.
+
+**Debugging note worth more than the bug.** Three plausible theories were
+wrong before the right one: urgency-driven colour (ruled out — the approach
+contract never reads `urgency`), the anchor washing an adjacent dot (ruled
+out — the anchor is nowhere near the affected LEDs), and a defective LED
+(ruled out by `led-test`). What actually settled it was a single observation
+— *every* LED on one arm was affected, not one — which immediately excluded
+anything per-pixel. **The reasoning was slower than the measurement, again.**
+
+### The constraint: tinted glass compresses the palette, as predicted
+
+Confirmed directly, and it's the thing §11's line-colour design most depends
+on: through the opaque brown bottle, **only near-opposite hues are reliably
+distinguishable** — blue vs. yellow/red. Adjacent hues collapse, exactly as
+§3 predicted from the red-vs-orange finding.
+
+Implications for the line palette:
+- **Cap the practical line count at what the glass supports**, not at what
+  the data model allows. Three widely-separated hues is plausible; six is not.
+- **Brightness needs to go up in the bottle** — the bench-tuned `0.15` is too
+  dim once diffused, consistent with `hardware.md`'s earlier note that brown
+  glass allows `BRIGHTNESS` toward `0.5`. That also lifts markers out of the
+  low-PWM danger zone above, so the two findings share one fix.
+- Clear glass would sidestep this entirely — the argument
+  `glass-stone-concept.md` §3 already makes.
+
+### Incidental, useful
+
+- **The opaque brown bottle hides the electronics well** — the "reveal" the
+  concept doc wants, confirmed on the real assembly rather than in theory.
+- **An IMU simply resting inside the bottle, unfastened, detects taps fine**
+  for testing, and stays removable. Rigid mounting can wait for the
+  permanent build; it is not a prerequisite for gesture iteration.

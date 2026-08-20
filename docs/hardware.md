@@ -158,6 +158,16 @@ open bench:
 | Forest green (`LINE_COLOR`) | Yellow-green |
 | Dim neutral gray (`FLOOR_COLOR`) | Yellow |
 
+⚠ **That last row was mis-attributed — corrected 2026-08-18.** The glass is
+not why a dim neutral reads yellow. At `BRIGHTNESS 0.15 × MARKER_BRIGHTNESS
+0.15`, `MARKER_COLOR (80,80,80)` renders as **`(1,1,1)`** — one PWM step of
+255 per channel — and at that level WS2812B channel matching collapses
+outright: the R/G/B dies have different efficiencies near minimum drive, so
+equal values stop meaning neutral and skew warm. Reproduced with `DITHER =
+False` and on a strip `led-test` proved uniform, so it is neither dithering
+nor a dead pixel. **General rule: below roughly 4-5/255 per channel, hue is
+not controllable on this hardware.** See `docs/insights.md` §12.
+
 Read as a pleasant effect, not a defect — "that's actually not bad." Two
 follow-on findings from the same session:
 

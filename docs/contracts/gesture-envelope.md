@@ -469,13 +469,26 @@ AWAKE_MINUTES = 15                # matches WAKE_MINUTES' bounded-window
 CYCLE_TRANSITION_MS = 200         # flash, then hard cut to the next station
 ```
 
-**Genuinely new integration surface, not just gesture recognition:**
-"cycle to next station" needs a *current station index* over some
-configured list of stations — that concept doesn't exist anywhere in
-`main.py` today (V1 has always driven a single configured station via
-`schedule.json`). That's a real, separate piece of scope on the display
-side, not something this doc's recognizer/state-machine work resolves by
-itself.
+**Genuinely new integration surface, not just gesture recognition:** CYCLE
+needs something to cycle, and `main.py` has no such concept today.
+
+**Corrected 2026-08-18 — it cycles LINES, not stations.** This section
+previously assumed a station list. Wrong model: the device sits in one
+room, so the **station is fixed**; what varies is which **line** at that
+station. Lines and directions are orthogonal, and direction is already
+solved — `ApproachContract` renders both directions at once on arms A and
+B, so there is nothing for a tap to add there. The tap selects the line.
+
+Identity must live in the **static** view, not a cycle-time cue. The whole
+premise is glancing over at a random moment (design principles #1 and #3),
+so a transient "you switched to line 2" pulse would relocate line identity
+from the object into the user's memory. Instead, metro-style: **anchor
+stays neutral white and bright; the moving train dots take the line's
+colour.**
+
+Data model and the tinted-glass palette constraint (which is real and
+measured — `insights.md` §3 found red vs. orange already ambiguous through
+brown glass): `docs/contracts/schedule-json.md` § Multiple lines.
 
 **Implemented and validated on real hardware (2026-08-05).**
 `classify_valid_input` + `_TapCycleState` are built (alongside, not instead

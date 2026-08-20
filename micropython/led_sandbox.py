@@ -197,6 +197,9 @@ def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=main._GESTURE_WINDOW_MS,
 
 
 SCENES = {
+    "keihin_uniform": [
+        (0, main.NUM_LEDS, (0, 178, 229), None),
+    ],
     # Your literal example: half static red, half breathing yellow.
     # Longer period = more floor/static contrast at any glance (found: too
     # short and a breath peak can read as "primary, fully lit" by mistake).
@@ -250,7 +253,7 @@ SCENES = {
     ],
 }
 
-ACTIVE_SCENE = "jolt_double_hill_full"  # ← change this to try another
+ACTIVE_SCENE = "keihin_uniform"  # ← change this to try another
 
 
 def run(scene_name=ACTIVE_SCENE, seconds=None):

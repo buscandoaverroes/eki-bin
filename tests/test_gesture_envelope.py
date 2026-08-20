@@ -461,3 +461,115 @@ def test_tap_cycle_acknowledge_sets_pending_flag(load_main):
     assert state.ack_pending is True
     state.resolve(0, valid=True)
     assert state.ack_pending is False
+
+
+# ── jolt render math, ported from gesture_sandbox into main ──────
+
+
+def test_tap_strength_clamps_and_is_monotonic(load_main):
+    m = load_main()
+    assert m._tap_strength(m.STRENGTH_MIN_DEV_MG - 100) == 0.0
+    assert m._tap_strength(m.STRENGTH_MAX_DEV_MG + 999) == 1.0
+    devs = [0, 60, 150, 300, 460, 900]
+    strengths = [m._tap_strength(d) for d in devs]
+    assert strengths == sorted(strengths)
+
+
+def test_ack_flick_settles_exactly_on_the_shelf(load_main):
+    # The "continental shelf": ACK must land ON shelf_mult, not near it and
+    # not at 0 — a hand-off discontinuity into the static shelf write is
+    # what the real-hardware "dive to black" bug looked like.
+    m = load_main()
+    assert m._ack_flick(0, 1.0, 0.2, 400) == 0.0
+    assert m._ack_flick(200, 1.0, 0.2, 400) == 1.0  # peak at the midpoint
+    assert abs(m._ack_flick(400, 1.0, 0.2, 400) - 0.2) < 1e-9
+    assert abs(m._ack_flick(9999, 1.0, 0.2, 400) - 0.2) < 1e-9  # holds
+
+
+def test_confirm_jolt_starts_from_the_shelf_and_decays_to_black(load_main):
+    # Rises FROM the shelf rather than from 0 (that continuity is the whole
+    # point), and must reach exactly 0 so "decided, done" reads as done.
+    m = load_main()
+    assert m._confirm_jolt_mult(0, 0.2) == 0.2
+    assert m._confirm_jolt_mult(m.WAKE_JOLT_MS, 0.2) == 0.0
+    peak = max(m._confirm_jolt_mult(t, 0.2) for t in range(0, m.WAKE_JOLT_MS, 5))
+    assert abs(peak - m.WAKE_JOLT_BRIGHTNESS_MULT) < 0.05
+
+
+def test_ack_peak_ceiling_does_not_saturate(load_main):
+    # Same invariant tests/test_gesture_sandbox.py guards for the sandbox —
+    # asserted here too now that main.py owns these constants for real.
+    m = load_main(BRIGHTNESS=0.15)
+    assert max(m.STARTUP_COLOR) * m.BRIGHTNESS * m.ACK_PEAK_CEIL < 255
+
+
+def test_shelf_stays_below_the_ack_peak_floor(load_main):
+    m = load_main()
+    assert m.SHELF_CEIL < m.ACK_PEAK_FLOOR
+
+
+def test_gesture_poll_is_faster_than_the_render_frame(load_main):
+    # The recognizer's 95-98% numbers were measured at 4ms. Polling at
+    # FRAME_MS (16ms) was documented as a real cause of missed taps, so the
+    # interactive loop ticks at GESTURE_POLL_MS and time-gates its render.
+    m = load_main()
+    assert m.GESTURE_POLL_MS < m.FRAME_MS
+
+
+def test_gesture_enabled_accepts_either_config_name(load_main):
+    # GESTURE_ENABLED is the name that matches the shipped contract;
+    # WAKE_INTERACTION_ENABLED still works so existing config.py files
+    # aren't broken (design principle #9).
+    assert load_main(GESTURE_ENABLED=True).WAKE_INTERACTION_ENABLED is True
+    assert load_main(WAKE_INTERACTION_ENABLED=True).WAKE_INTERACTION_ENABLED is True
+    assert load_main().WAKE_INTERACTION_ENABLED is False
+
+
+def test_gesture_enabled_new_name_wins(load_main):
+    m = load_main(GESTURE_ENABLED=False, WAKE_INTERACTION_ENABLED=True)
+    assert m.WAKE_INTERACTION_ENABLED is False
+
+
+# ── multi-line schedules — schedule-json.md § Multiple lines ─────
+
+
+def test_schedule_lines_wraps_a_single_line_file(load_main):
+    # No `lines` key = the document IS the line. This is the shape every
+    # schedule predating multi-line support has, and it must keep working.
+    m = load_main()
+    data = {"station": "mystation",
+            "weekday": {"a": [300], "b": [310]},
+            "weekend": {"a": [400]}}
+    lines = m.schedule_lines(data)
+    assert len(lines) == 1
+    assert lines[0]["name"] == "mystation"
+    assert lines[0]["weekday"]["a"] == [300]
+    assert lines[0]["weekend"]["a"] == [400]
+
+
+def test_schedule_lines_passes_multi_line_through(load_main):
+    m = load_main()
+    data = {"station": "s", "lines": [
+        {"name": "green", "color": [0, 255, 0], "weekday": {"a": [300]}},
+        {"name": "red", "color": [255, 0, 0], "weekday": {"a": [310]}},
+    ]}
+    lines = m.schedule_lines(data)
+    assert [l["name"] for l in lines] == ["green", "red"]
+    assert lines[1]["color"] == [255, 0, 0]
+
+
+def test_schedule_lines_always_returns_at_least_one(load_main):
+    # Guarantees `lines[i % len(lines)]` can never ZeroDivisionError, which
+    # is what the cycling index relies on.
+    m = load_main()
+    for data in ({}, {"station": "s"}, {"station": "s", "lines": []}):
+        assert len(m.schedule_lines(data)) >= 1
+
+
+def test_schedule_lines_missing_period_is_absent_not_empty(load_main):
+    # A station with no weekend service should not gain an empty weekend
+    # key — current_period() looks the period up and "absent" is the honest
+    # answer, distinct from "runs, but no trains".
+    m = load_main()
+    lines = m.schedule_lines({"station": "s", "weekday": {"a": [300]}})
+    assert "weekend" not in lines[0]

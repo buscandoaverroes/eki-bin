@@ -3,23 +3,25 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: gesture envelope (branch `feature/gesture-envelope`, not yet pushed)
+## Current phase: two parallel branches off `dev` (colour, DS3231)
 
-> **Supersedes the wake/sleep interaction layer below** — same sensor
-> (AE-LSM6DSV16X), a redesigned interaction model. Real-hardware testing
-> (many sessions, two bottles, a sandbox toolchain built specifically to
-> answer "what can this hardware actually support") found the original
-> multi-gesture wake-interaction design's harder pieces (position
-> disambiguation, flick-vs-handling) genuinely unreliable, while tap-vs-noise
-> discrimination alone was consistently strong (95-98%+). Scoped down to a
-> minimal "light switch"-reliable contract instead of the fuller vocabulary —
-> full rationale in `docs/contracts/gesture-envelope.md`'s "Scope pivot"
-> callout and §11. IMU is now **physically wired and extensively validated**
-> on the Pico 2W + AE-WS2812B-STICK8 (not the stub `wake-interaction.md`
-> describes) — see the new subsection below, after "Wake/sleep interaction
-> layer," for the full account. 185 tests passing. **Not yet pushed**, **not
-> yet on the XIAO/full LED tape/actual bottle** (that's the next step before
-> merge to `dev`).
+> **Gesture work is merged.** The IMU tap contract, the ACK/CONFIRM jolt, and
+> tap-to-cycle-**line** all run on the real assembled unit (XIAO C3 + IMU +
+> 21-LED strip, in the brown bottle, WiFi-free via `TIME_SOURCE="rtc"`).
+> Multi-line schedules and per-line colour shipped alongside. See
+> `docs/contracts/gesture-envelope.md` §11 and `docs/insights.md` §12.
+>
+> **Next, in parallel:**
+> - **`feature/color-consistency`** — the binding problem. Only near-opposite
+>   hues survive the brown glass, capping the practical line count; and marker
+>   ticks need a real fix rather than the current `MARKER_BRIGHTNESS = 0`
+>   workaround, which removes the affordance instead of fixing the low-PWM
+>   colour collapse. Raising in-bottle brightness likely addresses both.
+> - **`feature/ds3231-time`** — DS3231 bring-up on the Pico 2W breadboard.
+>
+> Both converge on the intended production unit: **XIAO RP2350 (no radio) +
+> DS3231 + IMU + strip**. The C3/C6 WiFi-headroom work is deprioritized —
+> see Open decisions.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -610,9 +612,16 @@ sleeps, no fourth gesture.
       the real main loop are both untouched by this work
 - [ ] **`grab_and_tap` stays parked** — inconsistent across sessions,
       root cause unconfirmed, not built on (`docs/insights.md` §9)
-- [ ] **Station-cycling display logic** — CYCLE needs a "current station
-      index" concept that doesn't exist anywhere in `main.py` yet; a real,
-      separate piece of scope, not resolved by any of the above
+- [ ] **Line-cycling display logic** (corrected 2026-08-18 — it's *lines*,
+      not stations: the bin sits in one room so the station is fixed, and
+      direction is already handled by `ApproachContract`'s two arms). CYCLE
+      selects which line at that station is shown; identity is carried by
+      **line colour on the train dots**, anchor stays neutral white, so it
+      reads on a random glance rather than only at cycle time. Needs an
+      optional `lines[]` in `schedule.json` — design in
+      `docs/contracts/schedule-json.md` § Multiple lines, including the
+      measured tinted-glass palette constraint. Picks up the long-deferred
+      "Line-color palette / metro-line static color scheme" item below.
 - [ ] **Not pushed to `dev`/`main`**
 
 ### LED status messages (errors + acknowledgments) ✅ implemented, local only
@@ -656,6 +665,20 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
       reconsideration, not blocking this build)
 - [ ] Embedded Swift / Matter rewrite — separate track, own timeline, doesn't
       block any of the above
+- [ ] **Repo hygiene pass — branch protection + CI** (flagged 2026-08-18 by a
+      GitHub warning that `main` is unprotected). Deliberately tabled to do
+      **comprehensively in one go** rather than clicking one setting. Scope
+      when picked up: protect `main` (and decide whether `dev` too) via
+      `gh api` so the rules are version-controlled and reproducible, not
+      click-ops; decide required status checks — `make test` is the obvious
+      candidate but **there is no CI workflow yet**, so this likely means
+      adding one first; note `schedules/*.json` is gitignored and generated,
+      so CI must run `make schedule` before `make test` (already recorded in
+      Known issues); decide review requirements given this is a solo repo
+      (self-approval rules differ); and consider whether the several stale
+      local branches (`feature/wake-interaction-layer`,
+      `feature/ios-nfc-spike`, `feature/qi-bringup`, …) should be pruned or
+      archived in the same pass.
 
 ---
 
@@ -710,7 +733,8 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
 | XIAO board upgrade — **reframed 2026-08-18: may not be needed at all** | ⏳ test the C3 + DS3231 before buying anything | **The board upgrade exists only to make room for WiFi.** With a DS3231 and `TIME_SOURCE="rtc"`, `network.WLAN()` is never called, the ~40KB `esp_wifi` allocation never happens, and MicroPython keeps the whole SRAM — the app's live data is 37KB. **The already-soldered C3 becomes adequate**, salvaging that work. Test this before spending. If a new board *is* wanted, **XIAO RP2350 beats S3/C6** for this project specifically: same silicon as the validated Pico 2W (firmware already proven), Embassy's RP2350 support is mature where ESP32's isn't (`dev-status.md` MCU table), PIO is what `rust-migration.md` already plans for WS2812B, and no radio means the contention can never recur. RP2350 over RP2040 (520KB vs 264KB, same form factor). Honest cost of going radio-free: NTP is gone permanently, so a dead CR1220 means reprovisioning — small, and aligned with the "no daily digital surface" principle rather than a sacrifice. **S3/C6 only make sense if keeping WiFi is the goal.** |
 | _(superseded)_ XIAO C3 → S3 or C6 | ⏳ see the row above (2026-08-18) | Driven by the SRAM finding (`docs/insights.md` §11): the C3 can't fit `esp_wifi` alongside an app this size. **All XIAO boards share the 21 × 17.5mm form factor**, so this is a drop-in physically — same footprint, same bottle fit, resolder the module only. What changes is `config.py`, since GPIO numbering differs per variant (C3's D0 = GPIO2; others differ) — exactly what `pinouts/` tracks. **S3 preferred over C6**: its PSRAM lets MicroPython put the GC heap there, *structurally* removing the competition for internal SRAM rather than merely having more of it. C6's 512KB would likely suffice but keeps one shared pool. ⚠ Coupled to the DS3231 decision — see the BOM note in `docs/hardware.md` § DS3231. |
 | DS3231 RTC | ⏳ candidate evaluated, not bought (2026-08-18) | Adafruit #3013 confirmed electrically compatible: 2.3–5.5V (no level shifter), I²C 0x68 so no conflict with the IMU's 0x6A/0x6B, 23 × 17.6 × 7.2mm. Needs a CR1220 (not included). **#5188 (STEMMA QT) worth the premium** — daisy-chains off the IMU's existing Qwiic socket, avoiding the one-GND-pad splice. Full evaluation: `docs/hardware.md` § DS3231. Removes the reason to run WiFi, which partially offsets the board-upgrade cost above. |
-| ESP32-C3 WiFi memory headroom | ⏳ **worked around, not solved** (2026-08-17) | `esp_wifi_init()` needs ~40KB, ~26KB of it from one capability-constrained SRAM region that has **32 bytes of spare margin at a bare boot** — measured, see `docs/insights.md` §11. Compiling a 115KB `main.py` on-device grows MicroPython's GC heap into that region and triggers `OSError: Wifi Out of Memory`. **Worked around** by bringing WiFi up before `load_schedule()`, which reclaims ~5.5KB — enough today, but a 5KB fix against a 32-byte margin is one feature away from breaking again. **Real fix** is to stop compiling on-device: `.mpy` via `mpy-cross` (no firmware build) or freezing into firmware (bigger win, needs a custom build). Deliberately deferred to keep `feature/gesture-envelope` focused. Note V2's no-WiFi/DS3231 plan retires this entirely, and gesture work already runs WiFi-free via `GESTURE_DEBUG_ENABLED`. |
+| Multi-line schedule memory: hold all vs. load one | 🔲 open, **deferred to PR2** (2026-08-18) | Measured, not projected: a 3-4 line station is **~21KB of JSON against the real single line's 8KB**, at realistic Tokyo headways — so this is inherent to the feature, not a test artifact. `main.py` parses the whole file at boot and the object graph runs several times the text size. Two directions, and they may not be either/or: **(a) hold everything** — simple, costs memory linear in lines × departures, probably fine with WiFi off (~155KB free) but "probably" is what burned us in §11; **(b) one file per line**, loaded on CYCLE — bounded memory regardless of line count, costs file I/O per tap and a more complex `make upload`; **(c) trim at conversion time** — drop departures outside plausible waking hours, cheap and orthogonal to both. Deliberately parked so PR2 can weigh it **together with** the `.mpy`/freeze work below: both are the same squeeze from different directions, and fixing one may change how much the other needs to give. First step either way is measurement (`gc.mem_free()` before/after `load_schedule`), since this project has twice punished estimating memory instead of measuring it. |
+| ESP32-C3 WiFi memory headroom | ⬇️ **deprioritized 2026-08-18 — the DS3231 arrived and changed the calculus** | The `.mpy`/freeze work existed to make `esp_wifi` fit. With a DS3231 in hand, time sync no longer needs WiFi at all, and the intended production path (XIAO RP2350 + DS3231 + IMU + strip) has **no radio to fit**. So the effort would buy WiFi on a board that isn't the target. Remaining reasons to care, both weak: dev ergonomics (`make run` can't compile a 115KB `main.py` over stdin on the C3 — but `make screen` + Ctrl+D works), and a future unit for someone who prefers WiFi to a radio clock. **Technique kept in reserve, goal dropped.** If RAM ever becomes binding again — most likely via the multi-line schedule row above — reopen this rather than re-deriving it. Original analysis below stands. | `esp_wifi_init()` needs ~40KB, ~26KB of it from one capability-constrained SRAM region that has **32 bytes of spare margin at a bare boot** — measured, see `docs/insights.md` §11. Compiling a 115KB `main.py` on-device grows MicroPython's GC heap into that region and triggers `OSError: Wifi Out of Memory`. **Worked around** by bringing WiFi up before `load_schedule()`, which reclaims ~5.5KB — enough today, but a 5KB fix against a 32-byte margin is one feature away from breaking again. **Real fix** is to stop compiling on-device: `.mpy` via `mpy-cross` (no firmware build) or freezing into firmware (bigger win, needs a custom build). Deliberately deferred to keep `feature/gesture-envelope` focused. Note V2's no-WiFi/DS3231 plan retires this entirely, and gesture work already runs WiFi-free via `GESTURE_DEBUG_ENABLED`. |
 | Bottle vs. "glass stone on a stand" (eki-ishi) | 🔲 open, new (2026-08-16) | A form-factor proposal (`docs/glass-stone-concept.md`): a solid clear glass pebble on a crafted stand instead of electronics in a bottle neck. The argument is that ~every hard constraint in this project traces to an 18–19mm bore, and a stand retires four stalled threads at once (JJY time sync, onboard NFC *reader*, phone-free provisioning, and the whole battery/Qi power thread). Real cost: `ApproachContract` and arc-of-light don't survive — a new display contract is genuine unstarted scope, and the gesture jolt's tap-strength→brightness scaling would need to move to a different channel (duration/pulse/hue). Blocked on finding a candidate stand before anything else can be evaluated. **Explicitly parallel** to the bottle work per `docs/roadmap.md` § Form-Factor Philosophy — does not pause v1.1 or the v1.4 gift build. |
 | Cork vs screw cap | 🔲 open | Cork aesthetic; screw cap practical for access during dev |
 | LED direction / HAL abstraction | 🔲 open | Logical arc origin + reverse; full `led_drivers/` HAL deferred to ring arrival (`docs/insights.md` §4) |

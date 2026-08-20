@@ -1,115 +1,36 @@
-"""Wake/sleep interaction layer + LED status messages.
+"""LED status messages + what survived the wake-interaction layer.
 
-docs/contracts/wake-interaction.md, docs/contracts/led-status-messages.md.
-Only the PURE decision logic is host-testable here — _TapClassifier,
-_WakeState, _StatusMessage, _classify_wake_response, _all_signals_hidden,
-_cycle_brightness/_run_secondary_action. The real-time loops that drive them
-(_run_interactive_loop, _imu_tap_detected's eventual real sensor read) are
-not, same limitation every other real-time piece in this codebase already
-has. WAKE_INTERACTION_ENABLED defaults to False specifically so none of this
-affects _run_classic_loop, which every existing deployment still uses.
+docs/contracts/led-status-messages.md (live), and
+docs/contracts/wake-interaction.md (largely superseded).
+
+**16 tests were removed here on 2026-08-18** when the v1 gesture contract
+(docs/contracts/gesture-envelope.md §11) replaced this layer's tap
+vocabulary: _imu_tap_detected (an always-False STUB), _TapClassifier
+(single-vs-double disambiguation — v1 ships ONE gesture, so there is
+nothing to disambiguate), _WakeState (superseded by _TapCycleState, which
+adds the WAKING/SETTLING debounce it lacked) and _classify_wake_response
+(its job moved into _TapCycleState.resolve plus the loop's quiet-hours
+short-circuit). Recorded rather than silently dropped, since those tests
+passing is exactly what made the stub look functional for so long.
+
+What remains here is NOT superseded: _StatusMessage and _all_signals_hidden
+still back the quiet-hours and no-data acknowledgments unchanged, and
+load_schedule's error paths just happen to live in this file.
+
+⚠ _cycle_brightness / _run_secondary_action are still tested but are
+currently **unbound** — in the old model they were AWAKE+single-tap; in v1
+that gesture is CYCLE. Kept because they are small, pure, and a plausible
+future binding, but nothing invokes them today.
 """
 
 
-# ── _imu_tap_detected (stub) ─────────────────────────────────────
-
-
-def test_imu_tap_detected_stub_always_false(load_main):
-    # No IMU wired yet — must never fabricate a tap. See the function's own
-    # docstring for why False (not raising) is the deliberate choice.
-    m = load_main()
-    assert m._imu_tap_detected() is False
+# ── _StatusMessage ───────────────────────────────────────────────
 
 
 # ── _TapClassifier ────────────────────────────────────────────────
 
 
-def test_tap_classifier_no_taps_reports_nothing(load_main):
-    m = load_main(DOUBLE_TAP_WINDOW_MS=400)
-    c = m._TapClassifier()
-    for t in range(0, 2000, 100):
-        assert c.advance(t, False) is None
-
-
-def test_tap_classifier_single_tap_resolves_after_window(load_main):
-    m = load_main(DOUBLE_TAP_WINDOW_MS=400)
-    c = m._TapClassifier()
-    assert c.advance(0, True) is None       # first tap — pending
-    assert c.advance(200, False) is None    # still inside the window
-    assert c.advance(399, False) is None    # just under the window
-    assert c.advance(400, False) == "single"  # window elapsed, no 2nd tap
-
-
-def test_tap_classifier_second_tap_inside_window_is_double(load_main):
-    m = load_main(DOUBLE_TAP_WINDOW_MS=400)
-    c = m._TapClassifier()
-    assert c.advance(0, True) is None
-    assert c.advance(200, False) is None
-    assert c.advance(350, True) == "double"
-
-
-def test_tap_classifier_second_tap_outside_window_is_two_singles(load_main):
-    m = load_main(DOUBLE_TAP_WINDOW_MS=400)
-    c = m._TapClassifier()
-    assert c.advance(0, True) is None
-    assert c.advance(400, False) == "single"    # first tap resolves alone
-    assert c.advance(400, True) is None          # a NEW pending tap starts
-    assert c.advance(800, False) == "single"    # resolves alone too
-
-
-def test_tap_classifier_resets_after_reporting(load_main):
-    m = load_main(DOUBLE_TAP_WINDOW_MS=400)
-    c = m._TapClassifier()
-    c.advance(0, True)
-    c.advance(400, False)  # -> "single"
-    assert c._pending_since is None
-    for t in range(500, 2000, 100):
-        assert c.advance(t, False) is None  # nothing pending, stays quiet
-
-
 # ── _WakeState ────────────────────────────────────────────────────
-
-
-def test_wake_state_starts_awake(load_main):
-    m = load_main()
-    w = m._WakeState()
-    assert w.awake is True
-    assert w.wake_until is None
-
-
-def test_wake_state_wake_sets_countdown(load_main):
-    m = load_main(WAKE_MINUTES=30)
-    w = m._WakeState()
-    w.wake(1000)
-    assert w.awake is True
-    assert w.wake_until == 1000 + 30 * 60_000
-
-
-def test_wake_state_is_expired_before_and_after(load_main):
-    m = load_main(WAKE_MINUTES=30)
-    w = m._WakeState()
-    w.wake(0)
-    assert w.is_expired(30 * 60_000 - 1) is False
-    assert w.is_expired(30 * 60_000) is True
-
-
-def test_wake_state_sleep_clears_expiry(load_main):
-    m = load_main(WAKE_MINUTES=30)
-    w = m._WakeState()
-    w.wake(0)
-    w.sleep()
-    assert w.awake is False
-    assert w.wake_until is None
-    assert w.is_expired(10**9) is False  # not awake -> never "expired"
-
-
-def test_wake_state_re_wake_resets_countdown(load_main):
-    # Extend / re-wake is the SAME operation whether already awake or not.
-    m = load_main(WAKE_MINUTES=30)
-    w = m._WakeState()
-    w.wake(0)
-    w.wake(1000)  # e.g. a double-tap extend partway through
-    assert w.wake_until == 1000 + 30 * 60_000
 
 
 # ── _StatusMessage ────────────────────────────────────────────────
@@ -132,37 +53,6 @@ def test_status_message_active_until_expiry(load_main):
 
 
 # ── _classify_wake_response ──────────────────────────────────────
-
-
-def test_classify_no_tap_is_none(load_main):
-    m = load_main()
-    assert m._classify_wake_response(False, None, True) is None
-    assert m._classify_wake_response(True, None, False) is None
-
-
-def test_classify_quiet_hours_always_wins(load_main):
-    m = load_main()
-    # ANY tap during quiet hours -> quiet_tap_ack, regardless of awake state
-    assert m._classify_wake_response(True, "single", True) == "quiet_tap_ack"
-    assert m._classify_wake_response(True, "double", True) == "quiet_tap_ack"
-    assert m._classify_wake_response(True, "single", False) == "quiet_tap_ack"
-    assert m._classify_wake_response(True, "double", False) == "quiet_tap_ack"
-
-
-def test_classify_asleep_any_tap_wakes(load_main):
-    m = load_main()
-    assert m._classify_wake_response(False, "single", False) == "wake_ceremony"
-    assert m._classify_wake_response(False, "double", False) == "wake_ceremony"
-
-
-def test_classify_awake_single_is_secondary_action(load_main):
-    m = load_main()
-    assert m._classify_wake_response(False, "single", True) == "secondary_action"
-
-
-def test_classify_awake_double_is_extend(load_main):
-    m = load_main()
-    assert m._classify_wake_response(False, "double", True) == "extend"
 
 
 # ── _all_signals_hidden ───────────────────────────────────────────

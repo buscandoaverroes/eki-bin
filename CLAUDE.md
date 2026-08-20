@@ -63,7 +63,7 @@ When writing Rust code in this repo, take a teaching role:
 | LED display pipeline (LeaveSignal → contracts) | `docs/contracts/display-contract.md` |
 | Positional/approach display paradigm (new, in progress) | `docs/contracts/approach-contract.md` |
 | Boot/startup LED sequence (implemented, not yet on hardware) | `docs/contracts/startup-sequence.md` |
-| Tap-gesture recognition + two-phase ACK/CONFIRM LED jolt UX — implemented, extensively real-hardware validated (Pico 2W + LED stick), XIAO/full-tape/bottle validation still pending | `docs/contracts/gesture-envelope.md` |
+| Tap-gesture recognition + ACK/CONFIRM LED jolt + tap-to-cycle-line — **shipped and running on real hardware in the bottle** (XIAO C3 + IMU + 21-LED strip) | `docs/contracts/gesture-envelope.md` |
 | IMU tap wake/sleep interaction (original design — partially superseded by `gesture-envelope.md`, still correct for its state-machine/safety-gate patterns) | `docs/contracts/wake-interaction.md` |
 | LED status-message vocabulary (errors, acknowledgments — design only) | `docs/contracts/led-status-messages.md` |
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
@@ -84,16 +84,31 @@ host test suite. The **v1.2 board-portability checkpoint passed**: the XIAO
 ESP32-C3 runs the identical firmware via a `config.py` swap only — proof the
 board abstraction (`LED_PIN`, `HEARTBEAT_PIN`) holds up on real hardware.
 
-**Active branch: `feature/gesture-envelope`** (not yet pushed or merged) —
-IMU (LSM6DSV16X) tap-gesture recognition + a two-phase ACK/CONFIRM LED jolt,
-replacing the earlier wake-interaction design after real-hardware testing
-found the original multi-gesture plan unreliable and scoped down to a
-minimal, "light switch"-reliable tap-or-noise contract instead. Extensively
-validated on real hardware (Pico 2W + AE-WS2812B-STICK8), including five
-rounds of live tuning against real taps — but that's still a bare LED strip,
-not the target XIAO + full LED tape inside the actual frosted bottle, which
-is the next validation step before merge. Full state: `docs/contracts/
-gesture-envelope.md` §11; progress log: `dev-status.md`.
+**Merged to `dev`:** the gesture envelope (IMU tap recognition + two-phase
+ACK/CONFIRM LED jolt) and its integration into `main.py`'s real loop — a
+tap now wakes the display and cycles which **line** is shown. Multi-line
+schedules (`lines[]`, optional, backward-compatible) and per-line colour
+rendering shipped with it. Full state: `docs/contracts/gesture-envelope.md`
+§11; provisioning a unit end-to-end: `docs/provisioning-runbook.md`.
+
+**Two active parallel branches (worktrees), both cut from `dev`:**
+
+- **`feature/color-consistency`** — the live problem. Through the brown
+  bottle only near-opposite hues are distinguishable, which caps how many
+  lines the palette can support (`docs/insights.md` §12). Also owes a real
+  fix for marker ticks: they currently render at `(1,1,1)`, where WS2812B
+  channel matching collapses and neutral gray reads yellow, and the present
+  `MARKER_BRIGHTNESS = 0` is a **workaround that removes the affordance**,
+  not a fix. Raising overall brightness in-bottle likely solves both at
+  once. Iterate with `micropython/led_sandbox.py` — no WiFi or schedule
+  needed. **The MCU is irrelevant here; the strip and the bottle are not.**
+- **`feature/ds3231-time`** — bring up the DS3231 RTC on the Pico 2W
+  breadboard (I²C 0x68, no conflict with the IMU at 0x6A/0x6B). Evaluation
+  and wiring: `docs/hardware.md` § DS3231.
+
+Both converge on the intended production unit: **XIAO RP2350 (no radio) +
+DS3231 + IMU + LED strip**, wired or Qi powered. Note `TIME_SOURCE="rtc"`
+already exists and is what makes a WiFi-free unit run today.
 
 In parallel, separately: **v1.1** (Qi power-path + soldering into the
 bottle) — see `docs/roadmap.md`. When touching board-specific pins,

@@ -445,3 +445,71 @@ def test_line_saturation_default_is_unchanged(load_main):
 def test_approach_selectable_via_config(load_main):
     m = load_main(CONTRACT="approach")
     assert isinstance(m.ACTIVE_CONTRACT, m.ApproachContract)
+
+
+# ── per-line colour — schedule-json.md § Multiple lines ──────────
+
+
+def test_set_line_color_overrides_the_config_default(load_main):
+    m = load_main(CONTRACT="approach", LINE_COLOR=(34, 139, 34), LINE_SATURATION=1.0)
+    c = m.ApproachContract()
+    assert c.line_color == (34, 139, 34)
+    c.set_line_color((243, 0, 8))
+    assert c.line_color == (243, 0, 8)
+
+
+def test_set_line_color_none_restores_the_config_default(load_main):
+    m = load_main(CONTRACT="approach", LINE_COLOR=(34, 139, 34), LINE_SATURATION=1.0)
+    c = m.ApproachContract()
+    c.set_line_color((243, 0, 8))
+    c.set_line_color(None)
+    assert c.line_color == (34, 139, 34)
+
+
+def test_set_line_color_still_honours_line_saturation(load_main):
+    # LINE_SATURATION is a PER-ENCLOSURE correction (how a colour must be
+    # driven to look right through YOUR glass). It has to keep applying
+    # across every line, or the schedule's nominal colours would defeat it.
+    m = load_main(CONTRACT="approach", LINE_SATURATION=0.0)
+    c = m.ApproachContract()
+    c.set_line_color((243, 0, 8))
+    r, g, b = c.line_color
+    assert r == g == b, "saturation 0.0 should render fully desaturated"
+
+
+def test_per_line_colour_reaches_the_rendered_train(load_main):
+    # The point of the whole feature: the train dot must actually take the
+    # line's colour, since that is what makes a line identifiable on a random
+    # glance rather than only at the moment you cycle. Differential rather
+    # than asserting an exact RGB, so it doesn't re-derive the brightness
+    # pipeline and break every time that's tuned.
+    m = load_main(CONTRACT="approach", NUM_LEDS=21, ANCHOR_INDEX=10,
+                  ARM_A_LEN=10, ARM_B_LEN=10, LINE_SATURATION=1.0,
+                  POSITION_MINUTES_PER_LED=1, TRANSITION_MS=0)
+    signal = m.LeaveSignal([3.0])
+
+    red = m.ApproachContract()
+    red.set_line_color((243, 0, 8))
+    red.render(signal, 0)
+    red_frame = list(m.np.buf)
+
+    green = m.ApproachContract()
+    green.set_line_color((0, 255, 0))
+    green.render(signal, 0)
+
+    assert list(m.np.buf) != red_frame, "train dot ignored the line colour"
+
+
+def test_apply_line_color_is_a_noop_without_a_colour(load_main):
+    m = load_main(CONTRACT="approach", LINE_COLOR=(34, 139, 34), LINE_SATURATION=1.0)
+    c = m.ApproachContract()
+    m._apply_line_color(c, {"name": "plain"})  # line declares no colour
+    assert c.line_color == (34, 139, 34)
+
+
+def test_apply_line_color_ignores_contracts_without_the_capability(load_main):
+    # Arc/urgency contracts have no per-line colour concept — their palette
+    # means URGENCY, not identity — so they must be left untouched rather
+    # than needing to opt out.
+    m = load_main(CONTRACT="breathing")
+    m._apply_line_color(m.BreathingContract(), {"color": [1, 2, 3]})  # must not raise
