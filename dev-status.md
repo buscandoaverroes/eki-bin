@@ -3,23 +3,25 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: gesture envelope (branch `feature/gesture-envelope`, not yet pushed)
+## Current phase: two parallel branches off `dev` (colour, DS3231)
 
-> **Supersedes the wake/sleep interaction layer below** — same sensor
-> (AE-LSM6DSV16X), a redesigned interaction model. Real-hardware testing
-> (many sessions, two bottles, a sandbox toolchain built specifically to
-> answer "what can this hardware actually support") found the original
-> multi-gesture wake-interaction design's harder pieces (position
-> disambiguation, flick-vs-handling) genuinely unreliable, while tap-vs-noise
-> discrimination alone was consistently strong (95-98%+). Scoped down to a
-> minimal "light switch"-reliable contract instead of the fuller vocabulary —
-> full rationale in `docs/contracts/gesture-envelope.md`'s "Scope pivot"
-> callout and §11. IMU is now **physically wired and extensively validated**
-> on the Pico 2W + AE-WS2812B-STICK8 (not the stub `wake-interaction.md`
-> describes) — see the new subsection below, after "Wake/sleep interaction
-> layer," for the full account. 185 tests passing. **Not yet pushed**, **not
-> yet on the XIAO/full LED tape/actual bottle** (that's the next step before
-> merge to `dev`).
+> **Gesture work is merged.** The IMU tap contract, the ACK/CONFIRM jolt, and
+> tap-to-cycle-**line** all run on the real assembled unit (XIAO C3 + IMU +
+> 21-LED strip, in the brown bottle, WiFi-free via `TIME_SOURCE="rtc"`).
+> Multi-line schedules and per-line colour shipped alongside. See
+> `docs/contracts/gesture-envelope.md` §11 and `docs/insights.md` §12.
+>
+> **Next, in parallel:**
+> - **`feature/color-consistency`** — the binding problem. Only near-opposite
+>   hues survive the brown glass, capping the practical line count; and marker
+>   ticks need a real fix rather than the current `MARKER_BRIGHTNESS = 0`
+>   workaround, which removes the affordance instead of fixing the low-PWM
+>   colour collapse. Raising in-bottle brightness likely addresses both.
+> - **`feature/ds3231-time`** — DS3231 bring-up on the Pico 2W breadboard.
+>
+> Both converge on the intended production unit: **XIAO RP2350 (no radio) +
+> DS3231 + IMU + strip**. The C3/C6 WiFi-headroom work is deprioritized —
+> see Open decisions.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
