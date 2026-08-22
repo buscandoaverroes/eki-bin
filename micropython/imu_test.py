@@ -24,12 +24,20 @@ import time
 from machine import I2C, Pin
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 6  # I2C data  — SET PER BOARD (Pico 2W=0/GP0, XIAO C3=6/D4); see header
-SCL_PIN = 7  # I2C clock — SET PER BOARD (Pico 2W=1/GP1, XIAO C3=7/D5); see header
-#              ^^ currently set for the XIAO ESP32-C3. Swap back to 0/1 for the
-#              Pico 2W. An empty I2C scan is the symptom of forgetting this —
-#              the pins printed at startup are the first thing to check, since
-#              the XIAO doesn't even break out GPIO0/GPIO1 (its D0 is GPIO2).
+SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0, XIAO C3=6/D4); see header
+SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1, XIAO C3=7/D5); see header
+#              ^^ currently set for the Pico 2W. Swap to 6/7 for the XIAO ESP32-C3.
+#              The FAILURE MODE differs by direction, confirmed on hardware
+#              2026-08-22: Pico2W-values-on-a-XIAO scans clean but finds
+#              nothing (the XIAO doesn't break out GP0/GP1 at all — ESP32 maps
+#              I2C to any pins in software, so construction succeeds, the scan
+#              just comes back empty). XIAO-values-on-a-Pico2W is a HARDER
+#              failure: `ValueError: bad SCL pin` at I2C() construction,
+#              before any bus activity — RP2350's I2C peripherals are wired to
+#              a FIXED pin table in silicon (I2C0: GP0/1, GP4/5, GP8/9, …;
+#              GP6/7 is I2C1), so pins valid on one board can be outright
+#              REJECTED on the other, not just silently wrong. Rewiring the
+#              physical jumpers can't fix this one — it never reaches them.
 I2C_ID = 0   # hardware I2C peripheral index. Pico 2W: GP0/GP1 IS I2C0 — this
 #              pin pair is fixed by the RP2350's silicon, not arbitrary.
 #              XIAO C3 (ESP32): I2C pins are software-mapped, so ID 0 works
