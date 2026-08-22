@@ -24,24 +24,69 @@ import time
 from machine import I2C, Pin
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0, XIAO C3=6/D4); see header
-SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1, XIAO C3=7/D5); see header
-#              ^^ currently set for the Pico 2W. Swap to 6/7 for the XIAO ESP32-C3.
-#              The FAILURE MODE differs by direction, confirmed on hardware
-#              2026-08-22: Pico2W-values-on-a-XIAO scans clean but finds
-#              nothing (the XIAO doesn't break out GP0/GP1 at all — ESP32 maps
-#              I2C to any pins in software, so construction succeeds, the scan
-#              just comes back empty). XIAO-values-on-a-Pico2W is a HARDER
-#              failure: `ValueError: bad SCL pin` at I2C() construction,
-#              before any bus activity — RP2350's I2C peripherals are wired to
-#              a FIXED pin table in silicon (I2C0: GP0/1, GP4/5, GP8/9, …;
-#              GP6/7 is I2C1), so pins valid on one board can be outright
-#              REJECTED on the other, not just silently wrong. Rewiring the
-#              physical jumpers can't fix this one — it never reaches them.
-I2C_ID = 0   # hardware I2C peripheral index. Pico 2W: GP0/GP1 IS I2C0 — this
-#              pin pair is fixed by the RP2350's silicon, not arbitrary.
-#              XIAO C3 (ESP32): I2C pins are software-mapped, so ID 0 works
-#              with any GPIO pair — only SDA_PIN/SCL_PIN need to change.
+SDA_PIN = 6  # I2C data  — SET PER BOARD, WITH I2C_ID BELOW; see that table
+SCL_PIN = 7  # I2C clock — SET PER BOARD, WITH I2C_ID BELOW; see that table
+#              ^^ currently: XIAO RP2350 (D4/D5). Pico 2W = 0/1 (+ ID 0),
+#              XIAO ESP32-C3 = 6/7 (+ ID 0).
+#
+#              Two DIFFERENT failure modes, both seen on hardware — worth
+#              telling apart, because only one implicates your wiring:
+#                • Pico2W pins on a XIAO C3 → constructs fine, scan comes back
+#                  EMPTY (ESP32 maps I2C to any pins in software; GP0/GP1 just
+#                  aren't broken out). Looks exactly like a wiring fault.
+#                • Wrong pin/ID pair on any RP2 board → `ValueError: bad SCL
+#                  pin` at construction, BEFORE any bus activity. No wiring
+#                  change can fix it; it never reaches the pins. This bit
+#                  twice (2026-08-22 Pico 2W, 2026-08-22 XIAO RP2350) —
+#                  hence _explain_i2c_pins() below.
+I2C_ID = 1   # ⚠ SET PER BOARD TOO — this is NOT always 0, and forgetting it
+#              is the single most repeated bring-up failure on this project.
+#                Pico 2W        : 0   (GP0/GP1 is I2C0)
+#                XIAO ESP32-C3  : 0   (ESP32 maps I2C to ANY pins in software,
+#                                      so the ID genuinely doesn't matter)
+#                XIAO RP2350    : 1   (its LABELED D4/SDA=GP6, D5/SCL=GP7 are
+#                                      on I2C1 — see the table in
+#                                      pinouts/xiao_rp2350.md)
+#              On RP2040/RP2350 the peripheral is wired to a FIXED pin table
+#              in silicon, so an ID that disagrees with the pins is rejected
+#              outright at construction. _explain_i2c_pins() below turns that
+#              rejection into an actionable message instead of a bare
+#              `ValueError: bad SCL pin`.
+
+
+# RP2040/RP2350 fixed I2C pin table (datasheet "GPIO functions"). Used ONLY to
+# explain a construction failure — never to pick pins automatically, since
+# guessing which bus the user MEANT would hide exactly the wiring mistake this
+# is here to surface.
+_RP2_I2C_SDA = {0: (0, 4, 8, 12, 16, 20), 1: (2, 6, 10, 14, 18, 26)}
+_RP2_I2C_SCL = {0: (1, 5, 9, 13, 17, 21), 1: (3, 7, 11, 15, 19, 27)}
+
+
+def _explain_i2c_pins(sda, scl, i2c_id):
+    """Human-readable diagnosis for an I2C() that refused to construct.
+    Returns a list of lines. RP2-specific; harmless on ESP32 (where this
+    failure mode doesn't occur, because pins are software-mapped)."""
+    sda_bus = next((b for b, pins in _RP2_I2C_SDA.items() if sda in pins), None)
+    scl_bus = next((b for b, pins in _RP2_I2C_SCL.items() if scl in pins), None)
+    out = [
+        "    On RP2040/RP2350 each I2C peripheral is hard-wired to a fixed",
+        "    set of pins — the ID and the pins must agree:",
+        "      I2C0  SDA: GP0/4/8/12/16/20   SCL: GP1/5/9/13/17/21",
+        "      I2C1  SDA: GP2/6/10/14/18/26  SCL: GP3/7/11/15/19/27",
+    ]
+    if sda_bus is None:
+        out.append(f"    ✗ GP{sda} is not a valid I2C SDA pin on this chip at all.")
+    if scl_bus is None:
+        out.append(f"    ✗ GP{scl} is not a valid I2C SCL pin on this chip at all.")
+    if sda_bus is not None and scl_bus is not None:
+        if sda_bus != scl_bus:
+            out.append(f"    ✗ GP{sda} is an I2C{sda_bus} SDA pin but GP{scl} is an")
+            out.append(f"      I2C{scl_bus} SCL pin — they're on DIFFERENT buses.")
+            out.append("      Pick a pair from one row of the table above.")
+        elif sda_bus != i2c_id:
+            out.append(f"    → GP{sda}/GP{scl} are a valid I2C{sda_bus} pair, but")
+            out.append(f"      I2C_ID is set to {i2c_id}. Set I2C_ID = {sda_bus}.")
+    return out
 
 # ── LSM6DSV16X register map (only what this script needs) ─────────
 WHO_AM_I_REG = 0x0F
@@ -101,7 +146,16 @@ def main():
     # them makes the two cases distinguishable at a glance. Same footgun
     # led_test.py's DATA_PIN hit during the v1.2 board-portability pass.
     print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
-    i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    try:
+        i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    except ValueError as e:
+        # Construction rejected the pin/ID combination — this happens BEFORE
+        # any bus activity, so no wiring change can fix it and the physical
+        # setup is not implicated. Explain rather than re-raise.
+        print(f"  ✗ Could not open I2C{I2C_ID} on SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN}: {e}")
+        for line in _explain_i2c_pins(SDA_PIN, SCL_PIN, I2C_ID):
+            print(line)
+        return
 
     addr = _find_device(i2c)
     if addr is None:

@@ -87,10 +87,51 @@ import time
 from machine import I2C, Pin, RTC
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0); see header
-SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1); see header
-I2C_ID = 0   # Pico 2W: GP0/GP1 IS I2C0 — fixed by RP2350 silicon, not a
-#              choice. Same bus the IMU is on (pinouts/pico2w.md).
+SDA_PIN = 6  # I2C data  — SET PER BOARD, WITH I2C_ID below
+SCL_PIN = 7  # I2C clock — SET PER BOARD, WITH I2C_ID below
+I2C_ID = 1   # ⚠ SET PER BOARD TOO — NOT always 0:
+#                Pico 2W        : SDA 0, SCL 1, ID 0
+#                XIAO ESP32-C3  : SDA 6, SCL 7, ID 0  (ESP32 maps I2C to any
+#                                 pins in software, so the ID is a free choice)
+#                XIAO RP2350    : SDA 6, SCL 7, ID 1  (its LABELED D4/D5 are
+#                                 GP6/GP7, which are on I2C1 — pinouts/xiao_rp2350.md)
+#              On RP2040/RP2350 the peripheral is hard-wired to a fixed pin
+#              table, so an ID disagreeing with the pins is rejected at
+#              construction with a bare `ValueError: bad SCL pin`.
+#              _explain_i2c_pins() below turns that into an actionable message.
+
+
+# RP2040/RP2350 fixed I2C pin table (datasheet "GPIO functions"). Used ONLY to
+# explain a construction failure — never to pick pins automatically, since
+# guessing which bus was MEANT would hide the very mistake this surfaces.
+_RP2_I2C_SDA = {0: (0, 4, 8, 12, 16, 20), 1: (2, 6, 10, 14, 18, 26)}
+_RP2_I2C_SCL = {0: (1, 5, 9, 13, 17, 21), 1: (3, 7, 11, 15, 19, 27)}
+
+
+def _explain_i2c_pins(sda, scl, i2c_id):
+    """Human-readable diagnosis for an I2C() that refused to construct.
+    RP2-specific; harmless on ESP32, where this failure mode can't occur."""
+    sda_bus = next((b for b, pins in _RP2_I2C_SDA.items() if sda in pins), None)
+    scl_bus = next((b for b, pins in _RP2_I2C_SCL.items() if scl in pins), None)
+    out = [
+        "    On RP2040/RP2350 each I2C peripheral is hard-wired to a fixed",
+        "    set of pins — the ID and the pins must agree:",
+        "      I2C0  SDA: GP0/4/8/12/16/20   SCL: GP1/5/9/13/17/21",
+        "      I2C1  SDA: GP2/6/10/14/18/26  SCL: GP3/7/11/15/19/27",
+    ]
+    if sda_bus is None:
+        out.append(f"    ✗ GP{sda} is not a valid I2C SDA pin on this chip at all.")
+    if scl_bus is None:
+        out.append(f"    ✗ GP{scl} is not a valid I2C SCL pin on this chip at all.")
+    if sda_bus is not None and scl_bus is not None:
+        if sda_bus != scl_bus:
+            out.append(f"    ✗ GP{sda} is an I2C{sda_bus} SDA pin but GP{scl} is an")
+            out.append(f"      I2C{scl_bus} SCL pin — they're on DIFFERENT buses.")
+            out.append("      Pick a pair from one row of the table above.")
+        elif sda_bus != i2c_id:
+            out.append(f"    → GP{sda}/GP{scl} are a valid I2C{sda_bus} pair, but")
+            out.append(f"      I2C_ID is set to {i2c_id}. Set I2C_ID = {sda_bus}.")
+    return out
 
 SYNC_DS3231_FROM_BOARD_RTC = True  # ⚠ see WORKFLOW above — flip to False
 #                                     before the power-cycle test, or a
@@ -224,7 +265,15 @@ def _board_rtc_datetime():
 def main():
     print("\n══ eki-bin RTC test (DS3231) ═════════════════════")
     print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
-    i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    try:
+        i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    except ValueError as e:
+        # Rejected BEFORE any bus activity — no wiring change can fix this,
+        # and the physical setup is not implicated. Explain, don't re-raise.
+        print(f"  ✗ Could not open I2C{I2C_ID} on SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN}: {e}")
+        for line in _explain_i2c_pins(SDA_PIN, SCL_PIN, I2C_ID):
+            print(line)
+        return
 
     found = i2c.scan()
     print("  I2C scan:", [hex(a) for a in found])

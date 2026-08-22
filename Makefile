@@ -28,6 +28,7 @@ ESPTOOL  := $(VENV)/bin/esptool
 FIRMWARE_DIR   := firmware
 PICO_FIRMWARE  := $(wildcard $(FIRMWARE_DIR)/RPI_PICO2_W-*.uf2)
 ESP32_FIRMWARE := $(wildcard $(FIRMWARE_DIR)/SEEED_XIAO_ESP32C3-*.bin)
+XAIO_RP2350_FIRMWARE := $(wildcard $(FIRMWARE_DIR)/SEEED_XIAO_RP2350-*.uf2)
 SRC_DIR      := micropython
 
 STATION ?= testbench
@@ -50,6 +51,18 @@ flash-micropython:
 		|| (echo "✗ No .uf2 found in $(FIRMWARE_DIR)/ — download from micropython.org/download/RPI_PICO2_W/" && exit 1)
 	@echo "→ Flashing: $(PICO_FIRMWARE)"
 	picotool load $(PICO_FIRMWARE) --force
+	picotool reboot
+	@echo "✓ Done — Pico rebooting into MicroPython"
+
+
+.PHONY: flash-xiao2350
+flash-xiao2350:
+	@command -v picotool > /dev/null 2>&1 \
+		|| (echo "✗ picotool not found — run: brew install picotool" && exit 1)
+	@test -n "$(PICO_FIRMWARE)" \
+		|| (echo "✗ No .uf2 found in $(FIRMWARE_DIR)/ — download from micropython.org/download/RPI_PICO2_W/" && exit 1)
+	@echo "→ Flashing: $(XAIO_RP2350_FIRMWARE)"
+	picotool load $(XAIO_RP2350_FIRMWARE) --force
 	picotool reboot
 	@echo "✓ Done — Pico rebooting into MicroPython"
 

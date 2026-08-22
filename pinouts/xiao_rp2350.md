@@ -94,3 +94,66 @@ actually needs once flashing is attempted; not yet tested.
 - [ ] Confirm which flash target applies (`flash-micropython` vs. a new one)
 - [ ] Onboard-LED / `HEARTBEAT_PIN` alias, if one exists on this board
       (XIAO C3 has none; unconfirmed here)
+
+## shared v1.4 pinout
+
+## Physical pinout (per Seeed's official docs, not yet bench-verified)
+
+```
+                 ┌─────────────┐
+                 │   USB-C     │
+                 └──┬───────┬──┘
+  ► D0/A0  ──────────┤       ├────────── 5V [to 8led strip]
+     D1/A1 ──────────┤       ├────────── GND [to gnd rail]
+     D2/A2 ──────────┤ RP2350├────────── 3V3 [to power rail]
+     D3    ──────────┤       ├────────── D10 / GPIO3 
+     D4/SDA──────────┤       ├────────── D9  / GPIO4 
+     D5/SCL──────────┤       ├────────── D8  / GPIO2 
+     D6/TX ──────────┤       ├────────── D7  / GPIO1 
+                      └───────┘
+```
+
+8led strip
+
+```
+[] GND [to gnd rail]
+[] DIN
+[] 5Vdc [xiao 5v pin directly]
+```
+
+
+ds3231
+
+```
+[] VIN (3v3) [to power rail]
+[] GND [to gnd rail]
+[] SCL 
+[] SDA
+```
+
+IMU
+
+```
+[] GND [to gnd rail]
+[] VIN (3v3) [to power rail]
+[] SDA
+[] SCL
+```
+
+
+power (3v3) rail
+
+```
+[] bridge to 3v3 [to xiao 3v3]
+[] to imu
+[] to ds3231 
+```
+
+gnd rail
+
+```
+[] bridge to xiao gnd
+[] to imu
+[] to ds3231
+[] to led strip
+```

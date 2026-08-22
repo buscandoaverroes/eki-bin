@@ -20,8 +20,8 @@ from machine import Pin
 from neopixel import NeoPixel
 
 # ── Configuration ────────────────────────────────────────────────
-DATA_PIN = 3  # WS2812B data line — SET PER BOARD (Pico 2W=6, XIAO C3=2); see header
-NUM_LEDS = 21  # SET PER STRIP (AE-WS2812B-STICK8=8, WS2812B-4020 tape=120, …)
+DATA_PIN = 1  # WS2812B data line — SET PER BOARD (Pico 2W=6, XIAO C3=2); see header
+NUM_LEDS = 8  # SET PER STRIP (AE-WS2812B-STICK8=8, WS2812B-4020 tape=120, …)
 BRIGHTNESS = 0.15  # 0.0–1.0. Keep it low: 8 LEDs at full white ≈ 480mA off VBUS,
 # and it's blinding from a hand's distance. 0.15 is ample for
 # a bring-up — bump it later once you trust the wiring.
