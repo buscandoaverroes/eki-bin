@@ -46,6 +46,25 @@
 #      doing their job. If OSF reports lost power, they aren't — check the
 #      CR1220 is actually seated and oriented + polarity right.
 #
+# ══ ⚠ A BATTERY CAN MASK A POWER FAULT — confirmed on hardware ══════════
+# Found the hard way 2026-08-22. Symptom: completely empty I2C scan, on
+# wiring that had just been proven good by imu_test.py on the same pins.
+# Removing the CR1220 made the chip appear immediately at 0x68.
+#
+# Why: the DS3231 arbitrates its own supply. It switches to VBAT when VCC
+# falls below the power-fail threshold (~2.575V) AND below the battery
+# voltage — and **its I2C interface is disabled whenever it runs on
+# VBAT**. So a bad VIN connection produces a chip that is alive, keeping
+# perfect time, and totally invisible on the bus. The battery doesn't
+# cause the fault; it converts "dead and silent" into "healthy and
+# silent," which looks the same from a scan but points somewhere else.
+#
+# The diagnostic value runs the other way too: if pulling the battery
+# makes the device appear, VIN is sagging **below ~2.6V** — that's not
+# "slightly marginal," it's a high-resistance connection dropping most of
+# a volt. Reseat VIN before suspecting anything else. Intermittent EIO on
+# subsequent reads is the same fault, same cause.
+#
 # ══ WHO_AM_I: this chip doesn't have one ════════════════════════════════
 # Unlike the LSM6DSV16X (imu_test.py checks WHO_AM_I=0x70), the DS3231 has
 # no device-ID register. Seeing 0x68 on the bus is WEAKER confirmation than
@@ -253,16 +272,40 @@ def main():
 
     print(f"  Reading back every {READ_INTERVAL_SECS}s — confirms it's actually")
     print("  ticking, not stuck. Ctrl+C to stop.\n")
+
+    # Tolerate OSError per-read rather than dying on the first one. A bring-up
+    # script's job is to CHARACTERIZE a connection, and "3 of 12 reads failed"
+    # is a far more useful fact about marginal wiring than a traceback on read
+    # #2 — which is exactly what this script did on its first real run
+    # (2026-08-22), throwing away the failure RATE, the single most diagnostic
+    # number available. Note this is the opposite call from imu_test.py, which
+    # is right to fail fast: there, a bad read means bad wiring and nothing
+    # more. Here the whole question is "how bad, and is it getting worse."
+    ok = 0
+    failed = 0
     try:
         while True:
-            year, month, day, hour, minute, second, weekday = _read_datetime(i2c, DS3231_ADDR)
-            temp = _read_temp_c(i2c, DS3231_ADDR)
-            print(f"  {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
-                  f"  (weekday={weekday})   {temp:5.2f}°C")
+            try:
+                year, month, day, hour, minute, second, weekday = _read_datetime(i2c, DS3231_ADDR)
+                temp = _read_temp_c(i2c, DS3231_ADDR)
+                ok += 1
+                print(f"  {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+                      f"  (weekday={weekday})   {temp:5.2f}°C")
+            except OSError as e:
+                failed += 1
+                print(f"  ✗ read failed ({e})  [{failed} failed / {ok + failed} attempted]")
             time.sleep(READ_INTERVAL_SECS)
     except KeyboardInterrupt:
         pass
     finally:
+        total = ok + failed
+        if total:
+            print(f"\n  {ok}/{total} reads succeeded.")
+            if failed:
+                print("  ⚠ ANY failures here mean a marginal connection, not a flaky")
+                print("    chip — I2C either transacts or it doesn't. Reseat the")
+                print("    clips (VIN first: see this file's header on how a sagging")
+                print("    VIN makes the chip silently prefer its battery).")
         print("\n  bye — the DS3231 keeps ticking on its own regardless (that's the point)")
 
 
