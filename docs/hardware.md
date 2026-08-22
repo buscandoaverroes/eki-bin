@@ -235,7 +235,12 @@ tag reads fine — another reason cork is the chosen first closure.
 
 ---
 
-## DS3231 RTC — candidate part evaluated (2026-08-18, nothing bought)
+## DS3231 RTC — in hand, on the breadboard (evaluated 2026-08-18, bought + wired 2026-08-20)
+
+Bring-up: `micropython/rtc_test.py` (`make rtc-test`). Pinout:
+`pinouts/pico2w.md` § DS3231. Evaluation below (part choice, voltage,
+battery) stands as written — nothing in it changed by actually buying the
+part; only its status did.
 
 **Candidate:** Adafruit **DS3231 Precision RTC Breakout**, product
 [#3013](https://www.adafruit.com/product/3013). Specs below verified
