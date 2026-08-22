@@ -109,9 +109,20 @@ CANDIDATE_ADDRS = (0x6A, 0x6B)
 MG_PER_LSB_AT_2G = 0.061
 
 
+# Addresses this project uses that are NOT the IMU. Finding one of these
+# means "a different device answered", which is a completely different
+# situation from "nothing answered" — and steering someone toward the IMU's
+# SA0 strap when what they actually have connected is an RTC wastes a
+# debugging cycle (observed 2026-08-22).
+_NOT_THE_IMU = {
+    0x68: "DS3231 RTC (or an MPU6050) — see micropython/rtc_test.py",
+    0x57: "AT24C32 EEPROM, commonly on DS3231 breakout modules",
+}
+
+
 def _find_device(i2c):
     """Scan the bus, then confirm WHO_AM_I against whichever candidate
-    address responds. Returns the confirmed 7-bit address, or None."""
+    address responds. Returns (confirmed_addr_or_None, scanned_addrs)."""
     found = i2c.scan()
     print("  I2C scan:", [hex(a) for a in found])
     for addr in CANDIDATE_ADDRS:
@@ -120,8 +131,8 @@ def _find_device(i2c):
         who = i2c.readfrom_mem(addr, WHO_AM_I_REG, 1)[0]
         print(f"  {hex(addr)}: WHO_AM_I = {hex(who)}  (expect {hex(WHO_AM_I_EXPECTED)})")
         if who == WHO_AM_I_EXPECTED:
-            return addr
-    return None
+            return addr, found
+    return None, found
 
 
 def _read_accel_mg(i2c, addr):
@@ -157,17 +168,47 @@ def main():
             print(line)
         return
 
-    addr = _find_device(i2c)
+    addr, found = _find_device(i2c)
     if addr is None:
         print("  ✗ No LSM6DSV16X found.")
-        print(f"    1. Are SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN} right for THIS board?")
-        print("       Pico 2W = 0/1, XIAO ESP32-C3 = 6/7 (see pinouts/<board>.md).")
-        print("       An EMPTY scan above usually means wrong pins, not bad solder —")
-        print("       the XIAO doesn't even expose GPIO0/GPIO1.")
-        print("    2. If the scan listed addresses but none matched, it's on the bus")
-        print("       at an unexpected address — check the SA0 pad.")
-        print("    3. Only then suspect wiring: 3V3 (NOT 5V — this chip isn't")
-        print("       5V-tolerant), GND, SDA, SCL.")
+        # Branch on WHAT the scan saw — "nothing answered" and "something
+        # else answered" have different causes and different fixes.
+        # Order matters: an IMU address that ANSWERED but failed WHO_AM_I is
+        # a different fault from "no IMU here", and would otherwise be
+        # misreported as the latter. Seen on this hardware — `make i2c-scan`
+        # found 0x6B but couldn't read its ID register, which is the
+        # signature of marginal contact rather than a wrong/absent chip.
+        answered_but_unconfirmed = [a for a in found if a in CANDIDATE_ADDRS]
+        recognised = [a for a in found if a in _NOT_THE_IMU]
+        if answered_but_unconfirmed:
+            print(f"    An IMU address DID answer ({[hex(a) for a in answered_but_unconfirmed]})")
+            print("    but WHO_AM_I didn't read back 0x70. The chip is on the bus;")
+            print("    something about the transfer is unreliable. In order:")
+            print("      1. Contact — I2C either transacts or it doesn't, so an")
+            print("         intermittent register read means marginal wiring, not")
+            print("         a flaky chip. Reseat, especially unsoldered headers.")
+            print("      2. Power — a sagging supply can ACK an address while")
+            print("         failing real transfers.")
+            print("      3. Only then: is this actually an LSM6DSV16X? Another")
+            print("         chip could share the address.")
+        elif recognised:
+            print("    The bus is HEALTHY — it just isn't the IMU on it:")
+            for a in recognised:
+                print(f"      {hex(a)} = {_NOT_THE_IMU[a]}")
+            print("    So pins, bus ID, power and GND are all fine. Either the")
+            print("    IMU simply isn't connected, or it shares this bus and")
+            print("    isn't responding — a scan listing BOTH is what you want.")
+        elif found:
+            print(f"    Something answered ({[hex(a) for a in found]}) but nothing")
+            print("    at 0x6A/0x6B. If you expect an IMU here, check its SA0 pad")
+            print("    (the address-select strap: low = 0x6A, high = 0x6B).")
+        else:
+            print("    NOTHING answered at any address.")
+            print(f"    1. Are SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN} + I2C_ID={I2C_ID} right for")
+            print("       THIS board? Run `make i2c-scan` — it tries every legal")
+            print("       combination and tells you which one works.")
+            print("    2. Then suspect wiring: 3V3 (NOT 5V — this chip isn't")
+            print("       5V-tolerant), GND, SDA, SCL.")
         return
     print(f"  ✓ LSM6DSV16X confirmed at {hex(addr)}")
 
