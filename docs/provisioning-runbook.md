@@ -29,8 +29,10 @@ end-to-end 2026-08-16 on the v1.4+IMU dev unit
 ## 2. Flash MicroPython
 
 ```bash
-make flash-esp32-c3      # XIAO ESP32-C3 (esptool)
-make flash-micropython   # Pico 2W (picotool, hold BOOTSEL)
+make flash-micropython                      # interactive board picker
+make flash-micropython BOARD=pico2w         # or name it directly
+make flash-micropython BOARD=esp32c3
+make flash-micropython BOARD=xiao-rp2350
 ```
 
 ## 3. Config

@@ -120,7 +120,7 @@ eki-bin/
 
 ```bash
 make setup              # create .venv, install mpremote + pyyaml
-make flash-micropython  # flash MicroPython .uf2 via picotool (hold BOOTSEL)
+make flash-micropython  # flash MicroPython (asks which board; or BOARD=pico2w)
 
 cp schedules/mystation.example.yaml schedules/mystation.yaml   # edit your times
 make schedule           # YAML → schedules/mystation.json
