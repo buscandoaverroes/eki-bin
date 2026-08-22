@@ -117,7 +117,7 @@ actually needs once flashing is attempted; not yet tested.
 
 ```
 [] GND [to gnd rail]
-[] DIN
+[] DIN [to d7 on xiao]
 [] 5Vdc [xiao 5v pin directly]
 ```
 

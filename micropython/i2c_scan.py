@@ -39,6 +39,7 @@
 # values move, time advances).
 
 import sys
+import time
 
 from machine import I2C, Pin
 
@@ -142,12 +143,24 @@ def main():
               % (FORCE_I2C_ID, FORCE_SDA, FORCE_SCL))
     elif platform == "rp2":
         print("  mode: AUTO — trying every legal pin/ID combination")
+        print("  ⚠ This DRIVES those pins. Anything else wired to them will")
+        print("    see activity — a WS2812B strip on GP0/GP1 will flash, for")
+        print("    instance. Harmless, but not nothing: if a pin drives")
+        print("    something that shouldn't be pulsed, set FORCE_* at the top")
+        print("    of this file and it will try only that one combination.")
     else:
         print("  mode: GUIDED — this platform maps I2C to any pins, so the")
         print("        search space isn't safely enumerable. Trying known")
         print("        project defaults; set FORCE_* at the top to override.")
     print()
 
+    # Two passes on purpose. During the sweep we construct and discard many
+    # I2C objects in quick succession; a discarded one being finalized by the
+    # GC can deinit the peripheral out from under the live object, which
+    # showed up as "ID register unreadable" for a chip imu_test.py reads
+    # perfectly. Identification therefore happens AFTER the sweep, on a
+    # freshly built bus with nothing else in flight.
+    hits = []          # [(i2c_id, sda, scl, [addrs])]
     found_any = False
     tried = 0
     for i2c_id, sda, scl, tier in _candidate_buses():
@@ -175,6 +188,12 @@ def main():
             continue
 
         found_any = True
+        hits.append((i2c_id, sda, scl, addrs))
+
+    # ── Identify, on a clean bus ──────────────────────────────────
+    for i2c_id, sda, scl, addrs in hits:
+        i2c = I2C(i2c_id, scl=Pin(scl), sda=Pin(sda), freq=I2C_FREQ)
+        time.sleep_ms(5)  # let the peripheral settle before register reads
         print("  I2C%d  SDA=GP%-2d  SCL=GP%-2d" % (i2c_id, sda, scl))
         for addr in addrs:
             print("    0x%02X  %s" % (addr, _describe(i2c, addr)))
