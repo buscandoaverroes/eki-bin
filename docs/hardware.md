@@ -341,6 +341,48 @@ ever need to bridge the two.
 sets → 5K, three → 3.3K, four → 2.5K. Fine at two or three, over-driven by
 four or five; many boards have a solder jumper to cut theirs.
 
+### Bring-up log — DS3231 (2026-08-22)
+
+Confirmed working on the Pico 2W breadboard via `make rtc-test`. Three
+findings, all from deliberately breaking things:
+
+**1. A sagging VIN makes the chip silently invisible, and the battery
+hides it.** Initial symptom was a completely empty I²C scan on pins
+`imu_test.py` had *just* proven good. Cause: the DS3231 switches to VBAT
+when V<sub>CC</sub> drops below the power-fail threshold (~2.575V), and
+**its I²C interface is disabled on battery power**. So a
+high-resistance VIN connection yields a chip that is alive, keeping
+perfect time, and totally absent from the bus. Pulling the CR1220 made it
+appear instantly — which also means: *if removing the battery makes the
+device appear, VIN is sagging below ~2.6V*, a real connection fault
+dropping most of a volt, not a slightly-loose clip.
+
+**2. Contact quality is directly observable.** Pressing the unsoldered
+board firmly onto header pins gave clean reads; releasing halfway
+produced `EIO` within two samples. I²C either transacts or it doesn't —
+**any** failure rate here means marginal contact, never a flaky chip.
+
+**3. Without a battery, power loss resets the clock to `2000-01-01`** —
+observed directly when the connection dropped mid-run. That's the
+factory epoch, and it's exactly the failure the CR1220 exists to prevent.
+A useful sanity anchor: a DS3231 reading the year 2000 has lost power
+with no working backup.
+
+**Battery backup: ✅ confirmed.** The board was disconnected, physically
+moved, and reconnected ~5 minutes later with the cell installed; the
+oscillator-stop flag was still **clear** on return, proving the
+oscillator never stopped. Note the OSF is the *only* thing that proved
+this — the time readback in that same run had been overwritten by the
+sync step, so it showed a time that had just been written rather than one
+that had survived. `rtc_test.py` now warns when it is about to overwrite
+a chip whose OSF is already clear.
+
+**Production implication:** none of the above is a concern once soldered.
+The chip prefers V<sub>CC</sub> whenever it is healthy, so with a solid
+3.3V feed the battery stays dormant and I²C is always live. The battery
+only takes over when main power is genuinely gone — at which point
+nothing is reading the bus anyway.
+
 ### CR1220 — the backup cell (not included)
 
 `CR1220` is an **IEC designation, not a brand or a regional name**, and it

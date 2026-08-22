@@ -255,6 +255,22 @@ def main():
         print("    since it was last cleared (see WORKFLOW step 1).")
     print()
 
+    if SYNC_DS3231_FROM_BOARD_RTC and not lost_power:
+        # The chip is holding time AND hasn't lost power since it was last
+        # set — i.e. it is currently PASSING the battery-backup test, and
+        # we are about to overwrite the evidence. Caught this happening for
+        # real on 2026-08-22: the flag was left True across a
+        # disconnect-and-pocket test, so the readback showed a correct time
+        # that had just been written rather than one that had survived.
+        # The OSF above was the only thing that actually proved anything.
+        print("  ⚠ ABOUT TO OVERWRITE A CHIP THAT IS KEEPING GOOD TIME.")
+        print("    OSF is clear, so this chip has held time since it was last")
+        print("    set. If you are mid-power-cycle-test, the readback below")
+        print("    will show a time this script just WROTE — which proves")
+        print("    nothing about battery backup. Set")
+        print("    SYNC_DS3231_FROM_BOARD_RTC = False and re-run to actually")
+        print("    test it. (Syncing anyway — this is only a warning.)\n")
+
     if SYNC_DS3231_FROM_BOARD_RTC:
         year, month, day, hour, minute, second, weekday = _board_rtc_datetime()
         if year < 2024 or year > 2099:

@@ -86,8 +86,10 @@ had this reserved before the sensor itself was picked).
 
 ## Wiring — DS3231 RTC (Adafruit #3013)
 
-**Status: ⬜ Proposed** — drafted before wiring, to be confirmed by
-`make run-file FILE=micropython/rtc_test.py` showing `0x68` on the bus.
+**Status: ✅ Verified** — confirmed 2026-08-22: `make rtc-test` finds the
+device at `0x68`, reads and writes time correctly, and battery backup
+holds across a physical disconnect (`docs/hardware.md` § Bring-up log —
+DS3231).
 Part evaluation (voltage, address, size, battery): `docs/hardware.md`
 § DS3231.
 
