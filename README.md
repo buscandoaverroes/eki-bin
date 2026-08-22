@@ -79,8 +79,9 @@ eki-bin/
 │       └── led-status-messages.md ← LED error/acknowledgment vocabulary
 │
 ├── pinouts/                       ← per-board pin assignments (source of truth)
-│   ├── pico2w.md                  ← ✅ verified — V1 wiring + IMU (gesture branch)
-│   └── xiao_esp32c3.md            ← ✅ verified — v1.2 checkpoint passed; IMU not yet wired here
+│   ├── pico2w.md                  ← ✅ verified — V1 wiring + IMU + DS3231
+│   ├── xiao_esp32c3.md            ← ✅ verified — v1.2 checkpoint passed
+│   └── xiao_rp2350.md             ← ✅ verified — LED + IMU + DS3231; the V2 target board
 │
 ├── schedules/
 │   ├── mystation.example.yaml    ← committed sample (copy → mystation.yaml)
@@ -90,6 +91,8 @@ eki-bin/
 ├── scripts/
 │   ├── convert_schedule.py       ← YAML → minutes-since-midnight arrays
 │   ├── select_port.sh            ← USB device picker for `make screen`
+│   ├── flash_firmware.sh         ← board-select MicroPython flashing (all 3 boards)
+│   ├── make_test_schedule.py     ← synthetic multi-line timetable generator
 │   ├── analyze_taps.py           ← gesture capture → tap/position feature analysis
 │   ├── prepare_tap_dataset.py    ← gesture capture → engineered-feature CSV
 │   ├── train_tap_classifier.py   ← hardcoded-threshold vs. classifier comparisons
@@ -105,6 +108,8 @@ eki-bin/
 │   ├── led_sandbox.py            ← colour/animation A-B comparisons + gesture-jolt prototyping
 │   ├── gesture_sandbox.py        ← live gesture recognizer + LED jolt sandbox (real IMU + LEDs)
 │   ├── imu_test.py               ← IMU bring-up: I2C scan, register confirm, accel stream
+│   ├── rtc_test.py               ← DS3231 RTC bring-up + battery-backup proof
+│   ├── i2c_scan.py               ← finds I2C devices without knowing pins/bus first
 │   ├── vibration_sandbox.py      ← position × gesture batch data collection
 │   ├── handling_test.py          ← false-positive-risk data collection (pickup, carry, bump…)
 │   ├── orientation_test.py       ← live gravity-vector / orientation monitor

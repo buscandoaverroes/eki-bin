@@ -1,9 +1,26 @@
 # Seeed XIAO RP2350
 
-**Status: ⬜ Proposed** — cross-referenced against Seeed's own docs
-([OSHW-XIAO-Series/XIAO-RP2350.md](https://github.com/Seeed-Studio/OSHW-XIAO-Series/blob/main/document/SeeedStudio_XIAO_RP2350/XIAO-RP2350.md)),
-not yet confirmed against a physical board. Flip to ✅ once a bring-up
-script actually talks to something over these pins.
+**Status: ✅ Verified** — bench-confirmed 2026-08-22 on real hardware:
+LED strip, LSM6DSV16X IMU, and DS3231 RTC all working, with both I²C
+devices sharing one bus. Pin table originally transcribed from
+[Seeed's docs](https://github.com/Seeed-Studio/OSHW-XIAO-Series/blob/main/document/SeeedStudio_XIAO_RP2350/XIAO-RP2350.md)
+and since exercised in practice.
+
+### Confirmed working values
+
+| Function | Pin | GPIO | Notes |
+|---|---|---|---|
+| WS2812B data | D7 | **1** | `led_test.py DATA_PIN = 1`; all 8 LEDs cycle |
+| I²C SDA | D4 | **6** | shared by IMU + RTC |
+| I²C SCL | D5 | **7** | shared by IMU + RTC |
+| I²C bus ID | — | **1** | ⚠ **not 0** — see below |
+
+Scan with both devices attached shows `0x68` (DS3231) and `0x6B`
+(LSM6DSV16X) together — no address conflict, neither loading the bus.
+
+⚠ **`I2C_ID = 1` is the trap on this board**, and it cost a full
+bring-up session. See the section below; `make i2c-scan` now determines
+it automatically if you ever need to re-derive it.
 
 Parts context: `docs/roadmap.md`. **Same RP2350 silicon as the Pico 2W**
 (`pinouts/pico2w.md`) — different board, no WiFi, XIAO form factor. Not to

@@ -55,8 +55,17 @@ make upload              # runs make test first, then copies main/config/schedul
 
 ```bash
 make led-test            # all LEDs cycle + chase
-make imu-test            # I2C scan → WHO_AM_I → live accel stream
+make i2c-scan            # ← START HERE for anything on I2C
+make imu-test            # IMU: scan → WHO_AM_I → live accel stream
+make rtc-test            # DS3231: scan → time read/write → battery-backup proof
 ```
+
+> **`make i2c-scan` first.** It needs no per-board constants at all — it
+> enumerates the chip's legal pin/ID combinations, reports which devices
+> answered, and prints the exact `I2C_ID` / `SDA_PIN` / `SCL_PIN` values to
+> paste. It exists because pin/ID mismatches cost three separate bring-up
+> sessions on this project. `imu-test`/`rtc-test` then verify a chip actually
+> *works*, which a scanner can't.
 
 > ⚠ **Bring-up scripts are NOT config-driven** — each has its own per-board
 > constants, edited by hand, by design. Every one now **echoes its pins on the

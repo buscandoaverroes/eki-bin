@@ -377,6 +377,17 @@ sync step, so it showed a time that had just been written rather than one
 that had survived. `rtc_test.py` now warns when it is about to overwrite
 a chip whose OSF is already clear.
 
+**Confirmed on a second board (2026-08-22).** Repeated on the XIAO RP2350
+with the **IMU on the same bus**: a scan lists `0x68` and `0x6B` together,
+neither loading the other, and the battery-backup test passed there too
+(OSF clear across a disconnect, counted time matching wall clock). So the
+shared-I²C plan `pinouts/pico2w.md` reserved GP0/GP1 for years ago holds
+in practice, on the board intended for production.
+
+⚠ That board needs **`I2C_ID = 1`**, not 0 — its labeled D4/D5 are
+GP6/GP7, which sit on I²C1. Cost a full session before `make i2c-scan`
+existed to derive it automatically.
+
 **Production implication:** none of the above is a concern once soldered.
 The chip prefers V<sub>CC</sub> whenever it is healthy, so with a solid
 3.3V feed the battery stays dormant and I²C is always live. The battery

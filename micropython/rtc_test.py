@@ -133,9 +133,11 @@ def _explain_i2c_pins(sda, scl, i2c_id):
             out.append(f"      I2C_ID is set to {i2c_id}. Set I2C_ID = {sda_bus}.")
     return out
 
-SYNC_DS3231_FROM_BOARD_RTC = True  # ⚠ see WORKFLOW above — flip to False
-#                                     before the power-cycle test, or a
-#                                     re-run can overwrite good DS3231 data
+SYNC_DS3231_FROM_BOARD_RTC = False  # READ-ONLY by default, deliberately:
+#                                     running this script should never be able
+#                                     to destroy a chip's time. Flip to True
+#                                     only for WORKFLOW step 1 (seeding a new
+#                                     or power-lost chip), then flip back.
 READ_INTERVAL_SECS = 2  # how often to re-print time+temp in the watch loop
 
 # ── DS3231 register map ────────────────────────────────────────────
