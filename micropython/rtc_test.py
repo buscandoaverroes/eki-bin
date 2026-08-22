@@ -1,0 +1,269 @@
+# micropython/rtc_test.py — eki-bin hardware bring-up
+# Smoke test for the DS3231 precision RTC (Adafruit #3013 — see
+# docs/hardware.md § DS3231 for the part evaluation, wiring, and battery
+# notes). Standalone and NOT config-driven: edit SDA_PIN/SCL_PIN below by
+# hand to match the board you're testing, same convention imu_test.py uses.
+#
+# Wiring (see docs/hardware.md and pinouts/pico2w.md):
+#   Pico 2W:  3V3(pin36)→VIN   GND(pin38)→GND   GP0(pin1)→SDA   GP1(pin2)→SCL
+#   ⚠ VIN, not VBUS/5V — this breakout's I2C pull-ups tie to VIN, so 5V
+#   power puts 5V on SDA/SCL into GPIOs that aren't 5V-tolerant. See the
+#   pinout doc for why this is a different failure mode than the IMU's
+#   "chip isn't 5V-rated" — the DS3231 chip itself would survive 5V; the
+#   Pico wouldn't.
+#
+# Shares I2C0 with the IMU (0x68 vs. 0x6A/0x6B — no address conflict, and a
+# scan below should list BOTH if both are wired). This script only talks
+# to the RTC; see imu_test.py for the IMU.
+#
+# Run without flashing:   make rtc-test               (runs this file)
+#          any file:      make run-file FILE=<path>
+#
+# ══ THE ACTUAL POINT OF THIS TEST ═══════════════════════════════════════
+# A DS3231 is bought for exactly one property: it keeps correct time across
+# a power cycle, on its CR1220, when nothing else on the board can. Proving
+# that needs two runs with a power cycle in between — see WORKFLOW below.
+# Confirming "it responds on I2C" alone (which this script also does) is
+# necessary but proves nothing about the actual reason it was bought.
+#
+# ══ WORKFLOW ═════════════════════════════════════════════════════════════
+#   1. First-ever run: leave SYNC_DS3231_FROM_BOARD_RTC = True (below).
+#      `make set-time` first (sets the BOARD's own volatile RTC from this
+#      Mac's clock — the existing mechanism, docs/provisioning-runbook.md),
+#      THEN run this script — it copies that into the DS3231 and clears the
+#      oscillator-stop flag (see OSF below).
+#   2. Flip SYNC_DS3231_FROM_BOARD_RTC to False. This matters: the board's
+#      OWN RTC (machine.RTC on RP2350) does NOT survive power loss — there
+#      is no VBAT domain on the Pico — so leaving sync on and re-running
+#      after a power cycle would overwrite the DS3231 with garbage and
+#      destroy the exact thing being tested. A sanity check below guards
+#      against this (refuses to sync from an implausible year), but don't
+#      rely on it — flip the flag.
+#   3. Power-cycle the board (unplug/replug, or the physical reset — NOT
+#      Ctrl+D soft reset, which doesn't drop power and proves nothing).
+#   4. Re-run. If the time printed is correct (or has correctly advanced by
+#      roughly the time you were unplugged), the DS3231 + battery are
+#      doing their job. If OSF reports lost power, they aren't — check the
+#      CR1220 is actually seated and oriented + polarity right.
+#
+# ══ WHO_AM_I: this chip doesn't have one ════════════════════════════════
+# Unlike the LSM6DSV16X (imu_test.py checks WHO_AM_I=0x70), the DS3231 has
+# no device-ID register. Seeing 0x68 on the bus is WEAKER confirmation than
+# imu_test.py's check — 0x68 is also a common address for other chips (the
+# MPU6050, notably — an early, since-abandoned placeholder in this
+# project's own pinout history). The best available check here is that the
+# time registers round-trip and stay in plausible ranges, which main()
+# does below, but this is not a real identity check the way WHO_AM_I is.
+#
+# ══ TIME_SOURCE naming note, for the eventual main.py integration ══════
+# `main.py` already has TIME_SOURCE="rtc", meaning the board's OWN
+# non-persistent clock (set via `make set-time` each session — see
+# docs/insights.md §11). That name is taken and means something disjoint
+# from this part. The DS3231 integration should be its own value —
+# TIME_SOURCE="ds3231" — not a redefinition of "rtc". Not done in this
+# script; flagged here so it isn't picked inconsistently later.
+
+import time
+
+from machine import I2C, Pin, RTC
+
+# ── Configuration ────────────────────────────────────────────────
+SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0); see header
+SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1); see header
+I2C_ID = 0   # Pico 2W: GP0/GP1 IS I2C0 — fixed by RP2350 silicon, not a
+#              choice. Same bus the IMU is on (pinouts/pico2w.md).
+
+SYNC_DS3231_FROM_BOARD_RTC = True  # ⚠ see WORKFLOW above — flip to False
+#                                     before the power-cycle test, or a
+#                                     re-run can overwrite good DS3231 data
+READ_INTERVAL_SECS = 2  # how often to re-print time+temp in the watch loop
+
+# ── DS3231 register map ────────────────────────────────────────────
+# Verified against Maxim/Analog Devices' DS3231 datasheet register table,
+# not guessed — same "cite the primary source" standard imu_test.py set.
+DS3231_ADDR = 0x68  # fixed in silicon — no SA0-style address pin on this chip
+REG_SECONDS = 0x00   # 7 consecutive regs from here: sec,min,hour,dow,date,mon,yr
+REG_STATUS = 0x0F    # bit7 = OSF (oscillator stop flag) — see below
+REG_TEMP_MSB = 0x11  # onboard temp sensor, used internally for oscillator
+REG_TEMP_LSB = 0x12  #   compensation; exposed here as a free plausibility check
+OSF_BIT = 0x80
+
+# ── BCD ⇄ decimal ────────────────────────────────────────────────
+# The DS3231 stores every time field as packed BCD (two 4-bit decimal
+# digits per byte), NOT binary — a register holding 0x25 means the decimal
+# digits "2" and "5", i.e. 25, not 37. Getting this backwards is the
+# classic DS3231 bring-up bug: the clock ticks and LOOKS alive, it just
+# shows nonsense. Every read/write below goes through these two functions
+# on purpose, rather than raw ints, so this can't be gotten wrong twice.
+
+
+def _bcd_to_dec(b):
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def _dec_to_bcd(d):
+    return ((d // 10) << 4) | (d % 10)
+
+
+def _read_datetime(i2c, addr):
+    """Returns (year, month, day, hour, minute, second, weekday). Always
+    reads back in 24-hour terms regardless of how the register is
+    configured, since _write_datetime always WRITES 24-hour mode — so this
+    script never has to carry the 12-hour/AM-PM branch through main()."""
+    data = i2c.readfrom_mem(addr, REG_SECONDS, 7)
+    second = _bcd_to_dec(data[0] & 0x7F)
+    minute = _bcd_to_dec(data[1] & 0x7F)
+    hour_reg = data[2]
+    if hour_reg & 0x40:  # 12-hour mode (bit6 set) — not what this script
+        #                   writes, but a factory-fresh or hand-set chip
+        #                   could still be in it, so handle it on READ.
+        hour = _bcd_to_dec(hour_reg & 0x1F)
+        is_pm = bool(hour_reg & 0x20)
+        if is_pm and hour != 12:
+            hour += 12
+        if not is_pm and hour == 12:
+            hour = 0
+    else:
+        hour = _bcd_to_dec(hour_reg & 0x3F)
+    weekday = data[3] & 0x07  # 1-7. Chip-arbitrary — see _write_datetime.
+    day = _bcd_to_dec(data[4] & 0x3F)
+    month_reg = data[5]
+    month = _bcd_to_dec(month_reg & 0x1F)
+    century = bool(month_reg & 0x80)
+    year = _bcd_to_dec(data[6]) + (2100 if century else 2000)
+    return (year, month, day, hour, minute, second, weekday)
+
+
+def _write_datetime(i2c, addr, year, month, day, hour, minute, second, weekday):
+    """Always writes 24-hour mode (hour register bit6=0) — one mode in,
+    _read_datetime's branch on the way out is a read-time compatibility
+    concern, not something this script's own writes ever produce.
+
+    `weekday` (1-7): the DS3231 attaches no meaning to this beyond "a
+    number 1-7, be consistent" — it isn't Sunday=1 or Monday=1 by
+    hardware convention, and this project's own date math
+    (main.py's local_time()) derives weekday from time.localtime()
+    independently, never from this register. Correctness here is about
+    staying in 1-7, not about which day means what."""
+    century_bit = 0x80 if year >= 2100 else 0x00
+    yy = year % 100
+    data = bytes([
+        _dec_to_bcd(second) & 0x7F,
+        _dec_to_bcd(minute) & 0x7F,
+        _dec_to_bcd(hour) & 0x3F,
+        ((weekday - 1) % 7) + 1,  # clamp to a valid 1-7 regardless of caller
+        _dec_to_bcd(day) & 0x3F,
+        (_dec_to_bcd(month) & 0x1F) | century_bit,
+        _dec_to_bcd(yy),
+    ])
+    i2c.writeto_mem(addr, REG_SECONDS, data)
+
+
+# ── Oscillator Stop Flag — the actual "did it survive" answer ──────
+def _osc_stopped(i2c, addr):
+    """True if the chip is reporting (or has ever reported since last
+    cleared) that its oscillator stopped — i.e. power AND the battery both
+    failed to keep it running at some point. This is the real diagnostic
+    the whole WORKFLOW above exists to exercise; a correct-looking time
+    after a power cycle is good evidence, this flag is the chip's own
+    direct claim about it. Set on first power-up out of the factory too,
+    which is expected and not a fault — that's exactly what step 1 of
+    WORKFLOW clears."""
+    return bool(i2c.readfrom_mem(addr, REG_STATUS, 1)[0] & OSF_BIT)
+
+
+def _clear_osc_stopped(i2c, addr):
+    status = i2c.readfrom_mem(addr, REG_STATUS, 1)[0]
+    i2c.writeto_mem(addr, REG_STATUS, bytes([status & ~OSF_BIT & 0xFF]))
+
+
+def _read_temp_c(i2c, addr):
+    """The DS3231's OWN onboard temp sensor — it uses this internally to
+    retune its oscillator every 64s, which is most of why it's more
+    accurate than a plain crystal. Exposed here mainly as a cheap
+    plausibility check: a wildly implausible reading (not a calibration
+    error, but e.g. -85 or +125, the "not connected" extremes) suggests
+    something is wrong with the bus read, not the room temperature."""
+    msb = i2c.readfrom_mem(addr, REG_TEMP_MSB, 1)[0]
+    lsb = i2c.readfrom_mem(addr, REG_TEMP_LSB, 1)[0]
+    whole = msb - 256 if msb > 127 else msb  # signed 8-bit integer part
+    frac = (lsb >> 6) * 0.25  # top 2 bits of LSB = quarter-degree steps
+    return whole + frac
+
+
+def _board_rtc_datetime():
+    """The board's OWN volatile RTC (set via `make set-time`), reshaped
+    from machine.RTC's field order into this script's — these are NOT the
+    same order and swapping them silently writes a corrupt but
+    plausible-looking date, so this conversion is centralized here rather
+    than inlined at the call site. RP2 port: (year, month, day, weekday,
+    hours, minutes, seconds, subseconds)."""
+    year, month, day, weekday, hour, minute, second, _ = RTC().datetime()
+    return (year, month, day, hour, minute, second, weekday)
+
+
+def main():
+    print("\n══ eki-bin RTC test (DS3231) ═════════════════════")
+    print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
+    i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+
+    found = i2c.scan()
+    print("  I2C scan:", [hex(a) for a in found])
+    if DS3231_ADDR not in found:
+        print(f"  ✗ No device at {hex(DS3231_ADDR)}.")
+        print("    1. Is this really wired to I2C0 (GP0/GP1) on THIS board?")
+        print("    2. VIN → 3V3 (pin 36), NOT VBUS/5V — see this file's header.")
+        print("    3. GND, SDA, SCL — and if the IMU is also on this bus,")
+        print(f"       does IT show up (0x6A/0x6B)? If neither does, suspect")
+        print("       the shared GND/bus wiring before either part individually.")
+        return
+    if 0x6A in found or 0x6B in found:
+        print("  (IMU also present on the bus — expected, no conflict)")
+    print(f"  ✓ device found at {hex(DS3231_ADDR)}  (no WHO_AM_I on this chip —")
+    print("    see this file's header on why that's weaker than imu_test.py's check)")
+
+    lost_power = _osc_stopped(i2c, DS3231_ADDR)
+    print()
+    if lost_power:
+        print("  ⚠ OSCILLATOR STOP FLAG IS SET — this chip is reporting it lost")
+        print("    power (mains AND battery) at some point. Expected on a")
+        print("    first-ever run (factory state); NOT expected if you just")
+        print("    power-cycled to test battery backup — that's a battery")
+        print("    problem (seated? oriented +/- correctly? actually a CR1220?")
+        print("    see docs/hardware.md § DS3231).")
+    else:
+        print("  ✓ Oscillator stop flag clear — this chip has run continuously")
+        print("    since it was last cleared (see WORKFLOW step 1).")
+    print()
+
+    if SYNC_DS3231_FROM_BOARD_RTC:
+        year, month, day, hour, minute, second, weekday = _board_rtc_datetime()
+        if year < 2024 or year > 2099:
+            print(f"  ⚠ Board RTC reads an implausible year ({year}) — refusing to")
+            print("    sync. Run `make set-time` first, or you're mid-WORKFLOW-step-3")
+            print("    and SYNC_DS3231_FROM_BOARD_RTC should be False right now.")
+            print("    Falling through to read-only — showing the DS3231's EXISTING time:\n")
+        else:
+            _write_datetime(i2c, DS3231_ADDR, year, month, day, hour, minute, second, weekday)
+            _clear_osc_stopped(i2c, DS3231_ADDR)
+            print(f"  ✓ DS3231 set from board RTC: {year:04d}-{month:02d}-{day:02d} "
+                  f"{hour:02d}:{minute:02d}:{second:02d}, OSF cleared")
+            print("    Flip SYNC_DS3231_FROM_BOARD_RTC = False before the power-cycle")
+            print("    test — see this file's header.\n")
+
+    print(f"  Reading back every {READ_INTERVAL_SECS}s — confirms it's actually")
+    print("  ticking, not stuck. Ctrl+C to stop.\n")
+    try:
+        while True:
+            year, month, day, hour, minute, second, weekday = _read_datetime(i2c, DS3231_ADDR)
+            temp = _read_temp_c(i2c, DS3231_ADDR)
+            print(f"  {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+                  f"  (weekday={weekday})   {temp:5.2f}°C")
+            time.sleep(READ_INTERVAL_SECS)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n  bye — the DS3231 keeps ticking on its own regardless (that's the point)")
+
+
+main()

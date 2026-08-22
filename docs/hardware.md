@@ -235,7 +235,12 @@ tag reads fine — another reason cork is the chosen first closure.
 
 ---
 
-## DS3231 RTC — candidate part evaluated (2026-08-18, nothing bought)
+## DS3231 RTC — in hand, on the breadboard (evaluated 2026-08-18, bought + wired 2026-08-20)
+
+Bring-up: `micropython/rtc_test.py` (`make rtc-test`). Pinout:
+`pinouts/pico2w.md` § DS3231. Evaluation below (part choice, voltage,
+battery) stands as written — nothing in it changed by actually buying the
+part; only its status did.
 
 **Candidate:** Adafruit **DS3231 Precision RTC Breakout**, product
 [#3013](https://www.adafruit.com/product/3013). Specs below verified
@@ -335,6 +340,33 @@ ever need to bridge the two.
 **Pull-ups compound down a chain:** each QT board brings its own. Two 10K
 sets → 5K, three → 3.3K, four → 2.5K. Fine at two or three, over-driven by
 four or five; many boards have a solder jumper to cut theirs.
+
+### CR1220 — the backup cell (not included)
+
+`CR1220` is an **IEC designation, not a brand or a regional name**, and it
+encodes the dimensions: **12mm diameter × 2.0mm height**, 3V lithium. The
+same code is used in Japan — no translation needed when ordering.
+
+⚠ **Neighbouring sizes fit the holder badly or not at all**, and the naming
+makes them easy to confuse:
+
+| Code | Size | Note |
+|---|---|---|
+| **CR1220** | 12 × 2.0mm | ✅ what this board takes |
+| CR1225 | 12 × 2.5mm | Same diameter, 0.5mm taller — may not seat |
+| CR2032 | 20 × 3.2mm | The ubiquitous one. **Will not fit** — nearly twice the diameter |
+
+**Sourcing in Japan is easy** — Panasonic, Maxell and Sony all make them
+domestically. Home centres, Don Quijote, and electronics shops
+(秋月電子通商, 千石電商) all carry them; 100-yen shops sometimes do.
+Search terms: `CR1220 リチウム電池`, `コイン電池 CR1220`, or
+`ボタン電池 CR1220` — both コイン電池 and ボタン電池 are used for this class.
+
+**Expected life:** the DS3231 draws roughly 0.84µA on battery while
+timekeeping, against a CR1220's ~35-40mAh. That's several years of pure
+arithmetic; self-discharge, not the load, becomes the limit. Call it 3-5
+years, i.e. replace it when the jar starts showing the wrong time, not on
+a schedule.
 
 **BOM note that cuts in the DS3231's favour:** the SRAM pressure driving
 the XIAO-C3 → S3/C6 upgrade (`docs/insights.md` §11) exists *because of

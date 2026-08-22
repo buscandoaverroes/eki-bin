@@ -84,6 +84,52 @@ had this reserved before the sensor itself was picked).
 
 `imu_test.py`'s constants: `SDA_PIN = 0`, `SCL_PIN = 1`, `I2C_ID = 0`.
 
+## Wiring — DS3231 RTC (Adafruit #3013)
+
+**Status: ⬜ Proposed** — drafted before wiring, to be confirmed by
+`make run-file FILE=micropython/rtc_test.py` showing `0x68` on the bus.
+Part evaluation (voltage, address, size, battery): `docs/hardware.md`
+§ DS3231.
+
+Four wires. `GP0`/`GP1` is I²C0 — **the same bus the IMU already uses**,
+which is correct and intended: I²C is a bus, and the DS3231's address
+(`0x68`) doesn't collide with the LSM6DSV16X's (`0x6A`/`0x6B`). A scan
+with both attached should list **both** addresses, which is itself a
+useful confirmation that neither is loading the bus.
+
+| Pico 2W | Physical pin | GPIO | → | DS3231 |
+|---|---|---|---|---|
+| **3V3(OUT)** | **36** | — | → | **VIN** ⚠ see below |
+| GND | 38 | — | → | GND |
+| GP0 | 1 | `0` | → | SDA |
+| GP1 | 2 | `1` | → | SCL |
+
+### ⚠ 3V3 only — NOT 5V, and not for the usual reason
+
+The DS3231 chip itself runs on 2.3–5.5V, so 5V looks harmless. It isn't:
+**this breakout's SCL and SDA carry 10K pull-ups tied to VIN.** Power it
+from VBUS and those pull-ups hold the I²C lines at 5V — into RP2350 GPIOs
+that are **not 5V-tolerant**. That damages the Pico rather than merely
+failing to work.
+
+Same rule as the IMU (`pin 36, never pin 40`), but note the reasoning
+differs: the LSM6DSV16X is simply not 5V-rated, whereas the DS3231 would
+*survive* 5V and take the microcontroller with it.
+
+### Unused pins on the breakout
+
+| Pin | Why it's unused here |
+|---|---|
+| `SQW` | Square-wave / alarm interrupt output. Not needed to read time. Worth remembering if the display ever wants an interrupt-driven wake instead of polling. |
+| `32K` | 32.768kHz reference output — for clocking other hardware. Nothing here needs it. |
+| `RST` | Reset / power-fail indicator. Not needed. |
+
+### Battery
+
+**CR1220**, and it is **not included** with the breakout — see
+`docs/hardware.md` § DS3231. Without it the RTC loses time on every power
+cycle, which is precisely the problem it was bought to solve.
+
 ## Wiring — IMU + LED together (combined breadboard build)
 
 Both wired simultaneously on this board for full IMU + LED testing (see
