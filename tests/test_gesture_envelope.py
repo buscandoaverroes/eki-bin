@@ -573,3 +573,43 @@ def test_schedule_lines_missing_period_is_absent_not_empty(load_main):
     m = load_main()
     lines = m.schedule_lines({"station": "s", "weekday": {"a": [300]}})
     assert "weekend" not in lines[0]
+
+
+# ── memory instrumentation — insights.md §11 ─────────────────────
+
+
+def test_mem_checkpoint_is_noop_when_disabled(load_main):
+    # Must cost nothing in production, and must not itself allocate the
+    # thing it measures.
+    m = load_main()
+    assert m.MEM_DEBUG_ENABLED is False
+    m._mem_marks.clear()
+    m._mem_checkpoint("x")
+    assert m._mem_marks == []
+
+
+def test_mem_checkpoint_records_when_enabled(load_main):
+    m = load_main(MEM_DEBUG_ENABLED=True)
+    m._mem_marks.clear()
+    m._mem_checkpoint("after import")
+    m._mem_checkpoint("after schedule load")
+    assert [label for label, _f, _a in m._mem_marks] == [
+        "after import", "after schedule load"]
+    assert all(isinstance(f, int) and isinstance(a, int)
+               for _l, f, a in m._mem_marks)
+
+
+def test_mem_report_survives_empty_and_prints_deltas(load_main, capsys):
+    m = load_main(MEM_DEBUG_ENABLED=True)
+    m._mem_marks.clear()
+    m._mem_report()                      # nothing recorded — must not raise
+    assert capsys.readouterr().out == ""
+
+    # Deltas are free-vs-previous; a step that CONSUMES memory must read
+    # negative, which is the direction that makes the table legible.
+    m._mem_marks.extend([("after import", 400_000, 100_000),
+                         ("after schedule load", 360_000, 140_000)])
+    m._mem_report()
+    out = capsys.readouterr().out
+    assert "after import" in out and "after schedule load" in out
+    assert "-40000" in out.replace(",", "")

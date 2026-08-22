@@ -270,6 +270,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # NO_DATA_COLOR = (200, 160, 0)     # gold — woke up to nothing catchable
 # NO_DATA_DURATION_MS = 2500
 
+# ── Memory instrumentation — docs/insights.md §11 ─────────────────
+# Prints a checkpoint table at boot showing what each stage COST, e.g.:
+#     after import           free  402112  alloc  118656
+#     after time source      free  399984  alloc  120784   (-2128)
+#     after schedule load    free  359776  alloc  160992   (-40208)
+#     entering loop          free  357440  alloc  163328   (-2336)
+# Deltas, not totals — "what did this step cost" is the answerable
+# question. On ESP32 it also prints the ESP-IDF heap, which is a SEPARATE
+# pool from the GC heap above and the one esp_wifi actually allocates
+# from; confusing the two is what made the C3 investigation take days.
+# ⚠ Samples after each step, so it shows RESIDENT cost, not transient
+# peak — it would show the aftermath of a compile-time spike, not the
+# spike. Off by default; costs one boolean test when off.
+# MEM_DEBUG_ENABLED = False
+
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 # ⚠ A dark strip during quiet hours is INDISTINGUISHABLE from a fault. Set
 # 24 / 0 to disable while testing; the loop prints "(quiet hours — display

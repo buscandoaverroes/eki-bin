@@ -20,6 +20,17 @@ MICROPYTHON_DIR = os.path.join(os.path.dirname(__file__), "..", "micropython")
 
 def _install_device_fakes():
     """Stand-ins for the MicroPython-only modules main.py imports."""
+    # gc.mem_free/mem_alloc are MicroPython-only additions to the stdlib gc
+    # module — CPython has neither. main.py's memory instrumentation
+    # (docs/insights.md §11) calls them, so add them here rather than making
+    # production code defend against being run on a host it never runs on.
+    # Fixed values: these exist so the plumbing is exercisable, not to
+    # simulate real allocation — tests that care about deltas inject their
+    # own marks.
+    import gc as _gc
+    if not hasattr(_gc, "mem_free"):
+        _gc.mem_free = lambda: 400_000
+        _gc.mem_alloc = lambda: 100_000
     for name in ("network", "ntptime"):
         sys.modules[name] = types.ModuleType(name)
 
