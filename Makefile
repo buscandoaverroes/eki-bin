@@ -7,6 +7,7 @@
 #   make schedule          — convert schedules/*.yaml → minutes arrays
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
+#   make i2c-scan          — find I2C devices without knowing pins/bus first
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
@@ -116,6 +117,15 @@ upload-file: _check-mpremote
 .PHONY: led-test
 led-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/led_test.py
+
+# Board-agnostic I2C discovery: finds devices WITHOUT being told which pins
+# or bus ID to use. On RP2 boards this needs no configuration at all — it
+# enumerates the chip's legal pin/ID combinations and reports the config
+# values to paste. Start here when a device doesn't show up; imu-test and
+# rtc-test verify a chip WORKS, this one finds whether it's there at all.
+.PHONY: i2c-scan
+i2c-scan: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/i2c_scan.py
 
 # Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
 .PHONY: imu-test
