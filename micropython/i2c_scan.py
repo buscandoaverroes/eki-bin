@@ -46,9 +46,9 @@ from machine import I2C, Pin
 # ── Optional manual override ─────────────────────────────────────
 # Leave as None for auto/curated behaviour. Set to force one combination —
 # useful on ESP32, or to reproduce a specific failing config.
-FORCE_I2C_ID = None
-FORCE_SDA = None
-FORCE_SCL = None
+FORCE_I2C_ID = 1
+FORCE_SDA = 6
+FORCE_SCL = 7
 
 I2C_FREQ = 400000
 
@@ -121,10 +121,15 @@ def _describe(i2c, addr):
         return "unknown device"
     names, id_reg, expected = _KNOWN[addr]
     if id_reg is not None:
-        try:
-            got = i2c.readfrom_mem(addr, id_reg, 1)[0]
-        except OSError:
-            return "%s?  (ID register unreadable)" % " / ".join(names)
+        got = None
+        for _attempt in range(2):
+            try:
+                got = i2c.readfrom_mem(addr, id_reg, 1)[0]
+                break
+            except OSError:
+                time.sleep_ms(20)
+        if got is None:
+            return "%s?  (ID register unreadable — see settle note in main())" % " / ".join(names)
         if expected is not None and got == expected:
             return "%s  ✓ confirmed (ID reg 0x%02X = 0x%02X)" % (names[0], id_reg, got)
         return "%s?  (ID reg 0x%02X = 0x%02X)" % (" / ".join(names), id_reg, got)
@@ -191,9 +196,20 @@ def main():
         hits.append((i2c_id, sda, scl, addrs))
 
     # ── Identify, on a clean bus ──────────────────────────────────
+    if hits and not FORCE_I2C_ID:
+        # ⚠ Settle before reading registers. CONFIRMED CAUSE (2026-08-22),
+        # not a precaution: the sweep drives every candidate pin, and on this
+        # project's board GP1 is the WS2812B data line — so sweeping flashes
+        # the strip, and the current draw sags the rail enough to break the
+        # very next register read. The device still ACKs its address (the
+        # scan succeeds); only the multi-byte transfer fails, which is why it
+        # looked like a bus-state bug rather than a power one.
+        # Proven by FORCE_* mode, which skips the sweep and reads cleanly.
+        time.sleep_ms(250)
+
     for i2c_id, sda, scl, addrs in hits:
         i2c = I2C(i2c_id, scl=Pin(scl), sda=Pin(sda), freq=I2C_FREQ)
-        time.sleep_ms(5)  # let the peripheral settle before register reads
+        time.sleep_ms(5)
         print("  I2C%d  SDA=GP%-2d  SCL=GP%-2d" % (i2c_id, sda, scl))
         for addr in addrs:
             print("    0x%02X  %s" % (addr, _describe(i2c, addr)))
