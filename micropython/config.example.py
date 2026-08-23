@@ -45,7 +45,15 @@
 # Physical wiring for each: pinouts/<board>.md — that directory is the
 # source of truth for what's connected where; this file just mirrors it.
 
-LED_PIN = 6  # GPIO driving the WS2812B data line
+LED_PIN = 6  # GPIO driving the WS2812B data line.
+#              ⚠ GETTING THIS WRONG IS A POWER FAULT, NOT A DISPLAY BUG.
+#              An unaddressed WS2812B strip holds whatever state it powered
+#              up in — potentially full white, ≈480mA for 8 LEDs — and
+#              BRIGHTNESS cannot help, because it's a property of data you
+#              aren't sending. On 2026-08-23 a wrong LED_PIN browned the
+#              board out, corrupted the filesystem mid-write, and presented
+#              as dead hardware for a morning. Check pinouts/<board>.md
+#              BEFORE connecting a strip. See docs/insights.md §13.
 NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21; 4020 tape = 120
 HEARTBEAT_PIN = "LED"  # status LED. "LED" is a **Pico-2W-only** alias (routed
 #                        through the CYW43 WiFi chip). On ANY other board it

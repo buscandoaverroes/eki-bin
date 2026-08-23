@@ -874,20 +874,56 @@ once on the device it auto-runs and competes with `mpremote` for the serial
 link — a separate failure (`could not complete raw paste: b'\x01'`) that
 truncated `config.py` and muddied this diagnosis considerably.
 
-### The underlying power fault
+### The underlying power fault — ✅ RESOLVED, and it was a config typo
 
-The trigger deserves its own line, because it recurred: an 8-LED WS2812B
-strip on the XIAO's 5V pin **stopped the board enumerating and blocked
-BOOTSEL entirely**. Disconnecting the strip restored both, immediately, on
-two separate occasions. Note a WS2812B strip latches its last state and
-keeps drawing current with no data arriving, so "idle" is not zero load.
+The trigger recurred: an 8-LED WS2812B strip on the XIAO's 5V pin **stopped
+the board enumerating and blocked BOOTSEL entirely**, twice. Disconnecting
+it restored both immediately.
 
-Eight LEDs should not be able to do this — `hardware.md` records 120 running
-fine off USB at `BRIGHTNESS = 0.15`. That discrepancy is **unresolved** and
-worth a bench session before anything gets soldered permanently: either the
-strip is being driven far brighter than configured, or there's a partial
-short in the strip wiring. Disconnecting the strip is a workaround, not an
-explanation.
+Eight LEDs should not be able to do that — `hardware.md` records 120 running
+fine off USB at `BRIGHTNESS = 0.15`. **The resolution is that `BRIGHTNESS`
+was never reaching them.** `config.py` had `LED_PIN = 3` while the strip was
+wired to GPIO1, so nothing ever addressed it — and an unaddressed WS2812B
+holds whatever state it powered up in, which here was near full white.
+Eight at full white is ≈480mA off VBUS. `hardware.md`'s 120-LED figure
+doesn't contradict this because that measurement had data arriving.
+
+Confirmed on the bench 2026-08-23: the strip lit blazing the instant it was
+connected with nothing driving it, then ran a full `make led-test` cycle —
+`fill WHITE` included — with no brownout at all once addressed at 15%.
+
+### ⚠ A wrong `LED_PIN` is a POWER fault, not a display bug
+
+This is the part worth carrying forward, because the failure is wildly
+disproportionate to its cause and nothing in the symptom points at config:
+
+```
+one wrong digit in LED_PIN
+  → strip never addressed
+  → holds power-up state (potentially full white, ~480mA)
+  → board browns out
+  → brownout lands during an mpremote write
+  → littlefs corrupted
+  → MicroPython hangs in _boot.py before USB CDC
+  → board presents as DEAD HARDWARE, survives every reflash
+```
+
+A one-character config error consumed a morning and looked like a destroyed
+board at every step. **`BRIGHTNESS` cannot protect you here** — it is a
+property of data you are not sending. The strip's idle draw is set by
+whatever it powered up holding, and it will happily sit there at maximum.
+
+Practical rules:
+
+- **Verify `LED_PIN` against `pinouts/<board>.md` before connecting a strip**,
+  not after. `make led-test` (which carries its own `DATA_PIN`) is the cheap
+  confirmation that the wiring works, independent of `config.py`.
+- **Bring a strip up under `mpremote run`, never during `make upload`.**
+  `make led-test` / `make run-file` execute from RAM and touch no files, so
+  a brownout costs you a reset. The same brownout during a write costs you
+  the filesystem.
+- **A strip lighting up before any code runs is a warning**, not a nice sign
+  that the wiring works.
 
 ### Rule of thumb
 
