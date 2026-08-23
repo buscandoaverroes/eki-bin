@@ -812,3 +812,86 @@ Implications for the line palette:
 - **An IMU simply resting inside the bottle, unfastened, detects taps fine**
   for testing, and stays removable. Rigid mounting can wait for the
   permanent build; it is not a prerequisite for gesture iteration.
+
+---
+
+## 13. A corrupt filesystem can make a board look physically dead (2026-08-23)
+
+Cost most of a morning. The symptom was as severe as hardware failure gets:
+`mpremote`, `screen` and Thonny all failed to open a session, macOS showed
+**no `/dev/cu.usbmodem*`, no node in the USB tree, and no BOOTSEL device**,
+and the onboard LED sat dim instead of bright. Two cables and two ports
+behaved identically. Everything pointed at a damaged board.
+
+The board was fine. So were both cables and both ports.
+
+### The chain
+
+1. An LED strip on the 5V pin loaded the rail hard enough to brown out the
+   MCU **during a file write** (`mpremote cp`). That first event is a
+   separate, genuine power fault — see the LED-strip note below.
+2. The brownout left the **littlefs filesystem corrupt**, mid-write.
+3. On the next boot MicroPython hung in `_boot.py` **mounting** that
+   filesystem — which happens *before* USB CDC is brought up. No enumeration
+   ever occurred, so the host saw nothing at all.
+4. **Reflashing the firmware did not fix it.** Firmware and filesystem live
+   in separate flash regions and `picotool load` only writes the former, so
+   the corrupt filesystem survived every reflash intact.
+5. `picotool erase -a` followed by a reflash fixed it immediately.
+
+### Why this is worth writing down
+
+The failure impersonates dead hardware almost perfectly, and the two obvious
+recovery moves both fail in ways that *reinforce* the wrong diagnosis:
+reflashing appears to succeed and changes nothing, and swapping cables and
+ports changes nothing either. Each innocent result pushes you further toward
+"the board is damaged."
+
+**The discriminating test is BOOTSEL.** It runs from mask ROM and cannot be
+affected by anything in flash. So:
+
+| BOOTSEL enumerates? | Meaning |
+|---|---|
+| **No** | Genuinely physical — cable, port, connector, or board |
+| **Yes**, but MicroPython doesn't | Flash contents. The hardware is fine. |
+
+The second row was the case here, and it inverts the conclusion completely.
+Note the ordering trap: BOOTSEL working feels like reassurance, so it's
+tempting to read it as "board is fine, must be something else" and keep
+chasing physical causes. It is not reassurance — **it is the positive result
+that rules the physical layer out.**
+
+### What changed
+
+`make flash-micropython BOARD=... WIPE=1` now erases all of flash before
+loading (`scripts/flash_firmware.sh`). Opt-in, because it also destroys the
+on-board `config.py`. Reach for it the moment a board is unreachable over
+serial *and* BOOTSEL works — that combination is this bug until proven
+otherwise, and a plain reflash will never clear it.
+
+Also: `make upload` now writes `main.py` **last**. It's the boot script, so
+once on the device it auto-runs and competes with `mpremote` for the serial
+link — a separate failure (`could not complete raw paste: b'\x01'`) that
+truncated `config.py` and muddied this diagnosis considerably.
+
+### The underlying power fault
+
+The trigger deserves its own line, because it recurred: an 8-LED WS2812B
+strip on the XIAO's 5V pin **stopped the board enumerating and blocked
+BOOTSEL entirely**. Disconnecting the strip restored both, immediately, on
+two separate occasions. Note a WS2812B strip latches its last state and
+keeps drawing current with no data arriving, so "idle" is not zero load.
+
+Eight LEDs should not be able to do this — `hardware.md` records 120 running
+fine off USB at `BRIGHTNESS = 0.15`. That discrepancy is **unresolved** and
+worth a bench session before anything gets soldered permanently: either the
+strip is being driven far brighter than configured, or there's a partial
+short in the strip wiring. Disconnecting the strip is a workaround, not an
+explanation.
+
+### Rule of thumb
+
+Brownouts don't only interrupt the write in progress — they can leave
+persistent state that outlives the power event, the reflash, and every
+cable you try next. When a board goes unreachable during a write, suspect
+the filesystem before the silicon.

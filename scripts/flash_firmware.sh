@@ -126,12 +126,17 @@ picotool)
     # WIPE=1 erases ALL of flash before loading.
     #
     # Loading a .uf2 does NOT touch the MicroPython filesystem — firmware and
-    # filesystem live in separate flash regions. So a main.py that blocks the
-    # REPL SURVIVES A REFLASH and keeps the board unreachable over serial,
-    # which reads as a dead board rather than a stuck script. That cost a
-    # session on 2026-08-23: mpremote, screen and Thonny all failed to get a
-    # session, and reflashing MicroPython changed nothing because the
-    # offending main.py was never removed. This is the escape hatch.
+    # filesystem live in separate flash regions. That matters far more than
+    # it sounds, because a filesystem CORRUPTED BY A BROWNOUT MID-WRITE makes
+    # MicroPython hang in _boot.py while mounting it — before USB CDC comes
+    # up. The host then sees no serial device, no USB node, nothing, and the
+    # board impersonates dead hardware. Reflashing "succeeds" and changes
+    # nothing, because the corrupt filesystem survives it intact.
+    #
+    # THE DISCRIMINATING TEST IS BOOTSEL: it runs from mask ROM and cannot be
+    # affected by flash contents. BOOTSEL working while MicroPython does not
+    # enumerate means the hardware is FINE and the flash is the problem —
+    # which is the moment to reach for WIPE=1. Full account: insights.md §13.
     #
     # Opt-in rather than default, because it also destroys the on-board
     # config.py — gitignored, hand-entered, holding WiFi credentials.
