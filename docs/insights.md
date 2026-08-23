@@ -925,6 +925,39 @@ Practical rules:
 - **A strip lighting up before any code runs is a warning**, not a nice sign
   that the wiring works.
 
+### A second presentation: enumerates, but never answers (2026-08-23)
+
+The same corruption recurred with a **different symptom**, worth knowing so
+it isn't mistaken for something else:
+
+| | first occurrence | second |
+|---|---|---|
+| `/dev/cu.usbmodem*` | absent | **present** |
+| BOOTSEL | worked | worked |
+| `mpremote exec` | "no device found" | **opens, then 15s of silence** |
+
+So a device node existing does **not** mean the board is reachable. The RP2
+runtime brings USB CDC up before `_boot.py` runs, so a filesystem too
+damaged to mount leaves you with an enumerated port and no Python behind it.
+
+There's a trap in how this surfaces. `make screen` interrupted with Ctrl-C
+produces a traceback ending in `self.serial.open()` → `os.open(...)`, which
+reads exactly like a busy port held by another process. It isn't — that is
+just where mpremote was waiting. Check before believing it:
+
+```bash
+lsof /dev/cu.usbmodem*        # who holds it (usually: nobody)
+ls -la /dev/cu.usbmodem*      # does the node exist at all
+```
+
+**The discriminating test is a timed probe**, not a REPL attempt:
+
+```bash
+.venv/bin/mpremote exec "print('alive')"   # under a ~15s timeout
+```
+
+Node present + no answer = this bug. Recover with `WIPE=1`.
+
 ### Upload failures: free space ruled out, overwrite is the suspect
 
 The intermittent `make upload` failures outlived every physical fix — new
@@ -952,9 +985,35 @@ different reason: a failed overwrite can leave a truncated blend of old and
 new content, whereas a failed write after removal leaves the file **absent**
 — which fails loudly at import instead of running as subtly-wrong code.
 
-Worth noting `main.py` is now **154,602 bytes**, rewritten in full on every
-upload. If write duration is the variable, that number is the lever — and
-another argument for the V1.6 modularization in `dev-status.md`.
+**File size is now the strongest signal.** On the upload that triggered the
+second corruption, every smaller file went through and only the big one
+failed:
+
+| file | bytes | result |
+|---|---|---|
+| `diag.py` | 4,011 | ✓ |
+| `primitives.py` | 9,353 | ✓ |
+| `config.py` | 16,806 | ✓ |
+| `settings.py` | 23,415 | ✓ |
+| `testbench.json` | 28,582 | ✓ |
+| **`main.py`** | **122,011** | **✗ ×3** |
+
+That fits a roughly constant per-unit-time failure probability, where
+exposure scales with transfer duration — and it explains why `config.py`
+failed *sometimes* earlier rather than never. It predicts that **uploads get
+more reliable as V1.6 shrinks `main.py`**, which is a claim this project can
+confirm by construction rather than argument.
+
+Two consequences worth acting on:
+
+- **Each failed retry is another chance to corrupt the filesystem.**
+  `upload.sh` tries three times, so a doomed large write gets three
+  attempts to damage littlefs. Both corruptions to date followed a failed
+  large write.
+- **A `.mpy` shortcut exists if this stays painful.** `mpy-cross` compiles
+  to bytecode a fraction of the source size, with a tiny `main.py` shim to
+  import it. Not done — V1.6 shrinks the file anyway, and one mechanism is
+  better than two.
 
 ### Rule of thumb
 
