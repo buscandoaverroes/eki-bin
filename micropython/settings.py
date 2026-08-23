@@ -362,3 +362,7 @@ HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
 # Quiet hours (strip dark). Stored as hours in config; minutes internally.
 QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
 QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
+
+# Relocated here by the V1.6 split: it is a config read, and this
+# module owns those. diag.py imports it.
+MEM_DEBUG_ENABLED = getattr(config, "MEM_DEBUG_ENABLED", False)

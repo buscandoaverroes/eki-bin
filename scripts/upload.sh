@@ -96,7 +96,9 @@ SRC_DIR="${SRC_DIR:-micropython}"
 # main.py imports these, so a missing one is an ImportError at boot. Add a
 # line here in the SAME commit that creates the module — the host tests
 # cannot catch this, since they import from the source tree.
-FIRMWARE_MODULES="settings"
+# Order is irrelevant at upload time (every file lands before main.py
+# runs) — this simply lists what the board needs.
+FIRMWARE_MODULES="settings diag primitives"
 
 cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
