@@ -14,8 +14,22 @@ import math
 import time
 
 import config
-import network
-import ntptime
+# ⚠ `network`/`ntptime` DO NOT EXIST on a radio-less board. On the XIAO
+# RP2350 (no WiFi silicon at all) this is not "WiFi unavailable at runtime"
+# — it is an ImportError on THIS LINE that kills main.py before TIME_SOURCE
+# is ever read, so setting TIME_SOURCE="rtc" cannot rescue it. Observed on
+# hardware 2026-08-23.
+#
+# Note the shape of the bug: the comment below already reasons carefully
+# about deferring WIFI_SSID so there's "an LED path to complain THROUGH" —
+# and then the module died two lines above it, before any such path exists.
+# Guarding the import is what actually lets that reasoning apply.
+try:
+    import network
+    import ntptime
+except ImportError:  # radio-less board — connect_wifi() explains it properly
+    network = None
+    ntptime = None
 from machine import I2C, Pin
 from neopixel import NeoPixel
 
@@ -204,7 +218,7 @@ TIME_SOURCE = getattr(config, "TIME_SOURCE", "wifi")
 # Derived here rather than making the user also remember to zero
 # UTC_OFFSET_HOURS: two knobs that must agree is a footgun, one that
 # follows from the other isn't.
-_UTC_OFFSET_APPLIED = 0 if TIME_SOURCE == "rtc" else UTC_OFFSET_HOURS
+_UTC_OFFSET_APPLIED = 0 if TIME_SOURCE in ("rtc", "ds3231") else UTC_OFFSET_HOURS
 CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
 #   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
 #   such alias, which raises ValueError: invalid pin). Previously this class
@@ -223,6 +237,26 @@ CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
 IMU_I2C_ID = getattr(config, "IMU_I2C_ID", 0)
 IMU_SDA_PIN = getattr(config, "IMU_SDA_PIN", 0)  # Pico 2W default — see
 IMU_SCL_PIN = getattr(config, "IMU_SCL_PIN", 1)  #   pinouts/pico2w.md
+
+# DS3231 RTC. Defaults to the IMU's bus because on this hardware they ARE
+# the same physical bus — 0x68 and 0x6A/0x6B, no address conflict
+# (docs/hardware.md § DS3231). Overridable for a board that wires them apart.
+RTC_I2C_ID = getattr(config, "RTC_I2C_ID", IMU_I2C_ID)
+RTC_SDA_PIN = getattr(config, "RTC_SDA_PIN", IMU_SDA_PIN)
+RTC_SCL_PIN = getattr(config, "RTC_SCL_PIN", IMU_SCL_PIN)
+# Cyan, deliberately far from ERROR_COLOR (red), SCHEDULE_ERROR_COLOR
+# (magenta) and CONFIG_ERROR_COLOR (orange) — those three are all one hue
+# family, and docs/insights.md §12 found that through brown glass only
+# near-opposite hues stay distinguishable. A clock fault must be tellable
+# apart from a WiFi fault by someone holding a jar with no laptop.
+CLOCK_ERROR_COLOR = getattr(config, "CLOCK_ERROR_COLOR", (0, 160, 200))
+
+if TIME_SOURCE not in ("wifi", "rtc", "ds3231"):
+    # Fail loudly at import. A typo previously fell through to the WiFi
+    # path, which on a radio-less board is an unrecoverable hang.
+    raise ValueError(
+        "TIME_SOURCE=%r is not one of 'wifi', 'rtc', 'ds3231'" % (TIME_SOURCE,)
+    )
 
 GESTURE_FLIP_ENABLED = getattr(config, "GESTURE_FLIP_ENABLED", False)  #
 #   requires wired (USB) power — flipping a Qi-mounted jar breaks inductive
@@ -482,6 +516,113 @@ def _arm_target(ttl, arm_len, direction):
     if offset > arm_len:
         return None
     return ANCHOR_INDEX + offset if direction == "a" else ANCHOR_INDEX - offset
+
+
+def geometry_problems(num_leds=None, anchor=None, arm_a=None, arm_b=None):
+    """Reasons the anchor/arm geometry can't fit the strip; [] means it fits.
+
+    _arm_target() bounds each offset against its ARM length but never
+    against NUM_LEDS, so geometry tuned for one strip and run on a shorter
+    one indexes off the end of the frame. On hardware that surfaced as a
+    bare `IndexError: list index out of range` three call levels deep in the
+    render loop — AFTER a clean boot, a correct clock and a correct
+    timetable printout, which points nowhere near config.py.
+
+    Parameterised (rather than reading the module constants directly) so
+    tests can sweep combinations without re-importing main a dozen times."""
+    n = NUM_LEDS if num_leds is None else num_leds
+    a = ANCHOR_INDEX if anchor is None else anchor
+    la = ARM_A_LEN if arm_a is None else arm_a
+    lb = ARM_B_LEN if arm_b is None else arm_b
+    out = []
+    if n <= 0:
+        return ["NUM_LEDS=%d must be positive" % n]
+    if not 0 <= a < n:
+        out.append("ANCHOR_INDEX=%d is off the strip (valid 0..%d)" % (a, n - 1))
+        return out  # every arm message below would just restate this
+    if la < 0:
+        out.append("ARM_A_LEN=%d is negative" % la)
+    elif a + la > n - 1:
+        out.append("arm A reaches LED %d but the last is %d — set ARM_A_LEN "
+                   "to %d or less" % (a + la, n - 1, n - 1 - a))
+    if lb < 0:
+        out.append("ARM_B_LEN=%d is negative" % lb)
+    elif a - lb < 0:
+        out.append("arm B reaches LED %d but the first is 0 — set ARM_B_LEN "
+                   "to %d or less" % (a - lb, a))
+    return out
+
+
+# ─────────────────────────────────────────────────────────────
+# Memory instrumentation — docs/insights.md §11
+#
+# Why this exists rather than poking gc.mem_free() by hand: the ESP32-C3
+# investigation cost days, and the expensive part wasn't the measuring, it
+# was measuring the WRONG POOL and drawing a confident wrong conclusion.
+# gc.mem_free() reported 155KB free while esp_wifi was starving, because
+# MicroPython's GC heap and ESP-IDF's malloc heap are separate arenas
+# competing for the same SRAM. Automating only gc.mem_free() would have
+# automated that mistake, so this reports every heap the platform has and
+# names them.
+#
+# Reports DELTAS between labelled checkpoints, not totals — "how much did
+# THIS step cost" is the question that actually gets answered; a single
+# free-bytes number never told us anything useful.
+#
+# ⚠ REAL LIMIT, worth knowing before trusting this to explain an OOM:
+# each checkpoint samples AFTER a step completes, so it captures the
+# step's RESIDENT cost, not its transient PEAK. The C3's actual failure
+# was a compile-time spike that permanently enlarged the GC heap — this
+# table would show the aftermath, not the spike. Per-frame render
+# allocation is likewise not captured; that's a different question needing
+# a different tool.
+# ─────────────────────────────────────────────────────────────
+MEM_DEBUG_ENABLED = getattr(config, "MEM_DEBUG_ENABLED", False)
+
+_mem_marks = []  # [(label, free, alloc)] — only populated when enabled
+
+
+def _mem_checkpoint(label):
+    """Record free/alloc under `label`. No-op unless MEM_DEBUG_ENABLED, so
+    production pays one boolean test and this can't itself become a
+    consumer of the thing it measures."""
+    if not MEM_DEBUG_ENABLED:
+        return
+    gc.collect()  # measure reclaimable-vs-live, not "whatever hasn't been
+    #               swept yet" — otherwise deltas are dominated by GC timing
+    _mem_marks.append((label, gc.mem_free(), gc.mem_alloc()))
+
+
+def _mem_report():
+    """Print the checkpoint table with per-step deltas. Called once after
+    boot; safe to call with nothing recorded."""
+    if not MEM_DEBUG_ENABLED or not _mem_marks:
+        return
+    print("\n  ── memory ─────────────────────────────────────")
+    prev_free = None
+    for label, free, alloc in _mem_marks:
+        if prev_free is None:
+            print("    %-22s free %7d  alloc %7d" % (label, free, alloc))
+        else:
+            delta = free - prev_free
+            print("    %-22s free %7d  alloc %7d   (%+d)"
+                  % (label, free, alloc, delta))
+        prev_free = free
+
+    # The §11 lesson, encoded: on ESP32 the GC heap above is NOT the pool a
+    # WiFi failure comes from. Show the real one too, or this tool repeats
+    # the exact error it exists to prevent.
+    try:
+        import esp32
+        print("    ESP-IDF heap (the pool esp_wifi allocates from —")
+        print("    NOT the GC heap above; see insights.md §11):")
+        for i, region in enumerate(esp32.idf_heap_info(esp32.HEAP_DATA)):
+            total, free, largest, minimum = region
+            print("      region %d: total %7d  free %7d  largest %7d"
+                  % (i, total, free, largest))
+    except (ImportError, AttributeError):
+        pass  # not an ESP32 — one heap, already reported above
+    print()
 
 
 def _heartbeat_pin(name):
@@ -1216,8 +1357,160 @@ def load_schedule(filename):
 
 
 # ─────────────────────────────────────────────────────────────
-# Time helpers
+# DS3231 RTC (TIME_SOURCE="ds3231") — docs/hardware.md § DS3231
+#
+# Why a separate TIME_SOURCE value rather than redefining "rtc": "rtc"
+# already means the BOARD's own volatile clock, which is what makes the
+# WiFi-free ESP32-C3 unit run at all (docs/insights.md §11). Overloading it
+# would break that unit. They also differ in the way that matters most —
+# the board clock does NOT survive power loss, and this chip's whole
+# purpose is that it does.
+#
+# The chip is read EVERY tick rather than copied into the board's RTC at
+# boot. Copying once would mean trusting the RP2350's crystal thereafter,
+# which is an order of magnitude worse than the TCXO we bought; the DS3231
+# stays the single source of truth. Reads are cached ~1s (see _rtc_cache)
+# because the IMU shares this bus and the gesture loop ticks every 4ms,
+# while the display is minute-granular.
+#
+# Time is stored LOCAL, not UTC — matching what rtc_test.py already seeds,
+# so _UTC_OFFSET_APPLIED is 0 exactly as for "rtc". Japan has no DST, so
+# UTC storage would buy nothing and would require migrating the seeding
+# path. scripts/rtc_drift.py is deliberately indifferent to which is used.
+#
 # [→ Rust] read_rtc() reads DS3231 over I2C → (hours, minutes, weekday)
+# ─────────────────────────────────────────────────────────────
+_DS3231_ADDR = 0x68  # fixed in silicon — no address strap on this chip
+_DS3231_REG_SECONDS = 0x00  # 7 regs from here: sec,min,hour,dow,date,mon,yr
+_DS3231_REG_STATUS = 0x0F
+_DS3231_OSF_BIT = 0x80  # status bit7: oscillator STOPPED since last cleared
+
+_rtc_i2c = None
+_rtc_cache = None  # (ticks_ms_when_read, decoded_tuple)
+_RTC_CACHE_MS = 1000
+
+
+class ClockUnavailable(Exception):
+    """The DS3231 can't be read, or says its time is untrustworthy.
+
+    Deliberately NOT caught-and-ignored anywhere: showing a wrong departure
+    time is worse than showing none, because it makes you miss the train
+    while believing you won't. See run_startup_sequence()."""
+
+
+def _ds3231_bcd_to_dec(b):
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def day_of_week(year, month, day):
+    """Sakamoto's algorithm → 0=Monday … 6=Sunday (MicroPython convention).
+
+    Computed from the DATE rather than read from the chip's day-of-week
+    register (0x03). That register holds 1-7 with NO defined meaning — the
+    mapping is whatever wrote it decided — so trusting it would couple the
+    firmware to whichever tool last seeded the chip. The date is
+    unambiguous, and this costs a few integer ops."""
+    t = (0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4)
+    y = year - 1 if month < 3 else year
+    sunday_based = (y + y // 4 - y // 100 + y // 400 + t[month - 1] + day) % 7
+    return (sunday_based - 1) % 7  # shift 0=Sunday → 0=Monday
+
+
+def ds3231_decode(raw):
+    """7 raw DS3231 registers → (year, month, day, hour, minute, second).
+
+    Pure — no I/O — so tests/test_ds3231.py can cover it on the host.
+    Backwards BCD produces a clock that looks alive while showing nonsense,
+    which is exactly the failure a host test catches and a bench cannot."""
+    if len(raw) != 7:
+        raise ValueError("expected 7 registers, got %d" % len(raw))
+    second = _ds3231_bcd_to_dec(raw[0] & 0x7F)
+    minute = _ds3231_bcd_to_dec(raw[1] & 0x7F)
+    hour_reg = raw[2]
+    if hour_reg & 0x40:  # 12-hour mode: bit5 is AM/PM. We never WRITE this,
+        #                  but a chip set by other tooling can be in it.
+        hour = _ds3231_bcd_to_dec(hour_reg & 0x1F)
+        if hour_reg & 0x20 and hour != 12:
+            hour += 12
+        elif not hour_reg & 0x20 and hour == 12:
+            hour = 0
+    else:
+        hour = _ds3231_bcd_to_dec(hour_reg & 0x3F)
+    day = _ds3231_bcd_to_dec(raw[4] & 0x3F)
+    month = _ds3231_bcd_to_dec(raw[5] & 0x1F)
+    century = 2100 if raw[5] & 0x80 else 2000
+    return (century + _ds3231_bcd_to_dec(raw[6]), month, day,
+            hour, minute, second)
+
+
+def ds3231_time_is_plausible(decoded):
+    """Sanity-gate a decoded reading before the display trusts it.
+
+    A DS3231 that lost power with no working backup resets to 2000-01-01 —
+    observed on hardware, and the anchor that says the CR1220 isn't doing
+    its job. That reads as a perfectly valid timestamp, so OSF alone is not
+    the only guard worth having."""
+    year, month, day, hour, minute, second = decoded
+    return (2024 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31
+            and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59)
+
+
+def _get_rtc_i2c():
+    """Lazy singleton, mirroring _get_imu()'s construction guard."""
+    global _rtc_i2c
+    if _rtc_i2c is None:
+        try:
+            _rtc_i2c = I2C(RTC_I2C_ID, scl=Pin(RTC_SCL_PIN),
+                           sda=Pin(RTC_SDA_PIN), freq=400000)
+        except ValueError as e:
+            # Rejected at construction on RP2 chips — see _get_imu() for the
+            # full explanation of why no rewiring can fix this.
+            raise ClockUnavailable(
+                "RTC I2C rejected (%s): RTC_I2C_ID=%d with SDA=%d/SCL=%d is "
+                "not a legal combination on this chip. Run `make i2c-scan`."
+                % (e, RTC_I2C_ID, RTC_SDA_PIN, RTC_SCL_PIN))
+    return _rtc_i2c
+
+
+def ds3231_osc_stopped():
+    """True if the oscillator has stopped since the flag was last cleared —
+    i.e. the chip cannot vouch for its own time. This is the DS3231's own
+    claim, which is why it beats eyeballing the clock: a chip that lost
+    power at 3am and was re-powered still SHOWS a plausible time."""
+    try:
+        status = _get_rtc_i2c().readfrom_mem(_DS3231_ADDR,
+                                             _DS3231_REG_STATUS, 1)[0]
+    except OSError as e:
+        raise ClockUnavailable("cannot read DS3231 status register: %s" % e)
+    return bool(status & _DS3231_OSF_BIT)
+
+
+def ds3231_now():
+    """Read + decode the chip, cached ~1s. Raises ClockUnavailable.
+
+    Retries a couple of times before giving up: this bus is shared with the
+    IMU and a single NAK shouldn't take the display down, but a chip that
+    is genuinely gone must not be papered over."""
+    global _rtc_cache
+    if _rtc_cache is not None:
+        age = time.ticks_diff(time.ticks_ms(), _rtc_cache[0])
+        if 0 <= age < _RTC_CACHE_MS:
+            return _rtc_cache[1]
+    last = None
+    for _ in range(3):
+        try:
+            raw = _get_rtc_i2c().readfrom_mem(_DS3231_ADDR,
+                                              _DS3231_REG_SECONDS, 7)
+            decoded = ds3231_decode(bytes(raw))
+            _rtc_cache = (time.ticks_ms(), decoded)
+            return decoded
+        except OSError as e:
+            last = e
+    raise ClockUnavailable("DS3231 unreadable after 3 attempts: %s" % last)
+
+
+# ─────────────────────────────────────────────────────────────
+# Time helpers
 # ─────────────────────────────────────────────────────────────
 def local_time():
     """
@@ -1234,6 +1527,8 @@ def local_time():
     _UTC_OFFSET_APPLIED. Reading the raw clock as UTC in that case would
     put the display UTC_OFFSET_HOURS ahead of reality.
     """
+    if TIME_SOURCE == "ds3231":
+        return _ds3231_local_time()
     raw = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
     utc_minutes = raw[3] * 60 + raw[4]
     local_minutes_abs = utc_minutes + _UTC_OFFSET_APPLIED * 60
@@ -1243,6 +1538,67 @@ def local_time():
     local_weekday = (raw[6] + day_overflow) % 7
 
     return local_minutes, local_weekday
+
+
+def _ds3231_local_time():
+    """local_time() for TIME_SOURCE="ds3231".
+
+    ⚠ MAY NEVER RETURN. If the clock can't be read it enters the terminal
+    failure display instead of guessing — same pattern (and same warning)
+    as run_startup_sequence() on WiFi failure. That is deliberate: this
+    device's entire job is telling you when to leave, so a plausible-looking
+    wrong time is the worst output it can produce. Dark-and-obviously-broken
+    beats confidently-wrong.
+
+    The offset arithmetic mirrors the WiFi path exactly, even though
+    _UTC_OFFSET_APPLIED is 0 here, so that switching the chip to UTC storage
+    later is a one-constant change rather than a rewrite."""
+    try:
+        year, month, day, hour, minute, _second = ds3231_now()
+    except ClockUnavailable as e:
+        print("  ✗ Clock unavailable: %s" % e)
+        print("    Refusing to show departures from a clock we can't trust.")
+        _run_startup_failure_forever(CLOCK_ERROR_COLOR)  # never returns
+    minutes_abs = hour * 60 + minute + _UTC_OFFSET_APPLIED * 60
+    day_overflow = minutes_abs // (24 * 60)
+    weekday = (day_of_week(year, month, day) + day_overflow) % 7
+    return minutes_abs % (24 * 60), weekday
+
+
+def _check_ds3231_at_boot():
+    """Validate the RTC before the display trusts it. True if usable.
+
+    Three distinct checks, because they fail for different reasons and a
+    single "clock bad" message would send you to the wrong place:
+      1. readable at all  → wiring, or I2C_ID/pin mismatch
+      2. OSF clear        → the CR1220 isn't doing its job
+      3. plausible year   → a chip that lost power reads 2000-01-01, which
+                            is a perfectly valid-looking timestamp that OSF
+                            alone would not always catch
+    """
+    try:
+        stopped = ds3231_osc_stopped()
+        decoded = ds3231_now()
+    except ClockUnavailable as e:
+        print("  ✗ DS3231 not readable: %s" % e)
+        print("    Check wiring and `make i2c-scan`. NOTE: a fitted battery")
+        print("    HIDES a power fault — the chip disables I2C on VBAT, so a")
+        print("    sagging VIN looks like an absent chip (insights.md §13).")
+        return False
+    if stopped:
+        print("  ✗ DS3231 oscillator-stop flag is SET — it lost power and")
+        print("    its time cannot be trusted. Check the CR1220 is seated")
+        print("    and the right way up, then re-seed with `make rtc-test`.")
+        return False
+    if not ds3231_time_is_plausible(decoded):
+        print("  ✗ DS3231 reads %04d-%02d-%02d %02d:%02d — implausible."
+              % decoded[:5])
+        print("    A chip that lost power with no backup resets to 2000-01-01.")
+        print("    Re-seed with `make rtc-test`.")
+        return False
+    print("  TIME_SOURCE='ds3231' — RTC reads %04d-%02d-%02d %02d:%02d, "
+          "oscillator OK." % decoded[:5])
+    return True
 
 
 def current_period(weekday):
@@ -1369,6 +1725,15 @@ def run_startup_sequence():
     and no unit. It also happens to be the direction V2 is going anyway
     (DS3231 RTC, no WiFi in normal operation), so this is a step toward
     the planned architecture rather than a detour around a bug."""
+    if TIME_SOURCE == "ds3231":
+        # Terminal on failure, like WiFi. The DS3231 IS the clock on a
+        # radio-less unit — there is nothing to fall back to, and falling
+        # back to the board's volatile RTC would silently substitute a
+        # clock that resets to its epoch on every power cycle.
+        if not _check_ds3231_at_boot():
+            _run_startup_failure_forever(CLOCK_ERROR_COLOR)
+        _play_startup_burst()
+        return
     if TIME_SOURCE == "rtc":
         print("  TIME_SOURCE='rtc' — skipping WiFi/NTP, trusting the board clock.")
         print("  (Set it with `make set-time`; it survives soft reset, NOT power loss.)")
@@ -1424,7 +1789,28 @@ def _get_imu():
     handle the "not found" case, not assume hardware is present."""
     global _imu_i2c, _imu_addr
     if _imu_i2c is None:
-        i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN), freq=400000)
+        try:
+            i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN),
+                      freq=400000)
+        except ValueError as e:
+            # RP2040/RP2350 hard-wire each I2C peripheral to a fixed pin
+            # table, so a pin/ID disagreement is rejected HERE, at
+            # construction, before any bus activity — meaning no rewiring
+            # can fix it. It surfaces as a bare `ValueError: bad SCL pin`
+            # with no hint of which value is wrong.
+            #
+            # This has bitten four times now. imu_test.py and rtc_test.py
+            # each grew an explainer; main.py had none, so it took the
+            # whole display down mid-loop over an optional sensor. Treat a
+            # misconfigured IMU exactly like an absent one: say what's
+            # wrong, then let the clock keep running.
+            print("  ✗ IMU I2C rejected: %s" % e)
+            print("    IMU_I2C_ID=%d with SDA=%d/SCL=%d is not a legal"
+                  % (IMU_I2C_ID, IMU_SDA_PIN, IMU_SCL_PIN))
+            print("    combination on this chip. XIAO RP2350: GP6/GP7 are")
+            print("    I2C **1**, not 0. Run `make i2c-scan` for the values.")
+            print("    Continuing without gestures — display is unaffected.")
+            return None, None
         addr = _imu_find_device(i2c)
         if addr is None:
             return None, None
@@ -2230,6 +2616,14 @@ def connect_wifi():
     # there — that peak happens before this line is ever reached. Run a file
     # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
     # to soft-reset. See docs/provisioning-runbook.md § 6.
+    if network is None:
+        # No radio on this board AT ALL — `network` failed to import. This
+        # is categorically different from "association failed": no
+        # credential or signal change can fix it, and retrying is pointless.
+        # The only resolution is TIME_SOURCE="rtc" (or a different board).
+        print("  ✗ This board has no radio — `network` is unavailable.")
+        print("    Set TIME_SOURCE='rtc' in config.py, then `make set-time`.")
+        return False
     if not WIFI_SSID:
         # Reachable only with TIME_SOURCE="wifi" and no credentials set —
         # a config mistake, not a runtime failure. Say so plainly rather
@@ -2263,6 +2657,12 @@ def connect_wifi():
 
 
 def sync_ntp():
+    if ntptime is None:
+        # Unreachable through run_startup_sequence() (connect_wifi() fails
+        # first and never returns), but explicit beats an AttributeError
+        # surfacing as a confusing "NTP failed" below.
+        print("  ✗ No radio on this board — cannot NTP sync.")
+        return False
     try:
         ntptime.settime()
         print("  ✓ NTP sync OK")
@@ -2594,8 +2994,21 @@ def _run_interactive_loop(schedule_data, led):
         time.sleep_ms(GESTURE_POLL_MS)
 
 
+def _run_startup_and_mark():
+    """run_startup_sequence() + a checkpoint. Wrapped because that function
+    NEVER RETURNS on WiFi failure (persistent breathe), so a checkpoint
+    written after the call site would silently not happen on the very path
+    where memory is most likely to be the culprit."""
+    run_startup_sequence()
+    _mem_checkpoint("after time source")
+
+
 def main():
     print("\n══ eki-bin ═══════════════════════════════════════")
+    # Baseline: everything main.py's import already cost — bytecode,
+    # module globals, the NeoPixel buffer, _residual. Every later delta is
+    # relative to this.
+    _mem_checkpoint("after import")
 
     if GESTURE_DEBUG_ENABLED:
         # No WiFi/schedule/boot-ceremony needed — this validates the
@@ -2620,6 +3033,21 @@ def main():
     # IMPORT time to build `np`, so getting those wrong fails before main()
     # is entered and no LED feedback is possible by construction. Those two
     # stay a serial-console diagnosis.
+    # Only ApproachContract consumes the anchor/arm geometry, so only it can
+    # be broken by a mismatch — failing on it for an arc contract that never
+    # reads those values would be a false alarm.
+    if isinstance(ACTIVE_CONTRACT, ApproachContract):
+        _geo = geometry_problems()
+        if _geo:
+            print("  ✗ ApproachContract geometry doesn't fit NUM_LEDS=%d:"
+                  % NUM_LEDS)
+            for _problem in _geo:
+                print("      %s" % _problem)
+            print("    Previously this only appeared as `IndexError: list index")
+            print("    out of range` inside the render loop, several calls deep")
+            print("    and long after a clean boot — pointing nowhere near config.")
+            _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
+
     try:
         led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
     except (ValueError, TypeError) as e:
@@ -2646,12 +3074,16 @@ def main():
         # This buys margin; it does not create headroom. See
         # docs/insights.md §11 for the real fix (stop compiling a 115KB
         # module on-device) — this reorder is the cheap half.
-        run_startup_sequence()  # boot ceremony + WiFi/NTP — never returns on
+        _run_startup_and_mark()  # boot ceremony + WiFi/NTP — never returns on
         #   WiFi failure (persistent red breathe instead), so everything
         #   below only ever runs after a successful connect + burst.
 
         try:
             schedule_data = load_schedule(SCHEDULE_FILE)
+            # The parked multi-line question in concrete terms: this delta
+            # IS the schedule's real cost, object graph included, rather
+            # than the estimate dev-status.md currently records.
+            _mem_checkpoint("after schedule load")
         except (OSError, ValueError):
             # Different failure CAUSE, different colour — see
             # docs/contracts/led-status-messages.md. A missing/corrupt
@@ -2669,6 +3101,9 @@ def main():
             f"LEDs: {NUM_LEDS} on GPIO{LED_PIN}"
         )
         print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+
+        _mem_checkpoint("entering loop")
+        _mem_report()
 
         if WAKE_INTERACTION_ENABLED:
             _run_interactive_loop(schedule_data, led)

@@ -19,17 +19,41 @@
 # single most common bring-up failure in this project's history. Grouped
 # here rather than scattered through the file for exactly that reason.
 #
-#   Value           | Pico 2W | XIAO ESP32-C3 |
-#   ----------------|---------|---------------|
-#   LED_PIN         | 6       | 2             |
-#   HEARTBEAT_PIN   | "LED"   | None          |
-#   IMU_SDA_PIN     | 0       | 6             |
-#   IMU_SCL_PIN     | 1       | 7             |
+#   Value           | Pico 2W | XIAO ESP32-C3 | XIAO RP2350 |
+#   ----------------|---------|---------------|-------------|
+#   LED_PIN         | 6       | 2             | 1  (= D7)   |
+#   HEARTBEAT_PIN   | "LED"   | None          | see below   |
+#   IMU_I2C_ID      | 0       | 0             | **1**       |
+#   IMU_SDA_PIN     | 0       | 6             | 6  (= D4)   |
+#   IMU_SCL_PIN     | 1       | 7             | 7  (= D5)   |
+#
+# ⚠ IMU_I2C_ID IS A PER-BOARD VALUE — it is not always 0. On RP2040/RP2350
+# each I2C peripheral is hard-wired to a fixed pin table in silicon, so the
+# XIAO RP2350's labeled D4/D5 (GP6/GP7) are on I2C**1**. An ID that
+# disagrees with the pins is rejected AT CONSTRUCTION with a bare
+# `ValueError: bad SCL pin` — before any bus activity, so no amount of
+# rewiring helps. This has now cost four separate sessions. `make i2c-scan`
+# finds the right combination and prints the values to paste.
+#
+# ⚠ HEARTBEAT_PIN on the XIAO RP2350: the "LED" alias DOES exist, unlike on
+# the ESP32-C3 — but it is ACTIVE-LOW, so a heartbeat would run inverted
+# (lit when it should be dark). Leave it None until main.py grows a
+# polarity flag. The board also has an onboard NEOPIXEL (power-gated via
+# NEOPIXEL_POWER) which is the better status indicator anyway —
+# pinouts/xiao_rp2350.md.
 #
 # Physical wiring for each: pinouts/<board>.md — that directory is the
 # source of truth for what's connected where; this file just mirrors it.
 
-LED_PIN = 6  # GPIO driving the WS2812B data line
+LED_PIN = 6  # GPIO driving the WS2812B data line.
+#              ⚠ GETTING THIS WRONG IS A POWER FAULT, NOT A DISPLAY BUG.
+#              An unaddressed WS2812B strip holds whatever state it powered
+#              up in — potentially full white, ≈480mA for 8 LEDs — and
+#              BRIGHTNESS cannot help, because it's a property of data you
+#              aren't sending. On 2026-08-23 a wrong LED_PIN browned the
+#              board out, corrupted the filesystem mid-write, and presented
+#              as dead hardware for a morning. Check pinouts/<board>.md
+#              BEFORE connecting a strip. See docs/insights.md §13.
 NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21; 4020 tape = 120
 HEARTBEAT_PIN = "LED"  # status LED. "LED" is a **Pico-2W-only** alias (routed
 #                        through the CYW43 WiFi chip). On ANY other board it
@@ -40,7 +64,9 @@ HEARTBEAT_PIN = "LED"  # status LED. "LED" is a **Pico-2W-only** alias (routed
 #                        catches that one before `make upload`.
 
 # IMU (LSM6DSV16X) — only read if you've actually wired one.
-IMU_I2C_ID = 0  # ESP32 maps I2C to any pins in software, so 0 works on both
+IMU_I2C_ID = 0  # ⚠ PER-BOARD — see the table above. 0 is right for the
+#                 Pico 2W and the ESP32-C3 (which maps I2C in software), but
+#                 the XIAO RP2350 needs 1. Not a free choice on RP2 chips.
 IMU_SDA_PIN = 0
 IMU_SCL_PIN = 1
 
@@ -58,7 +84,21 @@ IMU_SCL_PIN = 1
 # with `make set-time`. It survives a soft reset but NOT a power cycle, so
 # re-run after unplugging. This is also where V2 is heading permanently
 # (DS3231 RTC, no WiFi in normal operation).
-TIME_SOURCE = "wifi"  # "wifi" | "rtc"
+# "ds3231" reads a DS3231 RTC over I2C every tick — the V2 direction, and
+# the only source that survives a power cycle. It needs seeding once with
+# `make rtc-test` (see that file's WORKFLOW), and it is TERMINAL on failure:
+# an unreadable chip, a set oscillator-stop flag, or an implausible date all
+# stop the display rather than showing departures from a clock we can't
+# vouch for. Wrong times are worse than no times — they make you miss the
+# train while believing you won't.
+TIME_SOURCE = "wifi"  # "wifi" | "rtc" | "ds3231"
+
+# DS3231 wiring — only read when TIME_SOURCE = "ds3231". Defaults to the
+# IMU's bus, because on this project's hardware they ARE the same bus
+# (0x68 vs 0x6A/0x6B, no address conflict). Uncomment only to split them.
+# RTC_I2C_ID = 1
+# RTC_SDA_PIN = 6
+# RTC_SCL_PIN = 7
 
 # Only read when TIME_SOURCE = "wifi".
 WIFI_SSID = "your_network_name"
@@ -269,6 +309,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # QUIET_TAP_DURATION_MS = 2500
 # NO_DATA_COLOR = (200, 160, 0)     # gold — woke up to nothing catchable
 # NO_DATA_DURATION_MS = 2500
+
+# ── Memory instrumentation — docs/insights.md §11 ─────────────────
+# Prints a checkpoint table at boot showing what each stage COST, e.g.:
+#     after import           free  402112  alloc  118656
+#     after time source      free  399984  alloc  120784   (-2128)
+#     after schedule load    free  359776  alloc  160992   (-40208)
+#     entering loop          free  357440  alloc  163328   (-2336)
+# Deltas, not totals — "what did this step cost" is the answerable
+# question. On ESP32 it also prints the ESP-IDF heap, which is a SEPARATE
+# pool from the GC heap above and the one esp_wifi actually allocates
+# from; confusing the two is what made the C3 investigation take days.
+# ⚠ Samples after each step, so it shows RESIDENT cost, not transient
+# peak — it would show the aftermath of a compile-time spike, not the
+# spike. Off by default; costs one boolean test when off.
+# MEM_DEBUG_ENABLED = False
 
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 # ⚠ A dark strip during quiet hours is INDISTINGUISHABLE from a fault. Set

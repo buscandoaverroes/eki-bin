@@ -724,6 +724,95 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
 
 ---
 
+## V1.6 (proposed, not scheduled) — single-target firmware for the XIAO RP2350
+
+**Status: a proposal.** Nothing cut, nothing scheduled. Written up 2026-08-23
+while the evidence was fresh.
+
+### What triggered it
+
+`main.py` will not run on the XIAO RP2350 at all:
+
+```
+File "main.py", line 17, in <module>
+ImportError: no module named 'network'
+```
+
+`network` and `ntptime` were imported unconditionally. On a board with no
+radio silicon those modules do not exist, so the failure lands at **line
+17** — before `TIME_SOURCE` is read, before `config` is consulted, before
+any LED path exists to report it. `TIME_SOURCE = "rtc"` cannot rescue it,
+because nothing gets that far.
+
+Note the shape of the bug, because it is the whole argument in miniature:
+the comment immediately *below* those imports already reasons carefully
+about deferring `WIFI_SSID` so there would be "an LED path to complain
+THROUGH" — and the module died two lines above it.
+
+**Fixed immediately** (guarded import + a radio-absence branch in
+`connect_wifi()`), so this proposal is not blocking anything.
+
+### The actual argument
+
+The v1.2 board-portability checkpoint proved something narrower than it has
+since been read as proving: that **pin assignments** abstract cleanly across
+boards via `config.py`. It never demonstrated that **capability**
+differences do. A different GPIO number is a config value. The absence of a
+radio is a different program shape, and `config.py` is the wrong place to
+encode "this board physically cannot do that" — it makes a hardware fact
+into something you must remember to declare correctly, every time.
+
+Dead code that cannot execute on the target board is not untidy. It is a
+hazard that has now fired once.
+
+### ⚠ Memory is NOT a motivation — recorded so it isn't cited later
+
+A bare XIAO RP2350 reports **492,480 bytes free** (`gc.mem_free()`, 4,672
+allocated, firmware v1.28.0). For contrast, the ESP32-C3 crisis in
+`docs/insights.md` §11 was a ~155KB GC heap *plus* a separate IDF heap where
+`esp_wifi` needed ~40KB against 32 bytes of margin.
+
+The RP2350 has over three times the headroom, one unified heap, and — with
+no radio — the two-heap failure mode is **structurally absent** rather than
+merely avoided. Any future argument for this refactor that leans on memory
+is wrong on this board. The argument is correctness and program shape.
+
+### Proposed shape — extract, don't rewrite
+
+`main.py` is ~2,760 lines, feature-complete, and pinned by 217 host tests. A
+from-scratch rewrite discards that proof to solve a problem it doesn't have.
+
+1. **Split `main.py` into modules.** The `time → LeaveSignal →
+   DisplayContract → LEDs` pipeline is validated — it should be *lifted*,
+   not rewritten.
+2. **Build a thin no-WiFi top level on those modules.** Only the
+   boot/time/loop layer gets replaced; that is where the WiFi entanglement
+   actually lives.
+3. **Keep the current `main.py` as the multi-board bench reference.** It is
+   what lets a Pico 2W or ESP32-C3 be tested without the production
+   firmware carrying the cost.
+
+Target assumption: **no radio; three peripherals (IMU, DS3231, LED strip);
+a fourth slot reserved for NFC.**
+
+### Why the sequencing is favourable
+
+Module boundaries drawn here become **crate and `mod` boundaries in the Rust
+/ Embassy port**. The hard part of that port is not syntax, it is deciding
+what the units are — and settling that in a language you can iterate in
+overnight is far cheaper than discovering it inside the borrow checker.
+Framed that way this is not work that gets redone; it is the design pass the
+Rust rewrite needs finished before it starts.
+
+### Open questions
+
+- Where does the split land — one module per contract, or one per layer?
+- Does the bench reference keep gesture support, or shrink to display only?
+- Does this happen before or after the DS3231 `main.py` integration
+  currently in flight on `feature/ds3231-integration`?
+
+---
+
 ## Open decisions
 
 | Decision | Status | Notes |

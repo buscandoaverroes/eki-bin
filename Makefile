@@ -4,10 +4,16 @@
 #   make flash-micropython — flash MicroPython to any supported board.
 #                             Optionally BOARD=pico2w|esp32c3|xiao-rp2350;
 #                             omit it for an interactive picker.
+#                             WIPE=1 also erases the filesystem (RP2350 only —
+#                             the ESP32 path always does). Reach for it when the
+#                             board is unreachable over serial: a plain reflash
+#                             leaves main.py in place, so a main.py that blocks
+#                             the REPL survives it.
 #   make schedule          — convert schedules/*.yaml → minutes arrays
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make i2c-scan          — find I2C devices without knowing pins/bus first
+#   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
@@ -58,18 +64,18 @@ setup: requirements.txt
 # then ran picotool with an empty path).
 .PHONY: flash-micropython
 flash-micropython:
-	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh $(BOARD)
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh $(BOARD)
 
 # Kept so existing docs, scripts and muscle memory don't break. The old
 # names were also inconsistent with each other — one named for the firmware
 # (flash-micropython), one for the board (flash-esp32-c3).
 .PHONY: flash-esp32-c3
 flash-esp32-c3:
-	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh esp32c3
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh esp32c3
 
 .PHONY: flash-xiao2350
 flash-xiao2350:
-	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh xiao-rp2350
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh xiao-rp2350
 
 # ── Python files ──────────────────────────────────────────────────
 
@@ -83,10 +89,11 @@ test:
 upload: test _check-mpremote
 	@test -f $(SRC_DIR)/config.py \
 		|| (echo "✗ $(SRC_DIR)/config.py missing — cp $(SRC_DIR)/config.example.py $(SRC_DIR)/config.py and fill it in (or edit on-board via Thonny)" && exit 1)
-	$(MPREMOTE) cp micropython/main.py :main.py
-	$(MPREMOTE) cp micropython/config.py :config.py
-	$(MPREMOTE) cp schedules/$(STATION).json :schedule.json
-	@echo "✓ Uploaded: main.py, config.py, schedule.json ($(STATION))"
+	@# Copy order, retries and size verification all live in the script.
+	@# An UNVERIFIED cp is the dangerous case: a truncated write corrupted
+	@# the filesystem and bricked a board for a morning (insights.md §13).
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) \
+		bash scripts/upload.sh
 
 .PHONY: run
 run: _check-mpremote
@@ -138,6 +145,19 @@ imu-test: _check-mpremote
 .PHONY: rtc-test
 rtc-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/rtc_test.py
+
+# Measure DS3231 drift against this Mac's clock, precisely enough to be
+# worth doing: it catches the seconds-register EDGE rather than reading the
+# register, which is what makes +/-2 ppm resolvable in hours instead of a
+# week. Appends to data/rtc-drift.jsonl (gitignored) -- run it once to set a
+# baseline, again later for a figure. Pass --mark-seed after re-setting the
+# chip, since that destroys the baseline.
+#   make rtc-drift                    (XIAO RP2350 defaults)
+#   make rtc-drift ARGS="--mark-seed"
+#   make rtc-drift ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+.PHONY: rtc-drift
+rtc-drift: _check-mpremote
+	$(PYTHON) scripts/rtc_drift.py $(ARGS)
 
 # Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
 # (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,

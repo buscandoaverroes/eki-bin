@@ -14,6 +14,9 @@
 #     driven by picotool. Board must be in BOOTSEL.
 #   • ESP32 boards (XIAO ESP32-C3) — serial bootloader, driven by esptool
 #     over a /dev/cu.* port (hence detect_port.sh).
+# They also differ in what a flash DESTROYS: the ESP32 path always erases the
+# filesystem, the picotool path never does unless you pass WIPE=1. See the
+# picotool branch — "I reflashed and it's still broken" is usually this.
 # Deliberately NOT auto-detected: which board is in your hand is something you
 # already know, and guessing it from bootloader state before any firmware is
 # running is more fragile than naming it (the reasoning the Makefile has
@@ -120,6 +123,29 @@ picotool)
     command -v picotool > /dev/null 2>&1 \
         || { echo "✗ picotool not found — run: brew install picotool" >&2; exit 1; }
     echo "→ Board must be in BOOTSEL mode (hold BOOT while connecting USB)." >&2
+    # WIPE=1 erases ALL of flash before loading.
+    #
+    # Loading a .uf2 does NOT touch the MicroPython filesystem — firmware and
+    # filesystem live in separate flash regions. That matters far more than
+    # it sounds, because a filesystem CORRUPTED BY A BROWNOUT MID-WRITE makes
+    # MicroPython hang in _boot.py while mounting it — before USB CDC comes
+    # up. The host then sees no serial device, no USB node, nothing, and the
+    # board impersonates dead hardware. Reflashing "succeeds" and changes
+    # nothing, because the corrupt filesystem survives it intact.
+    #
+    # THE DISCRIMINATING TEST IS BOOTSEL: it runs from mask ROM and cannot be
+    # affected by flash contents. BOOTSEL working while MicroPython does not
+    # enumerate means the hardware is FINE and the flash is the problem —
+    # which is the moment to reach for WIPE=1. Full account: insights.md §13.
+    #
+    # Opt-in rather than default, because it also destroys the on-board
+    # config.py — gitignored, hand-entered, holding WiFi credentials.
+    # `make upload` puts it back from your local copy, but only if you have one.
+    if [ "${WIPE:-0}" = "1" ]; then
+        echo "→ WIPE=1 — erasing ALL flash (firmware AND filesystem)…" >&2
+        echo "  On-board config.py will be destroyed; make upload restores it." >&2
+        picotool erase -a
+    fi
     picotool load "$FIRMWARE" --force
     picotool reboot
     ;;
@@ -128,7 +154,10 @@ esptool)
         || { echo "✗ esptool not found in .venv — run: make setup" >&2; exit 1; }
     PORT="$("$SCRIPT_DIR/detect_port.sh")"
     # Erase first — standard MicroPython advice; avoids stale partition/NVS
-    # state from a previous firmware. Only applies to the ESP32 path.
+    # state from a previous firmware. Unconditional here, unlike the picotool
+    # path's opt-in WIPE: esptool has no way to preserve the filesystem across
+    # a write anyway, so this path ALWAYS destroys the on-board config.py.
+    # Asymmetry worth knowing before you reach for it on a configured unit.
     echo "→ Erasing flash on $PORT…" >&2
     "$ESPTOOL" --port "$PORT" --chip esp32c3 erase-flash
     "$ESPTOOL" --port "$PORT" --chip esp32c3 write-flash 0x0 "$FIRMWARE"

@@ -812,3 +812,153 @@ Implications for the line palette:
 - **An IMU simply resting inside the bottle, unfastened, detects taps fine**
   for testing, and stays removable. Rigid mounting can wait for the
   permanent build; it is not a prerequisite for gesture iteration.
+
+---
+
+## 13. A corrupt filesystem can make a board look physically dead (2026-08-23)
+
+Cost most of a morning. The symptom was as severe as hardware failure gets:
+`mpremote`, `screen` and Thonny all failed to open a session, macOS showed
+**no `/dev/cu.usbmodem*`, no node in the USB tree, and no BOOTSEL device**,
+and the onboard LED sat dim instead of bright. Two cables and two ports
+behaved identically. Everything pointed at a damaged board.
+
+The board was fine. So were both cables and both ports.
+
+### The chain
+
+1. An LED strip on the 5V pin loaded the rail hard enough to brown out the
+   MCU **during a file write** (`mpremote cp`). That first event is a
+   separate, genuine power fault — see the LED-strip note below.
+2. The brownout left the **littlefs filesystem corrupt**, mid-write.
+3. On the next boot MicroPython hung in `_boot.py` **mounting** that
+   filesystem — which happens *before* USB CDC is brought up. No enumeration
+   ever occurred, so the host saw nothing at all.
+4. **Reflashing the firmware did not fix it.** Firmware and filesystem live
+   in separate flash regions and `picotool load` only writes the former, so
+   the corrupt filesystem survived every reflash intact.
+5. `picotool erase -a` followed by a reflash fixed it immediately.
+
+### Why this is worth writing down
+
+The failure impersonates dead hardware almost perfectly, and the two obvious
+recovery moves both fail in ways that *reinforce* the wrong diagnosis:
+reflashing appears to succeed and changes nothing, and swapping cables and
+ports changes nothing either. Each innocent result pushes you further toward
+"the board is damaged."
+
+**The discriminating test is BOOTSEL.** It runs from mask ROM and cannot be
+affected by anything in flash. So:
+
+| BOOTSEL enumerates? | Meaning |
+|---|---|
+| **No** | Genuinely physical — cable, port, connector, or board |
+| **Yes**, but MicroPython doesn't | Flash contents. The hardware is fine. |
+
+The second row was the case here, and it inverts the conclusion completely.
+Note the ordering trap: BOOTSEL working feels like reassurance, so it's
+tempting to read it as "board is fine, must be something else" and keep
+chasing physical causes. It is not reassurance — **it is the positive result
+that rules the physical layer out.**
+
+### What changed
+
+`make flash-micropython BOARD=... WIPE=1` now erases all of flash before
+loading (`scripts/flash_firmware.sh`). Opt-in, because it also destroys the
+on-board `config.py`. Reach for it the moment a board is unreachable over
+serial *and* BOOTSEL works — that combination is this bug until proven
+otherwise, and a plain reflash will never clear it.
+
+Also: `make upload` now writes `main.py` **last**. It's the boot script, so
+once on the device it auto-runs and competes with `mpremote` for the serial
+link — a separate failure (`could not complete raw paste: b'\x01'`) that
+truncated `config.py` and muddied this diagnosis considerably.
+
+### The underlying power fault — ✅ RESOLVED, and it was a config typo
+
+The trigger recurred: an 8-LED WS2812B strip on the XIAO's 5V pin **stopped
+the board enumerating and blocked BOOTSEL entirely**, twice. Disconnecting
+it restored both immediately.
+
+Eight LEDs should not be able to do that — `hardware.md` records 120 running
+fine off USB at `BRIGHTNESS = 0.15`. **The resolution is that `BRIGHTNESS`
+was never reaching them.** `config.py` had `LED_PIN = 3` while the strip was
+wired to GPIO1, so nothing ever addressed it — and an unaddressed WS2812B
+holds whatever state it powered up in, which here was near full white.
+Eight at full white is ≈480mA off VBUS. `hardware.md`'s 120-LED figure
+doesn't contradict this because that measurement had data arriving.
+
+Confirmed on the bench 2026-08-23: the strip lit blazing the instant it was
+connected with nothing driving it, then ran a full `make led-test` cycle —
+`fill WHITE` included — with no brownout at all once addressed at 15%.
+
+### ⚠ A wrong `LED_PIN` is a POWER fault, not a display bug
+
+This is the part worth carrying forward, because the failure is wildly
+disproportionate to its cause and nothing in the symptom points at config:
+
+```
+one wrong digit in LED_PIN
+  → strip never addressed
+  → holds power-up state (potentially full white, ~480mA)
+  → board browns out
+  → brownout lands during an mpremote write
+  → littlefs corrupted
+  → MicroPython hangs in _boot.py before USB CDC
+  → board presents as DEAD HARDWARE, survives every reflash
+```
+
+A one-character config error consumed a morning and looked like a destroyed
+board at every step. **`BRIGHTNESS` cannot protect you here** — it is a
+property of data you are not sending. The strip's idle draw is set by
+whatever it powered up holding, and it will happily sit there at maximum.
+
+Practical rules:
+
+- **Verify `LED_PIN` against `pinouts/<board>.md` before connecting a strip**,
+  not after. `make led-test` (which carries its own `DATA_PIN`) is the cheap
+  confirmation that the wiring works, independent of `config.py`.
+- **Bring a strip up under `mpremote run`, never during `make upload`.**
+  `make led-test` / `make run-file` execute from RAM and touch no files, so
+  a brownout costs you a reset. The same brownout during a write costs you
+  the filesystem.
+- **A strip lighting up before any code runs is a warning**, not a nice sign
+  that the wiring works.
+
+### Upload failures: free space ruled out, overwrite is the suspect
+
+The intermittent `make upload` failures outlived every physical fix — new
+cable, new port, off the breadboard entirely. Two things narrowed it:
+
+**Free space is not the cause.** `os.statvfs('/')` on the XIAO RP2350
+returned `(4096, 4096, 768, 716, 716, ...)` — 716 of 768 4KB blocks free,
+**93% empty**, both before and after a full upload. (Net-zero because the
+files already existed and were replaced.)
+
+**The pattern was: works immediately after a WIPE, fails on later uploads.**
+That points at littlefs having to erase and garbage-collect blocks in order
+to *overwrite* an existing file — flash erase on RP2350 blocks for tens of
+ms at a time, and a long enough stall breaks mpremote's raw-paste timeout.
+
+`scripts/upload.sh` now does `mpremote rm` before each `cp`. The first
+upload after that change succeeded **on the breadboard, without a wipe**,
+which had been failing consistently. That is **n=1 against an intermittent
+fault** — suggestive, not proven. If failures return, the next measurement
+is whether a tiny file succeeds while `main.py` fails; that would confirm
+write duration as the variable.
+
+Independent of the stalling, `rm`-then-`cp` is worth keeping for a
+different reason: a failed overwrite can leave a truncated blend of old and
+new content, whereas a failed write after removal leaves the file **absent**
+— which fails loudly at import instead of running as subtly-wrong code.
+
+Worth noting `main.py` is now **154,602 bytes**, rewritten in full on every
+upload. If write duration is the variable, that number is the lever — and
+another argument for the V1.6 modularization in `dev-status.md`.
+
+### Rule of thumb
+
+Brownouts don't only interrupt the write in progress — they can leave
+persistent state that outlives the power event, the reflash, and every
+cable you try next. When a board goes unreachable during a write, suspect
+the filesystem before the silicon.
