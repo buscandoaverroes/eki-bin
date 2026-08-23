@@ -46,6 +46,25 @@
 #      doing their job. If OSF reports lost power, they aren't — check the
 #      CR1220 is actually seated and oriented + polarity right.
 #
+# ══ ⚠ A BATTERY CAN MASK A POWER FAULT — confirmed on hardware ══════════
+# Found the hard way 2026-08-22. Symptom: completely empty I2C scan, on
+# wiring that had just been proven good by imu_test.py on the same pins.
+# Removing the CR1220 made the chip appear immediately at 0x68.
+#
+# Why: the DS3231 arbitrates its own supply. It switches to VBAT when VCC
+# falls below the power-fail threshold (~2.575V) AND below the battery
+# voltage — and **its I2C interface is disabled whenever it runs on
+# VBAT**. So a bad VIN connection produces a chip that is alive, keeping
+# perfect time, and totally invisible on the bus. The battery doesn't
+# cause the fault; it converts "dead and silent" into "healthy and
+# silent," which looks the same from a scan but points somewhere else.
+#
+# The diagnostic value runs the other way too: if pulling the battery
+# makes the device appear, VIN is sagging **below ~2.6V** — that's not
+# "slightly marginal," it's a high-resistance connection dropping most of
+# a volt. Reseat VIN before suspecting anything else. Intermittent EIO on
+# subsequent reads is the same fault, same cause.
+#
 # ══ WHO_AM_I: this chip doesn't have one ════════════════════════════════
 # Unlike the LSM6DSV16X (imu_test.py checks WHO_AM_I=0x70), the DS3231 has
 # no device-ID register. Seeing 0x68 on the bus is WEAKER confirmation than
@@ -68,14 +87,57 @@ import time
 from machine import I2C, Pin, RTC
 
 # ── Configuration ────────────────────────────────────────────────
-SDA_PIN = 0  # I2C data  — SET PER BOARD (Pico 2W=0/GP0); see header
-SCL_PIN = 1  # I2C clock — SET PER BOARD (Pico 2W=1/GP1); see header
-I2C_ID = 0   # Pico 2W: GP0/GP1 IS I2C0 — fixed by RP2350 silicon, not a
-#              choice. Same bus the IMU is on (pinouts/pico2w.md).
+SDA_PIN = 6  # I2C data  — SET PER BOARD, WITH I2C_ID below
+SCL_PIN = 7  # I2C clock — SET PER BOARD, WITH I2C_ID below
+I2C_ID = 1   # ⚠ SET PER BOARD TOO — NOT always 0:
+#                Pico 2W        : SDA 0, SCL 1, ID 0
+#                XIAO ESP32-C3  : SDA 6, SCL 7, ID 0  (ESP32 maps I2C to any
+#                                 pins in software, so the ID is a free choice)
+#                XIAO RP2350    : SDA 6, SCL 7, ID 1  (its LABELED D4/D5 are
+#                                 GP6/GP7, which are on I2C1 — pinouts/xiao_rp2350.md)
+#              On RP2040/RP2350 the peripheral is hard-wired to a fixed pin
+#              table, so an ID disagreeing with the pins is rejected at
+#              construction with a bare `ValueError: bad SCL pin`.
+#              _explain_i2c_pins() below turns that into an actionable message.
 
-SYNC_DS3231_FROM_BOARD_RTC = True  # ⚠ see WORKFLOW above — flip to False
-#                                     before the power-cycle test, or a
-#                                     re-run can overwrite good DS3231 data
+
+# RP2040/RP2350 fixed I2C pin table (datasheet "GPIO functions"). Used ONLY to
+# explain a construction failure — never to pick pins automatically, since
+# guessing which bus was MEANT would hide the very mistake this surfaces.
+_RP2_I2C_SDA = {0: (0, 4, 8, 12, 16, 20), 1: (2, 6, 10, 14, 18, 26)}
+_RP2_I2C_SCL = {0: (1, 5, 9, 13, 17, 21), 1: (3, 7, 11, 15, 19, 27)}
+
+
+def _explain_i2c_pins(sda, scl, i2c_id):
+    """Human-readable diagnosis for an I2C() that refused to construct.
+    RP2-specific; harmless on ESP32, where this failure mode can't occur."""
+    sda_bus = next((b for b, pins in _RP2_I2C_SDA.items() if sda in pins), None)
+    scl_bus = next((b for b, pins in _RP2_I2C_SCL.items() if scl in pins), None)
+    out = [
+        "    On RP2040/RP2350 each I2C peripheral is hard-wired to a fixed",
+        "    set of pins — the ID and the pins must agree:",
+        "      I2C0  SDA: GP0/4/8/12/16/20   SCL: GP1/5/9/13/17/21",
+        "      I2C1  SDA: GP2/6/10/14/18/26  SCL: GP3/7/11/15/19/27",
+    ]
+    if sda_bus is None:
+        out.append(f"    ✗ GP{sda} is not a valid I2C SDA pin on this chip at all.")
+    if scl_bus is None:
+        out.append(f"    ✗ GP{scl} is not a valid I2C SCL pin on this chip at all.")
+    if sda_bus is not None and scl_bus is not None:
+        if sda_bus != scl_bus:
+            out.append(f"    ✗ GP{sda} is an I2C{sda_bus} SDA pin but GP{scl} is an")
+            out.append(f"      I2C{scl_bus} SCL pin — they're on DIFFERENT buses.")
+            out.append("      Pick a pair from one row of the table above.")
+        elif sda_bus != i2c_id:
+            out.append(f"    → GP{sda}/GP{scl} are a valid I2C{sda_bus} pair, but")
+            out.append(f"      I2C_ID is set to {i2c_id}. Set I2C_ID = {sda_bus}.")
+    return out
+
+SYNC_DS3231_FROM_BOARD_RTC = False  # READ-ONLY by default, deliberately:
+#                                     running this script should never be able
+#                                     to destroy a chip's time. Flip to True
+#                                     only for WORKFLOW step 1 (seeding a new
+#                                     or power-lost chip), then flip back.
 READ_INTERVAL_SECS = 2  # how often to re-print time+temp in the watch loop
 
 # ── DS3231 register map ────────────────────────────────────────────
@@ -205,7 +267,15 @@ def _board_rtc_datetime():
 def main():
     print("\n══ eki-bin RTC test (DS3231) ═════════════════════")
     print(f"  bus: I2C{I2C_ID}  SDA=GPIO{SDA_PIN}  SCL=GPIO{SCL_PIN}  freq=400kHz")
-    i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    try:
+        i2c = I2C(I2C_ID, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    except ValueError as e:
+        # Rejected BEFORE any bus activity — no wiring change can fix this,
+        # and the physical setup is not implicated. Explain, don't re-raise.
+        print(f"  ✗ Could not open I2C{I2C_ID} on SDA=GPIO{SDA_PIN}/SCL=GPIO{SCL_PIN}: {e}")
+        for line in _explain_i2c_pins(SDA_PIN, SCL_PIN, I2C_ID):
+            print(line)
+        return
 
     found = i2c.scan()
     print("  I2C scan:", [hex(a) for a in found])
@@ -236,6 +306,22 @@ def main():
         print("    since it was last cleared (see WORKFLOW step 1).")
     print()
 
+    if SYNC_DS3231_FROM_BOARD_RTC and not lost_power:
+        # The chip is holding time AND hasn't lost power since it was last
+        # set — i.e. it is currently PASSING the battery-backup test, and
+        # we are about to overwrite the evidence. Caught this happening for
+        # real on 2026-08-22: the flag was left True across a
+        # disconnect-and-pocket test, so the readback showed a correct time
+        # that had just been written rather than one that had survived.
+        # The OSF above was the only thing that actually proved anything.
+        print("  ⚠ ABOUT TO OVERWRITE A CHIP THAT IS KEEPING GOOD TIME.")
+        print("    OSF is clear, so this chip has held time since it was last")
+        print("    set. If you are mid-power-cycle-test, the readback below")
+        print("    will show a time this script just WROTE — which proves")
+        print("    nothing about battery backup. Set")
+        print("    SYNC_DS3231_FROM_BOARD_RTC = False and re-run to actually")
+        print("    test it. (Syncing anyway — this is only a warning.)\n")
+
     if SYNC_DS3231_FROM_BOARD_RTC:
         year, month, day, hour, minute, second, weekday = _board_rtc_datetime()
         if year < 2024 or year > 2099:
@@ -253,16 +339,40 @@ def main():
 
     print(f"  Reading back every {READ_INTERVAL_SECS}s — confirms it's actually")
     print("  ticking, not stuck. Ctrl+C to stop.\n")
+
+    # Tolerate OSError per-read rather than dying on the first one. A bring-up
+    # script's job is to CHARACTERIZE a connection, and "3 of 12 reads failed"
+    # is a far more useful fact about marginal wiring than a traceback on read
+    # #2 — which is exactly what this script did on its first real run
+    # (2026-08-22), throwing away the failure RATE, the single most diagnostic
+    # number available. Note this is the opposite call from imu_test.py, which
+    # is right to fail fast: there, a bad read means bad wiring and nothing
+    # more. Here the whole question is "how bad, and is it getting worse."
+    ok = 0
+    failed = 0
     try:
         while True:
-            year, month, day, hour, minute, second, weekday = _read_datetime(i2c, DS3231_ADDR)
-            temp = _read_temp_c(i2c, DS3231_ADDR)
-            print(f"  {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
-                  f"  (weekday={weekday})   {temp:5.2f}°C")
+            try:
+                year, month, day, hour, minute, second, weekday = _read_datetime(i2c, DS3231_ADDR)
+                temp = _read_temp_c(i2c, DS3231_ADDR)
+                ok += 1
+                print(f"  {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+                      f"  (weekday={weekday})   {temp:5.2f}°C")
+            except OSError as e:
+                failed += 1
+                print(f"  ✗ read failed ({e})  [{failed} failed / {ok + failed} attempted]")
             time.sleep(READ_INTERVAL_SECS)
     except KeyboardInterrupt:
         pass
     finally:
+        total = ok + failed
+        if total:
+            print(f"\n  {ok}/{total} reads succeeded.")
+            if failed:
+                print("  ⚠ ANY failures here mean a marginal connection, not a flaky")
+                print("    chip — I2C either transacts or it doesn't. Reseat the")
+                print("    clips (VIN first: see this file's header on how a sagging")
+                print("    VIN makes the chip silently prefer its battery).")
         print("\n  bye — the DS3231 keeps ticking on its own regardless (that's the point)")
 
 

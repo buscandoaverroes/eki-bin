@@ -1,9 +1,26 @@
 # Seeed XIAO RP2350
 
-**Status: ⬜ Proposed** — cross-referenced against Seeed's own docs
-([OSHW-XIAO-Series/XIAO-RP2350.md](https://github.com/Seeed-Studio/OSHW-XIAO-Series/blob/main/document/SeeedStudio_XIAO_RP2350/XIAO-RP2350.md)),
-not yet confirmed against a physical board. Flip to ✅ once a bring-up
-script actually talks to something over these pins.
+**Status: ✅ Verified** — bench-confirmed 2026-08-22 on real hardware:
+LED strip, LSM6DSV16X IMU, and DS3231 RTC all working, with both I²C
+devices sharing one bus. Pin table originally transcribed from
+[Seeed's docs](https://github.com/Seeed-Studio/OSHW-XIAO-Series/blob/main/document/SeeedStudio_XIAO_RP2350/XIAO-RP2350.md)
+and since exercised in practice.
+
+### Confirmed working values
+
+| Function | Pin | GPIO | Notes |
+|---|---|---|---|
+| WS2812B data | D7 | **1** | `led_test.py DATA_PIN = 1`; all 8 LEDs cycle |
+| I²C SDA | D4 | **6** | shared by IMU + RTC |
+| I²C SCL | D5 | **7** | shared by IMU + RTC |
+| I²C bus ID | — | **1** | ⚠ **not 0** — see below |
+
+Scan with both devices attached shows `0x68` (DS3231) and `0x6B`
+(LSM6DSV16X) together — no address conflict, neither loading the bus.
+
+⚠ **`I2C_ID = 1` is the trap on this board**, and it cost a full
+bring-up session. See the section below; `make i2c-scan` now determines
+it automatically if you ever need to re-derive it.
 
 Parts context: `docs/roadmap.md`. **Same RP2350 silicon as the Pico 2W**
 (`pinouts/pico2w.md`) — different board, no WiFi, XIAO form factor. Not to
@@ -94,3 +111,66 @@ actually needs once flashing is attempted; not yet tested.
 - [ ] Confirm which flash target applies (`flash-micropython` vs. a new one)
 - [ ] Onboard-LED / `HEARTBEAT_PIN` alias, if one exists on this board
       (XIAO C3 has none; unconfirmed here)
+
+## shared v1.4 pinout
+
+## Physical pinout (per Seeed's official docs, not yet bench-verified)
+
+```
+                 ┌─────────────┐
+                 │   USB-C     │
+                 └──┬───────┬──┘
+  ► D0/A0  ──────────┤       ├────────── 5V [to 8led strip]
+     D1/A1 ──────────┤       ├────────── GND [to gnd rail]
+     D2/A2 ──────────┤ RP2350├────────── 3V3 [to power rail]
+     D3    ──────────┤       ├────────── D10 / GPIO3 
+     D4/SDA──────────┤       ├────────── D9  / GPIO4 
+     D5/SCL──────────┤       ├────────── D8  / GPIO2 
+     D6/TX ──────────┤       ├────────── D7  / GPIO1 
+                      └───────┘
+```
+
+8led strip
+
+```
+[] GND [to gnd rail]
+[] DIN [to d7 on xiao]
+[] 5Vdc [xiao 5v pin directly]
+```
+
+
+ds3231
+
+```
+[] VIN (3v3) [to power rail]
+[] GND [to gnd rail]
+[] SCL 
+[] SDA
+```
+
+IMU
+
+```
+[] GND [to gnd rail]
+[] VIN (3v3) [to power rail]
+[] SDA
+[] SCL
+```
+
+
+power (3v3) rail
+
+```
+[] bridge to 3v3 [to xiao 3v3]
+[] to imu
+[] to ds3231 
+```
+
+gnd rail
+
+```
+[] bridge to xiao gnd
+[] to imu
+[] to ds3231
+[] to led strip
+```

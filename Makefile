@@ -1,11 +1,13 @@
 # Makefile — eki-bin
 # Usage:
 #   make setup             — create .venv, install Python tools
-#   make flash-micropython — flash MicroPython to the Pico 2W (picotool + .uf2)
-#   make flash-esp32-c3    — flash MicroPython to the XIAO ESP32-C3 (esptool + .bin)
+#   make flash-micropython — flash MicroPython to any supported board.
+#                             Optionally BOARD=pico2w|esp32c3|xiao-rp2350;
+#                             omit it for an interactive picker.
 #   make schedule          — convert schedules/*.yaml → minutes arrays
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
+#   make i2c-scan          — find I2C devices without knowing pins/bus first
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
@@ -14,20 +16,20 @@
 #
 # upload/run/led-test/screen/repl all go through mpremote, which is board-
 # agnostic — the only board-specific step is the initial firmware flash, since
-# the Pico (mass-storage .uf2) and ESP32-C3 (serial bootloader) use different
-# protocols. Hence two separate flash targets rather than one auto-detecting
-# target: which board you're holding is something you already know, and
-# guessing it from bootloader state before any firmware is even running is
-# more fragile than just naming it.
+# RP2350 boards (mass-storage .uf2 via picotool) and ESP32 boards (serial
+# bootloader via esptool) use different protocols. That dispatch now lives in
+# scripts/flash_firmware.sh. Still NOT auto-detected: which board you're
+# holding is something you already know, and guessing it from bootloader state
+# before any firmware is running is more fragile than just naming it.
 
 VENV     := .venv
 PYTHON   := $(VENV)/bin/python
 MPREMOTE := $(VENV)/bin/mpremote
 ESPTOOL  := $(VENV)/bin/esptool
 
-FIRMWARE_DIR   := firmware
-PICO_FIRMWARE  := $(wildcard $(FIRMWARE_DIR)/RPI_PICO2_W-*.uf2)
-ESP32_FIRMWARE := $(wildcard $(FIRMWARE_DIR)/SEEED_XIAO_ESP32C3-*.bin)
+# Firmware filenames/globs deliberately live ONLY in
+# scripts/flash_firmware.sh now — duplicating them here is what let the
+# XIAO RP2350 target check the wrong board's file.
 SRC_DIR      := micropython
 
 STATION ?= testbench
@@ -42,38 +44,32 @@ setup: requirements.txt
 	@echo "✓ .venv ready — mpremote at $(MPREMOTE)"
 
 # ── Firmware ──────────────────────────────────────────────────────
+# One target for every board. Pass BOARD= to skip the prompt:
+#   make flash-micropython BOARD=pico2w
+#   make flash-micropython BOARD=esp32c3
+#   make flash-micropython BOARD=xiao-rp2350
+#   make flash-micropython                  ← interactive picker
+#
+# The board table, the two flashing protocols (picotool/.uf2 for RP2350
+# boards, esptool/.bin for ESP32), and the firmware-file lookup all live in
+# the script — previously these were three near-duplicate targets that had
+# already drifted (the XIAO RP2350 one validated the PICO's firmware
+# variable while flashing the XIAO's, so a missing .uf2 passed the guard and
+# then ran picotool with an empty path).
 .PHONY: flash-micropython
 flash-micropython:
-	@command -v picotool > /dev/null 2>&1 \
-		|| (echo "✗ picotool not found — run: brew install picotool" && exit 1)
-	@test -n "$(PICO_FIRMWARE)" \
-		|| (echo "✗ No .uf2 found in $(FIRMWARE_DIR)/ — download from micropython.org/download/RPI_PICO2_W/" && exit 1)
-	@echo "→ Flashing: $(PICO_FIRMWARE)"
-	picotool load $(PICO_FIRMWARE) --force
-	picotool reboot
-	@echo "✓ Done — Pico rebooting into MicroPython"
+	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh $(BOARD)
 
-# Flash MicroPython to the XIAO ESP32-C3. Different tool/procedure from the
-# Pico above — ESP32 uses a serial bootloader protocol (esptool), not a
-# mass-storage drag-and-drop. Erases first (standard MicroPython flashing
-# advice — avoids stale partition/NVS state from a previous firmware).
-#
-# Note: esptool's CLI has changed across major versions. This targets the
-# modern (v5.x) `erase-flash` / `write-flash` subcommand syntax; if it errors
-# with an unrecognized command, run `esptool --help` to check your version's
-# exact syntax.
+# Kept so existing docs, scripts and muscle memory don't break. The old
+# names were also inconsistent with each other — one named for the firmware
+# (flash-micropython), one for the board (flash-esp32-c3).
 .PHONY: flash-esp32-c3
 flash-esp32-c3:
-	@test -f $(ESPTOOL) \
-		|| (echo "✗ esptool not found in .venv — run: make setup" && exit 1)
-	@test -n "$(ESP32_FIRMWARE)" \
-		|| (echo "✗ No .bin found in $(FIRMWARE_DIR)/ — download from micropython.org/download/SEEED_XIAO_ESP32C3/" && exit 1)
-	@PORT=$$(bash scripts/detect_port.sh) && \
-		echo "→ Erasing flash on $$PORT…" && \
-		$(ESPTOOL) --port $$PORT --chip esp32c3 erase-flash && \
-		echo "→ Flashing: $(ESP32_FIRMWARE)" && \
-		$(ESPTOOL) --port $$PORT --chip esp32c3 write-flash 0x0 $(ESP32_FIRMWARE) && \
-		echo "✓ Done — XIAO C3 rebooting into MicroPython"
+	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh esp32c3
+
+.PHONY: flash-xiao2350
+flash-xiao2350:
+	@ESPTOOL=$(ESPTOOL) bash scripts/flash_firmware.sh xiao-rp2350
 
 # ── Python files ──────────────────────────────────────────────────
 
@@ -121,6 +117,15 @@ upload-file: _check-mpremote
 .PHONY: led-test
 led-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/led_test.py
+
+# Board-agnostic I2C discovery: finds devices WITHOUT being told which pins
+# or bus ID to use. On RP2 boards this needs no configuration at all — it
+# enumerates the chip's legal pin/ID combinations and reports the config
+# values to paste. Start here when a device doesn't show up; imu-test and
+# rtc-test verify a chip WORKS, this one finds whether it's there at all.
+.PHONY: i2c-scan
+i2c-scan: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/i2c_scan.py
 
 # Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
 .PHONY: imu-test
