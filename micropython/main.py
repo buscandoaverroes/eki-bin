@@ -518,6 +518,41 @@ def _arm_target(ttl, arm_len, direction):
     return ANCHOR_INDEX + offset if direction == "a" else ANCHOR_INDEX - offset
 
 
+def geometry_problems(num_leds=None, anchor=None, arm_a=None, arm_b=None):
+    """Reasons the anchor/arm geometry can't fit the strip; [] means it fits.
+
+    _arm_target() bounds each offset against its ARM length but never
+    against NUM_LEDS, so geometry tuned for one strip and run on a shorter
+    one indexes off the end of the frame. On hardware that surfaced as a
+    bare `IndexError: list index out of range` three call levels deep in the
+    render loop — AFTER a clean boot, a correct clock and a correct
+    timetable printout, which points nowhere near config.py.
+
+    Parameterised (rather than reading the module constants directly) so
+    tests can sweep combinations without re-importing main a dozen times."""
+    n = NUM_LEDS if num_leds is None else num_leds
+    a = ANCHOR_INDEX if anchor is None else anchor
+    la = ARM_A_LEN if arm_a is None else arm_a
+    lb = ARM_B_LEN if arm_b is None else arm_b
+    out = []
+    if n <= 0:
+        return ["NUM_LEDS=%d must be positive" % n]
+    if not 0 <= a < n:
+        out.append("ANCHOR_INDEX=%d is off the strip (valid 0..%d)" % (a, n - 1))
+        return out  # every arm message below would just restate this
+    if la < 0:
+        out.append("ARM_A_LEN=%d is negative" % la)
+    elif a + la > n - 1:
+        out.append("arm A reaches LED %d but the last is %d — set ARM_A_LEN "
+                   "to %d or less" % (a + la, n - 1, n - 1 - a))
+    if lb < 0:
+        out.append("ARM_B_LEN=%d is negative" % lb)
+    elif a - lb < 0:
+        out.append("arm B reaches LED %d but the first is 0 — set ARM_B_LEN "
+                   "to %d or less" % (a - lb, a))
+    return out
+
+
 # ─────────────────────────────────────────────────────────────
 # Memory instrumentation — docs/insights.md §11
 #
@@ -2998,6 +3033,21 @@ def main():
     # IMPORT time to build `np`, so getting those wrong fails before main()
     # is entered and no LED feedback is possible by construction. Those two
     # stay a serial-console diagnosis.
+    # Only ApproachContract consumes the anchor/arm geometry, so only it can
+    # be broken by a mismatch — failing on it for an arc contract that never
+    # reads those values would be a false alarm.
+    if isinstance(ACTIVE_CONTRACT, ApproachContract):
+        _geo = geometry_problems()
+        if _geo:
+            print("  ✗ ApproachContract geometry doesn't fit NUM_LEDS=%d:"
+                  % NUM_LEDS)
+            for _problem in _geo:
+                print("      %s" % _problem)
+            print("    Previously this only appeared as `IndexError: list index")
+            print("    out of range` inside the render loop, several calls deep")
+            print("    and long after a clean boot — pointing nowhere near config.")
+            _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
+
     try:
         led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
     except (ValueError, TypeError) as e:

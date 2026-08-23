@@ -49,6 +49,18 @@ cp_verified() {
     want=$(wc -c < "$src" | tr -d ' ')
     attempt=1
     while [ "$attempt" -le "$ATTEMPTS" ]; do
+        # Remove before writing. Two reasons, one certain and one a
+        # hypothesis:
+        #  • Certain: a failed cp over an EXISTING file can leave a
+        #    truncated mix of old and new. Removing first means a failure
+        #    leaves the file ABSENT, which fails loudly at import instead
+        #    of running as subtly-wrong code.
+        #  • Hypothesised: uploads succeed reliably straight after a WIPE
+        #    and then start failing, which points at littlefs having to
+        #    erase/garbage-collect blocks to overwrite. Freeing them first
+        #    may avoid a stall long enough to break mpremote's raw paste.
+        #    NOT confirmed — see the note in insights.md §13.
+        "$MPREMOTE" rm ":$dst" > /dev/null 2>&1 || true
         if "$MPREMOTE" cp "$src" ":$dst" > /dev/null 2>&1; then
             got=$(device_size "$dst")
             if [ "$want" = "$got" ]; then

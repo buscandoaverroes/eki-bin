@@ -132,3 +132,42 @@ class TestWiring:
         for other in others:
             # Dominant channel must differ — all three others peak on red.
             assert clock.index(max(clock)) != other.index(max(other))
+
+
+class TestGeometryFits:
+    """The anchor/arm geometry must fit NUM_LEDS.
+
+    _arm_target() bounds offsets against each ARM length but never against
+    the strip, so a config tuned for 21 LEDs run on 8 walks off the end of
+    the frame. On hardware that appeared as a bare IndexError three calls
+    deep in the render loop — after a clean boot, a correct clock and a
+    correct timetable printout, none of which point at config.py.
+    """
+
+    def test_the_default_single_arm_geometry_fits(self, fw):
+        assert fw.geometry_problems(num_leds=8, anchor=0, arm_a=7, arm_b=0) == []
+
+    def test_the_21_led_config_on_an_8_led_strip_is_caught(self, fw):
+        # The actual failing case observed on hardware.
+        assert fw.geometry_problems(num_leds=8, anchor=10, arm_a=10, arm_b=10)
+
+    def test_arm_a_running_past_the_end_is_caught(self, fw):
+        problems = fw.geometry_problems(num_leds=8, anchor=0, arm_a=8, arm_b=0)
+        assert len(problems) == 1 and "arm A" in problems[0]
+
+    def test_arm_b_running_before_the_start_is_caught(self, fw):
+        problems = fw.geometry_problems(num_leds=8, anchor=2, arm_a=5, arm_b=3)
+        assert len(problems) == 1 and "arm B" in problems[0]
+
+    def test_a_symmetric_bidirectional_geometry_fits(self, fw):
+        assert fw.geometry_problems(num_leds=21, anchor=10, arm_a=10,
+                                    arm_b=10) == []
+
+    def test_an_off_strip_anchor_reports_once_not_three_times(self, fw):
+        # Arm messages would all just restate the same root cause.
+        assert len(fw.geometry_problems(num_leds=8, anchor=99,
+                                        arm_a=3, arm_b=3)) == 1
+
+    def test_the_message_names_the_value_to_change(self, fw):
+        problems = fw.geometry_problems(num_leds=8, anchor=0, arm_a=12, arm_b=0)
+        assert "ARM_A_LEN" in problems[0]
