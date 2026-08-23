@@ -84,7 +84,21 @@ IMU_SCL_PIN = 1
 # with `make set-time`. It survives a soft reset but NOT a power cycle, so
 # re-run after unplugging. This is also where V2 is heading permanently
 # (DS3231 RTC, no WiFi in normal operation).
-TIME_SOURCE = "wifi"  # "wifi" | "rtc"
+# "ds3231" reads a DS3231 RTC over I2C every tick — the V2 direction, and
+# the only source that survives a power cycle. It needs seeding once with
+# `make rtc-test` (see that file's WORKFLOW), and it is TERMINAL on failure:
+# an unreadable chip, a set oscillator-stop flag, or an implausible date all
+# stop the display rather than showing departures from a clock we can't
+# vouch for. Wrong times are worse than no times — they make you miss the
+# train while believing you won't.
+TIME_SOURCE = "wifi"  # "wifi" | "rtc" | "ds3231"
+
+# DS3231 wiring — only read when TIME_SOURCE = "ds3231". Defaults to the
+# IMU's bus, because on this project's hardware they ARE the same bus
+# (0x68 vs 0x6A/0x6B, no address conflict). Uncomment only to split them.
+# RTC_I2C_ID = 1
+# RTC_SDA_PIN = 6
+# RTC_SCL_PIN = 7
 
 # Only read when TIME_SOURCE = "wifi".
 WIFI_SSID = "your_network_name"
