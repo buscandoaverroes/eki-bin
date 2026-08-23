@@ -61,11 +61,6 @@ from contracts import (_TrainState, _advance_arm, _advance_train, _arc_len,
 
 
 
-def clear():
-    """All LEDs off."""
-    for i in range(NUM_LEDS):
-        np[i] = (0, 0, 0)
-    np.write()
 
 
 
@@ -90,298 +85,37 @@ from primitives import _hsv_to_rgb, _rgb_to_hsv  # `import *` skips these
 
 
 
-def is_quiet(now):
-    """True during the configured quiet hours. The window can wrap past midnight
-    (e.g. 23:00 → 06:00), so we test the gap with OR, not a simple range."""
-    return now >= QUIET_START or now < QUIET_END
-
-
 # ─────────────────────────────────────────────────────────────
-# Schedule loading
-# [→ Rust] build.rs reads schedule.json at compile time and emits
-#          const arrays — zero runtime parsing cost on device.
+# Schedule + clock — extracted (V1.6)
 # ─────────────────────────────────────────────────────────────
-def load_schedule(filename):
-    """
-    Load schedule.json from device filesystem.
-    Returns the full parsed dict (station, weekday, weekend).
-    Raises (OSError: missing file; ValueError: malformed JSON) rather than
-    halting itself — the caller decides what "failed to load" looks like on
-    the LEDs (see main()'s call site and
-    docs/contracts/led-status-messages.md's schedule-load-failure entry).
+from schedule import *  # noqa: F401,F403
+from clock import *  # noqa: F401,F403
+# `import *` skips underscores. run_startup_sequence() calls this, and
+# no host test reaches the ds3231 boot path — so a green suite would
+# have shipped a NameError straight to the hardware.
+from clock import _check_ds3231_at_boot, _ds3231_local_time
+def _local_time_or_die():
+    """local_time(), but a clock we can't trust ends the run.
+
+    ⚠ NEVER RETURNS if the RTC is unreadable — it enters the terminal
+    failure display, same as a WiFi failure at boot. This device's whole job
+    is telling you when to leave, so showing a plausible-looking wrong time
+    is the worst thing it can do: you miss the train while believing you
+    won't. Dark-and-obviously-broken beats confidently-wrong.
+
+    Lives here rather than in clock.py because it is a POLICY decision about
+    what to display, and clock.py only reads clocks. Keeping it there made
+    clock depend on the startup sequence, which already depends on clock.
+
     """
     try:
-        with open(filename) as f:
-            return json.load(f)
-    except OSError:
-        print(f"✗ Schedule file not found: {filename}")
-        print("  Upload it with: make upload")
-        raise
-    except ValueError:
-        print(f"✗ Schedule file malformed (bad JSON): {filename}")
-        print("  Regenerate it with: make schedule && make upload")
-        raise
-
-
-# ─────────────────────────────────────────────────────────────
-# DS3231 RTC (TIME_SOURCE="ds3231") — docs/hardware.md § DS3231
-#
-# Why a separate TIME_SOURCE value rather than redefining "rtc": "rtc"
-# already means the BOARD's own volatile clock, which is what makes the
-# WiFi-free ESP32-C3 unit run at all (docs/insights.md §11). Overloading it
-# would break that unit. They also differ in the way that matters most —
-# the board clock does NOT survive power loss, and this chip's whole
-# purpose is that it does.
-#
-# The chip is read EVERY tick rather than copied into the board's RTC at
-# boot. Copying once would mean trusting the RP2350's crystal thereafter,
-# which is an order of magnitude worse than the TCXO we bought; the DS3231
-# stays the single source of truth. Reads are cached ~1s (see _rtc_cache)
-# because the IMU shares this bus and the gesture loop ticks every 4ms,
-# while the display is minute-granular.
-#
-# Time is stored LOCAL, not UTC — matching what rtc_test.py already seeds,
-# so _UTC_OFFSET_APPLIED is 0 exactly as for "rtc". Japan has no DST, so
-# UTC storage would buy nothing and would require migrating the seeding
-# path. scripts/rtc_drift.py is deliberately indifferent to which is used.
-#
-# [→ Rust] read_rtc() reads DS3231 over I2C → (hours, minutes, weekday)
-# ─────────────────────────────────────────────────────────────
-_DS3231_ADDR = 0x68  # fixed in silicon — no address strap on this chip
-_DS3231_REG_SECONDS = 0x00  # 7 regs from here: sec,min,hour,dow,date,mon,yr
-_DS3231_REG_STATUS = 0x0F
-_DS3231_OSF_BIT = 0x80  # status bit7: oscillator STOPPED since last cleared
-
-_rtc_i2c = None
-_rtc_cache = None  # (ticks_ms_when_read, decoded_tuple)
-_RTC_CACHE_MS = 1000
-
-
-class ClockUnavailable(Exception):
-    """The DS3231 can't be read, or says its time is untrustworthy.
-
-    Deliberately NOT caught-and-ignored anywhere: showing a wrong departure
-    time is worse than showing none, because it makes you miss the train
-    while believing you won't. See run_startup_sequence()."""
-
-
-def _ds3231_bcd_to_dec(b):
-    return (b >> 4) * 10 + (b & 0x0F)
-
-
-def day_of_week(year, month, day):
-    """Sakamoto's algorithm → 0=Monday … 6=Sunday (MicroPython convention).
-
-    Computed from the DATE rather than read from the chip's day-of-week
-    register (0x03). That register holds 1-7 with NO defined meaning — the
-    mapping is whatever wrote it decided — so trusting it would couple the
-    firmware to whichever tool last seeded the chip. The date is
-    unambiguous, and this costs a few integer ops."""
-    t = (0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4)
-    y = year - 1 if month < 3 else year
-    sunday_based = (y + y // 4 - y // 100 + y // 400 + t[month - 1] + day) % 7
-    return (sunday_based - 1) % 7  # shift 0=Sunday → 0=Monday
-
-
-def ds3231_decode(raw):
-    """7 raw DS3231 registers → (year, month, day, hour, minute, second).
-
-    Pure — no I/O — so tests/test_ds3231.py can cover it on the host.
-    Backwards BCD produces a clock that looks alive while showing nonsense,
-    which is exactly the failure a host test catches and a bench cannot."""
-    if len(raw) != 7:
-        raise ValueError("expected 7 registers, got %d" % len(raw))
-    second = _ds3231_bcd_to_dec(raw[0] & 0x7F)
-    minute = _ds3231_bcd_to_dec(raw[1] & 0x7F)
-    hour_reg = raw[2]
-    if hour_reg & 0x40:  # 12-hour mode: bit5 is AM/PM. We never WRITE this,
-        #                  but a chip set by other tooling can be in it.
-        hour = _ds3231_bcd_to_dec(hour_reg & 0x1F)
-        if hour_reg & 0x20 and hour != 12:
-            hour += 12
-        elif not hour_reg & 0x20 and hour == 12:
-            hour = 0
-    else:
-        hour = _ds3231_bcd_to_dec(hour_reg & 0x3F)
-    day = _ds3231_bcd_to_dec(raw[4] & 0x3F)
-    month = _ds3231_bcd_to_dec(raw[5] & 0x1F)
-    century = 2100 if raw[5] & 0x80 else 2000
-    return (century + _ds3231_bcd_to_dec(raw[6]), month, day,
-            hour, minute, second)
-
-
-def ds3231_time_is_plausible(decoded):
-    """Sanity-gate a decoded reading before the display trusts it.
-
-    A DS3231 that lost power with no working backup resets to 2000-01-01 —
-    observed on hardware, and the anchor that says the CR1220 isn't doing
-    its job. That reads as a perfectly valid timestamp, so OSF alone is not
-    the only guard worth having."""
-    year, month, day, hour, minute, second = decoded
-    return (2024 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31
-            and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59)
-
-
-def _get_rtc_i2c():
-    """Lazy singleton, mirroring _get_imu()'s construction guard."""
-    global _rtc_i2c
-    if _rtc_i2c is None:
-        try:
-            _rtc_i2c = I2C(RTC_I2C_ID, scl=Pin(RTC_SCL_PIN),
-                           sda=Pin(RTC_SDA_PIN), freq=400000)
-        except ValueError as e:
-            # Rejected at construction on RP2 chips — see _get_imu() for the
-            # full explanation of why no rewiring can fix this.
-            raise ClockUnavailable(
-                "RTC I2C rejected (%s): RTC_I2C_ID=%d with SDA=%d/SCL=%d is "
-                "not a legal combination on this chip. Run `make i2c-scan`."
-                % (e, RTC_I2C_ID, RTC_SDA_PIN, RTC_SCL_PIN))
-    return _rtc_i2c
-
-
-def ds3231_osc_stopped():
-    """True if the oscillator has stopped since the flag was last cleared —
-    i.e. the chip cannot vouch for its own time. This is the DS3231's own
-    claim, which is why it beats eyeballing the clock: a chip that lost
-    power at 3am and was re-powered still SHOWS a plausible time."""
-    try:
-        status = _get_rtc_i2c().readfrom_mem(_DS3231_ADDR,
-                                             _DS3231_REG_STATUS, 1)[0]
-    except OSError as e:
-        raise ClockUnavailable("cannot read DS3231 status register: %s" % e)
-    return bool(status & _DS3231_OSF_BIT)
-
-
-def ds3231_now():
-    """Read + decode the chip, cached ~1s. Raises ClockUnavailable.
-
-    Retries a couple of times before giving up: this bus is shared with the
-    IMU and a single NAK shouldn't take the display down, but a chip that
-    is genuinely gone must not be papered over."""
-    global _rtc_cache
-    if _rtc_cache is not None:
-        age = time.ticks_diff(time.ticks_ms(), _rtc_cache[0])
-        if 0 <= age < _RTC_CACHE_MS:
-            return _rtc_cache[1]
-    last = None
-    for _ in range(3):
-        try:
-            raw = _get_rtc_i2c().readfrom_mem(_DS3231_ADDR,
-                                              _DS3231_REG_SECONDS, 7)
-            decoded = ds3231_decode(bytes(raw))
-            _rtc_cache = (time.ticks_ms(), decoded)
-            return decoded
-        except OSError as e:
-            last = e
-    raise ClockUnavailable("DS3231 unreadable after 3 attempts: %s" % last)
-
-
-# ─────────────────────────────────────────────────────────────
-# Time helpers
-# ─────────────────────────────────────────────────────────────
-def local_time():
-    """
-    Return (minutes_since_midnight, weekday) in local time.
-    weekday: 0=Monday … 6=Sunday (MicroPython convention)
-
-    NTP sets the RTC to UTC, so we add UTC_OFFSET_HOURS to get local time —
-    and also account for the day boundary, so the correct weekday is used
-    when UTC and local time are on different calendar days.
-    (e.g. UTC 22:00 Thursday = JST 07:00 Friday)
-
-    With TIME_SOURCE="rtc" the clock is ALREADY local (`mpremote rtc --set`
-    writes host local time), so no offset is applied — see
-    _UTC_OFFSET_APPLIED. Reading the raw clock as UTC in that case would
-    put the display UTC_OFFSET_HOURS ahead of reality.
-    """
-    if TIME_SOURCE == "ds3231":
-        return _ds3231_local_time()
-    raw = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
-    utc_minutes = raw[3] * 60 + raw[4]
-    local_minutes_abs = utc_minutes + _UTC_OFFSET_APPLIED * 60
-
-    day_overflow = local_minutes_abs // (24 * 60)  # 0 or 1
-    local_minutes = local_minutes_abs % (24 * 60)
-    local_weekday = (raw[6] + day_overflow) % 7
-
-    return local_minutes, local_weekday
-
-
-def _ds3231_local_time():
-    """local_time() for TIME_SOURCE="ds3231".
-
-    ⚠ MAY NEVER RETURN. If the clock can't be read it enters the terminal
-    failure display instead of guessing — same pattern (and same warning)
-    as run_startup_sequence() on WiFi failure. That is deliberate: this
-    device's entire job is telling you when to leave, so a plausible-looking
-    wrong time is the worst output it can produce. Dark-and-obviously-broken
-    beats confidently-wrong.
-
-    The offset arithmetic mirrors the WiFi path exactly, even though
-    _UTC_OFFSET_APPLIED is 0 here, so that switching the chip to UTC storage
-    later is a one-constant change rather than a rewrite."""
-    try:
-        year, month, day, hour, minute, _second = ds3231_now()
+        return local_time()
     except ClockUnavailable as e:
         print("  ✗ Clock unavailable: %s" % e)
         print("    Refusing to show departures from a clock we can't trust.")
         _run_startup_failure_forever(CLOCK_ERROR_COLOR)  # never returns
-    minutes_abs = hour * 60 + minute + _UTC_OFFSET_APPLIED * 60
-    day_overflow = minutes_abs // (24 * 60)
-    weekday = (day_of_week(year, month, day) + day_overflow) % 7
-    return minutes_abs % (24 * 60), weekday
 
 
-def _check_ds3231_at_boot():
-    """Validate the RTC before the display trusts it. True if usable.
-
-    Three distinct checks, because they fail for different reasons and a
-    single "clock bad" message would send you to the wrong place:
-      1. readable at all  → wiring, or I2C_ID/pin mismatch
-      2. OSF clear        → the CR1220 isn't doing its job
-      3. plausible year   → a chip that lost power reads 2000-01-01, which
-                            is a perfectly valid-looking timestamp that OSF
-                            alone would not always catch
-    """
-    try:
-        stopped = ds3231_osc_stopped()
-        decoded = ds3231_now()
-    except ClockUnavailable as e:
-        print("  ✗ DS3231 not readable: %s" % e)
-        print("    Check wiring and `make i2c-scan`. NOTE: a fitted battery")
-        print("    HIDES a power fault — the chip disables I2C on VBAT, so a")
-        print("    sagging VIN looks like an absent chip (insights.md §13).")
-        return False
-    if stopped:
-        print("  ✗ DS3231 oscillator-stop flag is SET — it lost power and")
-        print("    its time cannot be trusted. Check the CR1220 is seated")
-        print("    and the right way up, then re-seed with `make rtc-test`.")
-        return False
-    if not ds3231_time_is_plausible(decoded):
-        print("  ✗ DS3231 reads %04d-%02d-%02d %02d:%02d — implausible."
-              % decoded[:5])
-        print("    A chip that lost power with no backup resets to 2000-01-01.")
-        print("    Re-seed with `make rtc-test`.")
-        return False
-    print("  TIME_SOURCE='ds3231' — RTC reads %04d-%02d-%02d %02d:%02d, "
-          "oscillator OK." % decoded[:5])
-    return True
-
-
-def current_period(weekday):
-    """Return 'weekday' or 'weekend' for the given weekday index."""
-    return "weekend" if weekday >= 5 else "weekday"
-
-
-def fmt_time(minutes):
-    """Format minutes-since-midnight as HH:MM."""
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-# ─────────────────────────────────────────────────────────────
-# Schedule logic
-# [→ Rust] Iterator::filter().take(n) on a sorted &[u16]
-# ─────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────
 # Startup sequence ("boot ceremony") — docs/contracts/startup-sequence.md
 # Runs once at power-on, before the main loop; never recurs during normal
@@ -1293,30 +1027,6 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     return resolved
 
 
-def schedule_lines(schedule_data):
-    """PURE: normalize EITHER schedule shape to a list of line dicts, so no
-    caller ever has to branch on which format it was handed.
-
-    Contract: docs/contracts/schedule-json.md § Multiple lines at one
-    station. A file with `lines` returns it directly. A file without one is
-    a single-line station, and the document itself IS that line — that shape
-    is not deprecated, and normalizing here rather than at every use site is
-    what keeps every pre-existing schedule working untouched (principle #9).
-
-    Returns at least one entry, so `lines[i % len(lines)]` is always safe.
-    Each entry may carry an optional "color" — the line's NOMINAL colour,
-    which is what makes a line identifiable at a glance rather than only at
-    the moment you cycle to it (gesture-envelope.md §11)."""
-    lines = schedule_data.get("lines")
-    if lines:
-        return lines
-    single = {"name": schedule_data.get("station", "line")}
-    for period in ("weekday", "weekend"):
-        if period in schedule_data:
-            single[period] = schedule_data[period]
-    return [single]
-
-
 def _all_signals_hidden(signal, signal_b):
     """True if every active direction's LeaveSignal is HIDDEN (no catchable
     trains) — the trigger for the wake-to-no-data acknowledgment."""
@@ -1501,7 +1211,7 @@ def _run_classic_loop(schedule_data, led):
         loop_count += 1
         hb = "●" if heartbeat else "○"
 
-        now, weekday = local_time()
+        now, weekday = _local_time_or_die()
         period = current_period(weekday)
         # Line 0 always: this loop has no gestures, so there is nothing to
         # cycle with. A multi-line schedule still works, it just shows the
@@ -1637,7 +1347,7 @@ def _run_interactive_loop(schedule_data, led):
             loop_count += 1
             hb = "●" if heartbeat else "○"
 
-            now, weekday = local_time()
+            now, weekday = _local_time_or_die()
             period = current_period(weekday)
             line = lines[line_index % len(lines)]
             directions = line.get(period, {})

@@ -33,12 +33,16 @@ SCHEMES = {
     "mono": {LEVEL_1: (255, 90, 0), LEVEL_2: (255, 90, 0), LEVEL_3: (255, 90, 0)},
 }
 PALETTE = SCHEMES.get(COLOR_SCHEME, SCHEMES["default"])
+
+
 def _arc_len(ttl):
     """time-to-leave (minutes) → number of lit LEDs, MINUTES_PER_LED minutes per
     LED, shrinking toward 1 as the deadline approaches and capped at NUM_LEDS.
     (ttl is guaranteed ≥0 — uncatchable was dropped.)"""
     lit = math.ceil(ttl / MINUTES_PER_LED)
     return max(1, min(lit, NUM_LEDS))
+
+
 def _position_offset(ttl):
     """time-to-leave (minutes) → integer offset from the anchor (always ≥1),
     POSITION_MINUTES_PER_LED minutes per LED — the ApproachContract analogue of
@@ -98,6 +102,8 @@ def geometry_problems(num_leds=None, anchor=None, arm_a=None, arm_b=None):
         out.append("arm B reaches LED %d but the first is 0 — set ARM_B_LEN "
                    "to %d or less" % (a - lb, a))
     return out
+
+
 class DisplayContract:
     """A rendering strategy. The main loop treats every contract identically:
     it calls render(signal, phase_ms) and honours frame_ms for timing.

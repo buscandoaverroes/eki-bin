@@ -24,11 +24,15 @@ from settings import *  # noqa: F401,F403
 from primitives import *  # noqa: F401,F403
 
 np = NeoPixel(Pin(LED_PIN, Pin.OUT), NUM_LEDS)
+
+
 def clear():
     """All LEDs off."""
     for i in range(NUM_LEDS):
         np[i] = (0, 0, 0)
     np.write()
+
+
 def _physical(logical):
     """Map a *logical* arc position (0 = the arc's origin) to a *physical* LED
     index, honouring ARC_ORIGIN. This is the seam a future per-hardware driver
@@ -37,6 +41,8 @@ def _physical(logical):
     if ARC_ORIGIN == "far":
         return NUM_LEDS - 1 - logical
     return logical  # "near" (default): logical index == physical index
+
+
 def _heartbeat_pin(name):
     """Construct the status-heartbeat Pin, or None if disabled. Pulled out as its
     own function (rather than inline in main()) purely so it's host-testable
