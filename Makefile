@@ -13,6 +13,7 @@
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make i2c-scan          — find I2C devices without knowing pins/bus first
+#   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
@@ -149,6 +150,19 @@ imu-test: _check-mpremote
 .PHONY: rtc-test
 rtc-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/rtc_test.py
+
+# Measure DS3231 drift against this Mac's clock, precisely enough to be
+# worth doing: it catches the seconds-register EDGE rather than reading the
+# register, which is what makes +/-2 ppm resolvable in hours instead of a
+# week. Appends to data/rtc-drift.jsonl (gitignored) -- run it once to set a
+# baseline, again later for a figure. Pass --mark-seed after re-setting the
+# chip, since that destroys the baseline.
+#   make rtc-drift                    (XIAO RP2350 defaults)
+#   make rtc-drift ARGS="--mark-seed"
+#   make rtc-drift ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+.PHONY: rtc-drift
+rtc-drift: _check-mpremote
+	$(PYTHON) scripts/rtc_drift.py $(ARGS)
 
 # Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
 # (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,
