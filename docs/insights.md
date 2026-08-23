@@ -925,6 +925,37 @@ Practical rules:
 - **A strip lighting up before any code runs is a warning**, not a nice sign
   that the wiring works.
 
+### Upload failures: free space ruled out, overwrite is the suspect
+
+The intermittent `make upload` failures outlived every physical fix — new
+cable, new port, off the breadboard entirely. Two things narrowed it:
+
+**Free space is not the cause.** `os.statvfs('/')` on the XIAO RP2350
+returned `(4096, 4096, 768, 716, 716, ...)` — 716 of 768 4KB blocks free,
+**93% empty**, both before and after a full upload. (Net-zero because the
+files already existed and were replaced.)
+
+**The pattern was: works immediately after a WIPE, fails on later uploads.**
+That points at littlefs having to erase and garbage-collect blocks in order
+to *overwrite* an existing file — flash erase on RP2350 blocks for tens of
+ms at a time, and a long enough stall breaks mpremote's raw-paste timeout.
+
+`scripts/upload.sh` now does `mpremote rm` before each `cp`. The first
+upload after that change succeeded **on the breadboard, without a wipe**,
+which had been failing consistently. That is **n=1 against an intermittent
+fault** — suggestive, not proven. If failures return, the next measurement
+is whether a tiny file succeeds while `main.py` fails; that would confirm
+write duration as the variable.
+
+Independent of the stalling, `rm`-then-`cp` is worth keeping for a
+different reason: a failed overwrite can leave a truncated blend of old and
+new content, whereas a failed write after removal leaves the file **absent**
+— which fails loudly at import instead of running as subtly-wrong code.
+
+Worth noting `main.py` is now **154,602 bytes**, rewritten in full on every
+upload. If write duration is the variable, that number is the lever — and
+another argument for the V1.6 modularization in `dev-status.md`.
+
 ### Rule of thumb
 
 Brownouts don't only interrupt the write in progress — they can leave
