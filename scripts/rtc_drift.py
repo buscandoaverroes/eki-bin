@@ -117,6 +117,31 @@ def decode_registers(raw):
     return datetime(century + _bcd(raw[6]), month, date, hour, minute, second)
 
 
+def drift_ppm_fit(samples):
+    """Least-squares slope through (t, offset) samples → ppm.
+
+    Preferred over differencing the first and last sample once there are
+    three or more, because the host clock is not a fixed reference: macOS
+    disciplines it against NTP and can slew by tens of ms. A two-point
+    measurement folds any such step straight into the answer, while a fit
+    over many samples averages it out and lets an outlier show itself.
+
+    Returns None for fewer than 2 samples or a zero time span."""
+    if len(samples) < 2:
+        return None
+    n = len(samples)
+    t0 = samples[0][0]
+    xs = [t - t0 for t, _ in samples]      # seconds, rebased to avoid
+    ys = [o for _, o in samples]           #   catastrophic cancellation
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((x - mean_x) ** 2 for x in xs)
+    if denom == 0:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denom
+    return slope * 1e6
+
+
 def drift_ppm(offset_a, t_a, offset_b, t_b):
     """Parts-per-million between two (offset, timestamp) samples.
 
@@ -242,13 +267,21 @@ def main(argv=None):
         return 0
 
     base = prior[0]
-    ppm = drift_ppm(base["offset_s"], base["ts"], offset, now)
     hours = (now - base["ts"]) / 3600
+    series = [(e["ts"], e["offset_s"]) for e in prior] + [(now, offset)]
+    ppm = drift_ppm_fit(series)
     print("\n  ── drift, over %.1f h since this epoch's baseline ──" % hours)
     if ppm is None:
         print("  baseline too recent to divide by.")
         return 0
-    print("  %+.2f ppm   (%+.3f s/day)" % (ppm, ppm * 86400 / 1e6))
+    if len(series) >= 3:
+        print("  %+.2f ppm   (%+.3f s/day)   [least-squares fit, %d samples]"
+              % (ppm, ppm * 86400 / 1e6, len(series)))
+    else:
+        print("  %+.2f ppm   (%+.3f s/day)   [2 samples — a single host-clock"
+              % (ppm, ppm * 86400 / 1e6))
+        print("   adjustment would land entirely in this number. Sample again"
+              "\n   for a fit that can average one out.]")
 
     # Don't let a short baseline masquerade as a measurement: at the observed
     # jitter, resolving 2 ppm needs enough elapsed time for real drift to
