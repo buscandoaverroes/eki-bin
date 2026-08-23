@@ -148,6 +148,15 @@ led-test: _check-mpremote
 i2c-scan: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/i2c_scan.py
 
+# Colour bring-up: find the LOW-PWM FLOOR — the smallest raw value at which
+# equal R=G=B actually reads neutral. Answers why marker ticks at (1,1,1)
+# read warm yellow (docs/insights.md §12) and whether MARKER_BRIGHTNESS = 0
+# can stop being a workaround. Writes RAW values: no gamma, no BRIGHTNESS.
+# Edit MODE at the top of the file to switch between ramp/channels/balanced.
+.PHONY: low-pwm-test
+low-pwm-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/low_pwm_test.py
+
 # Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
 .PHONY: imu-test
 imu-test: _check-mpremote
