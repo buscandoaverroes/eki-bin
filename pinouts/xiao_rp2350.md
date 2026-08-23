@@ -109,7 +109,29 @@ actually needs once flashing is attempted; not yet tested.
       continuity check), not just the vendor doc
 - [ ] Confirm `IMU_I2C_ID = 1` actually finds the IMU at `0x6A`/`0x6B`
 - [ ] Confirm which flash target applies (`flash-micropython` vs. a new one)
-- [ ] Onboard-LED / `HEARTBEAT_PIN` alias, if one exists on this board
+- [x] **Onboard-LED alias — confirmed 2026-08-23.** `machine.Pin` accepts
+  named board aliases; the full set on this port is:
+  `LED`, `NEOPIXEL`, `NEOPIXEL_POWER`, `BAT_ADC`, `BAT_ADC_EN`, `D0`–`D18`.
+  Enumerate them any time with:
+  `print([n for n in dir(Pin.board) if not n.startswith('_')])`
+  - **`LED` is ACTIVE-LOW** — `led.off()` lights it (bright yellow),
+    `led.on()` extinguishes it. Verified at the REPL, not assumed.
+  - **`NEOPIXEL` — this board has an onboard addressable RGB LED**, power-
+    gated by `NEOPIXEL_POWER`. Not yet exercised. Potentially significant:
+    it's a full-colour status indicator that needs no external strip, which
+    is exactly what `docs/contracts/led-status-messages.md` describes and
+    has had no hardware to run on. Also relevant to a battery/Qi unit, since
+    the power gate means it costs nothing when unused.
+  - `BAT_ADC` / `BAT_ADC_EN` suggest onboard battery-voltage sensing —
+    unverified, worth a look when the Qi power path is revisited.
+
+⚠ **The onboard LEDs are NOT a reliable power indicator, despite appearances.**
+On 2026-08-23 an apparent "bright red = healthy / faint yellow = sagging rail"
+correlation drove a long misdiagnosis. It does not hold: faint yellow was
+later observed on a bare, healthy board sitting at the REPL. A GPIO left
+high-impedance after reset will glow faintly from leakage, which is the more
+likely explanation. **Do not use LED colour as evidence about power** — see
+`docs/insights.md` §13 for what that cost.
       (XIAO C3 has none; unconfirmed here)
 
 ## shared v1.4 pinout

@@ -14,8 +14,22 @@ import math
 import time
 
 import config
-import network
-import ntptime
+# ⚠ `network`/`ntptime` DO NOT EXIST on a radio-less board. On the XIAO
+# RP2350 (no WiFi silicon at all) this is not "WiFi unavailable at runtime"
+# — it is an ImportError on THIS LINE that kills main.py before TIME_SOURCE
+# is ever read, so setting TIME_SOURCE="rtc" cannot rescue it. Observed on
+# hardware 2026-08-23.
+#
+# Note the shape of the bug: the comment below already reasons carefully
+# about deferring WIFI_SSID so there's "an LED path to complain THROUGH" —
+# and then the module died two lines above it, before any such path exists.
+# Guarding the import is what actually lets that reasoning apply.
+try:
+    import network
+    import ntptime
+except ImportError:  # radio-less board — connect_wifi() explains it properly
+    network = None
+    ntptime = None
 from machine import I2C, Pin
 from neopixel import NeoPixel
 
@@ -2302,6 +2316,14 @@ def connect_wifi():
     # there — that peak happens before this line is ever reached. Run a file
     # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
     # to soft-reset. See docs/provisioning-runbook.md § 6.
+    if network is None:
+        # No radio on this board AT ALL — `network` failed to import. This
+        # is categorically different from "association failed": no
+        # credential or signal change can fix it, and retrying is pointless.
+        # The only resolution is TIME_SOURCE="rtc" (or a different board).
+        print("  ✗ This board has no radio — `network` is unavailable.")
+        print("    Set TIME_SOURCE='rtc' in config.py, then `make set-time`.")
+        return False
     if not WIFI_SSID:
         # Reachable only with TIME_SOURCE="wifi" and no credentials set —
         # a config mistake, not a runtime failure. Say so plainly rather
@@ -2335,6 +2357,12 @@ def connect_wifi():
 
 
 def sync_ntp():
+    if ntptime is None:
+        # Unreachable through run_startup_sequence() (connect_wifi() fails
+        # first and never returns), but explicit beats an AttributeError
+        # surfacing as a confusing "NTP failed" below.
+        print("  ✗ No radio on this board — cannot NTP sync.")
+        return False
     try:
         ntptime.settime()
         print("  ✓ NTP sync OK")
