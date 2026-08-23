@@ -92,7 +92,7 @@ upload: test _check-mpremote
 	@# Copy order, retries and size verification all live in the script.
 	@# An UNVERIFIED cp is the dangerous case: a truncated write corrupted
 	@# the filesystem and bricked a board for a morning (insights.md §13).
-	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) \
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) WIFI=$(WIFI) \
 		bash scripts/upload.sh
 
 .PHONY: run

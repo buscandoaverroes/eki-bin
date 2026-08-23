@@ -13,22 +13,12 @@ import json
 import math
 import time
 
-# ⚠ `network`/`ntptime` DO NOT EXIST on a radio-less board. On the XIAO
-# RP2350 (no WiFi silicon at all) this is not "WiFi unavailable at runtime"
-# — it is an ImportError on THIS LINE that kills main.py before TIME_SOURCE
-# is ever read, so setting TIME_SOURCE="rtc" cannot rescue it. Observed on
-# hardware 2026-08-23.
-#
-# Note the shape of the bug: the comment below already reasons carefully
-# about deferring WIFI_SSID so there's "an LED path to complain THROUGH" —
-# and then the module died two lines above it, before any such path exists.
-# Guarding the import is what actually lets that reasoning apply.
-try:
-    import network
-    import ntptime
-except ImportError:  # radio-less board — connect_wifi() explains it properly
-    network = None
-    ntptime = None
+# No radio imports here, deliberately. `network`/`ntptime` DO NOT EXIST on
+# a radio-less board, and they used to sit unconditionally at line 17 — so
+# main.py died with ImportError BEFORE config was read, and TIME_SOURCE
+# could not rescue it. They now live in net.py, imported LAZILY inside the
+# TIME_SOURCE == "wifi" branch of run_startup_sequence(). A XIAO RP2350
+# never reaches that line. See docs/v1.6-refactor.md and insights.md §13.
 from machine import I2C, Pin
 from neopixel import NeoPixel
 
@@ -167,6 +157,11 @@ def run_startup_sequence():
         print("  (Set it with `make set-time`; it survives soft reset, NOT power loss.)")
         _play_startup_burst()
         return
+    # LAZY IMPORT — the whole point of V1.6. net.py is not uploaded to a
+    # radio-less board, so importing it at module level would resurrect the
+    # exact ImportError that made main.py unrunnable on the XIAO RP2350.
+    # Reached only when TIME_SOURCE == "wifi", which such a board never sets.
+    from net import connect_wifi, sync_ntp
     if not connect_wifi():
         print("  ✗ WiFi failed — check config.py. Reset to retry.")
         _run_startup_failure_forever(ERROR_COLOR)
@@ -188,82 +183,6 @@ def run_startup_sequence():
 # ─────────────────────────────────────────────────────────────
 _imu_i2c = None  # lazy singleton — see _get_imu()
 _imu_addr = None
-# ─────────────────────────────────────────────────────────────
-# WiFi + NTP
-# [→ Rust] embassy_net + CYW43 driver / replaced entirely by DS3231 in V2
-# ─────────────────────────────────────────────────────────────
-def connect_wifi():
-    """Connect to WiFi, animating the loading-circle spin (see
-    _draw_startup_circle) while polling — replaced a blocking `sleep(1)`
-    poll loop that drew nothing at all, the main piece of real engineering
-    the boot ceremony needed (the animation math itself was nothing new)."""
-    # Reclaim before bringing the radio up. esp_wifi allocates real buffers
-    # at active(True) and raises `OSError: Wifi Out of Memory` if the heap
-    # can't serve them — a failure seen for real on the XIAO ESP32-C3 once
-    # main.py passed ~2300 lines. Cheap insurance at a genuine high-water
-    # mark; costs nothing on the roomier Pico 2W.
-    #
-    # ⚠ This does NOT rescue `mpremote run main.py` (i.e. `make run`), which
-    # ships the whole ~115KB source over stdin to be held in RAM AND compiled
-    # there — that peak happens before this line is ever reached. Run a file
-    # this size from flash instead: `make upload`, then `make screen` + Ctrl+D
-    # to soft-reset. See docs/provisioning-runbook.md § 6.
-    if network is None:
-        # No radio on this board AT ALL — `network` failed to import. This
-        # is categorically different from "association failed": no
-        # credential or signal change can fix it, and retrying is pointless.
-        # The only resolution is TIME_SOURCE="rtc" (or a different board).
-        print("  ✗ This board has no radio — `network` is unavailable.")
-        print("    Set TIME_SOURCE='rtc' in config.py, then `make set-time`.")
-        return False
-    if not WIFI_SSID:
-        # Reachable only with TIME_SOURCE="wifi" and no credentials set —
-        # a config mistake, not a runtime failure. Say so plainly rather
-        # than handing esp_wifi a None to choke on.
-        print("  ✗ TIME_SOURCE='wifi' but WIFI_SSID is unset in config.py.")
-        print("    Set credentials, or use TIME_SOURCE='rtc' + `make set-time`.")
-        return False
-    gc.collect()
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    wlan.connect(WIFI_SSID, WIFI_PASS)
-    print("  Connecting to WiFi", end="")
-    start = time.ticks_ms()
-    dots_printed = 0
-    while time.ticks_diff(time.ticks_ms(), start) < 20000:  # same ~20s budget
-        if wlan.isconnected():                              # the old 20x sleep(1) had
-            break
-        elapsed = time.ticks_diff(time.ticks_ms(), start)
-        _draw_startup_circle(elapsed)
-        whole_seconds = elapsed // 1000
-        if whole_seconds > dots_printed:
-            dots_printed = whole_seconds
-            print(".", end="")
-        time.sleep_ms(FRAME_MS)
-    print()
-    if wlan.isconnected():
-        print(f"  ✓ Connected  IP: {wlan.ifconfig()[0]}")
-        return True
-    print("  ✗ WiFi failed — check config.py")
-    return False
-
-
-def sync_ntp():
-    if ntptime is None:
-        # Unreachable through run_startup_sequence() (connect_wifi() fails
-        # first and never returns), but explicit beats an AttributeError
-        # surfacing as a confusing "NTP failed" below.
-        print("  ✗ No radio on this board — cannot NTP sync.")
-        return False
-    try:
-        ntptime.settime()
-        print("  ✓ NTP sync OK")
-        return True
-    except Exception as e:
-        print(f"  ✗ NTP failed: {e}")
-        return False
-
-
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────

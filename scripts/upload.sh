@@ -100,6 +100,11 @@ SRC_DIR="${SRC_DIR:-micropython}"
 # runs) — this simply lists what the board needs.
 FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock status gestures"
 
+# net.py is uploaded ONLY for a WiFi unit. main.py imports it lazily, inside
+# the TIME_SOURCE == "wifi" branch, so a radio-less board never reaches that
+# line and does not need the file. Include it with:  make upload WIFI=1
+[ "${WIFI:-0}" = "1" ] && FIRMWARE_MODULES="$FIRMWARE_MODULES net"
+
 cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
 for _mod in $FIRMWARE_MODULES; do
