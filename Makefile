@@ -89,16 +89,11 @@ test:
 upload: test _check-mpremote
 	@test -f $(SRC_DIR)/config.py \
 		|| (echo "✗ $(SRC_DIR)/config.py missing — cp $(SRC_DIR)/config.example.py $(SRC_DIR)/config.py and fill it in (or edit on-board via Thonny)" && exit 1)
-	@# ORDER MATTERS: main.py LAST. It is the boot script, so once it's on
-	@# the device it auto-runs and competes with mpremote for the serial
-	@# link — which showed up as `could not complete raw paste` partway
-	@# through a subsequent copy (2026-08-23), leaving a TRUNCATED
-	@# config.py behind. Writing the data files first means the only
-	@# self-starting file lands when nothing else needs the link.
-	$(MPREMOTE) cp micropython/config.py :config.py
-	$(MPREMOTE) cp schedules/$(STATION).json :schedule.json
-	$(MPREMOTE) cp micropython/main.py :main.py
-	@echo "✓ Uploaded: main.py, config.py, schedule.json ($(STATION))"
+	@# Copy order, retries and size verification all live in the script.
+	@# An UNVERIFIED cp is the dangerous case: a truncated write corrupted
+	@# the filesystem and bricked a board for a morning (insights.md §13).
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) \
+		bash scripts/upload.sh
 
 .PHONY: run
 run: _check-mpremote
