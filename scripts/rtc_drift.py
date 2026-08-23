@@ -117,6 +117,47 @@ def decode_registers(raw):
     return datetime(century + _bcd(raw[6]), month, date, hour, minute, second)
 
 
+def fit_line(samples):
+    """Least-squares (slope, intercept) over (t, offset), t rebased to the
+    first sample to avoid catastrophic cancellation on epoch-sized floats.
+    Returns None if the fit is undefined."""
+    if len(samples) < 2:
+        return None
+    n = len(samples)
+    t0 = samples[0][0]
+    xs = [t - t0 for t, _ in samples]
+    ys = [o for _, o in samples]
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((x - mean_x) ** 2 for x in xs)
+    if denom == 0:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denom
+    return slope, mean_y - slope * mean_x
+
+
+def fit_rms_residual(samples):
+    """RMS distance of the samples from their own fitted line, in SECONDS.
+
+    This is the honesty check. If drift were constant, every sample would
+    sit on one line and the only scatter would be measurement jitter (~4ms,
+    reported per run). Scatter far larger than that means the data is not
+    describable by a constant drift at all — and the usual reason is that
+    the REFERENCE moved: macOS disciplines its clock against NTP and can
+    step tens of ms.
+
+    Without this, a long elapsed time alone was enough for the tool to call
+    a figure "meaningful", which it did on 2026-08-23 over samples whose
+    segments disagreed by 17.5 ppm."""
+    fit = fit_line(samples)
+    if fit is None:
+        return None
+    slope, intercept = fit
+    t0 = samples[0][0]
+    residuals = [o - (slope * (t - t0) + intercept) for t, o in samples]
+    return (sum(r * r for r in residuals) / len(residuals)) ** 0.5
+
+
 def drift_ppm_fit(samples):
     """Least-squares slope through (t, offset) samples → ppm.
 
@@ -127,19 +168,8 @@ def drift_ppm_fit(samples):
     over many samples averages it out and lets an outlier show itself.
 
     Returns None for fewer than 2 samples or a zero time span."""
-    if len(samples) < 2:
-        return None
-    n = len(samples)
-    t0 = samples[0][0]
-    xs = [t - t0 for t, _ in samples]      # seconds, rebased to avoid
-    ys = [o for _, o in samples]           #   catastrophic cancellation
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-    denom = sum((x - mean_x) ** 2 for x in xs)
-    if denom == 0:
-        return None
-    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denom
-    return slope * 1e6
+    fit = fit_line(samples)
+    return None if fit is None else fit[0] * 1e6
 
 
 def drift_ppm(offset_a, t_a, offset_b, t_b):
@@ -286,6 +316,28 @@ def main(argv=None):
     # Don't let a short baseline masquerade as a measurement: at the observed
     # jitter, resolving 2 ppm needs enough elapsed time for real drift to
     # exceed the noise. Say so rather than printing a confident wrong number.
+    rms = fit_rms_residual(series)
+    if rms is not None and len(series) >= 3:
+        print("  scatter about the fit: %.0f ms RMS  (jitter is ~%.0f ms)"
+              % (rms * 1000, jitter_ms if jitter_ms == jitter_ms else 0))
+        if jitter_ms == jitter_ms and rms * 1000 > 5 * jitter_ms:
+            # Not describable by a constant drift. Say so instead of
+            # printing a slope with a straight face.
+            print("  ⚠ THAT SCATTER IS TOO LARGE TO BE THIS CHIP.")
+            print("    Constant drift would put every sample on one line,")
+            print("    scattered only by measurement jitter. %.0fx that means"
+                  % (rms * 1000 / jitter_ms))
+            print("    something else moved — almost certainly the HOST clock,")
+            print("    which macOS steps against NTP. The slope above is not")
+            print("    a property of the DS3231 yet.")
+            need_h = (rms / 2e-6) / 3600
+            print("    Fix is a LONGER span, not more samples: drift has to")
+            print("    outgrow ~%.0f ms of reference noise. Resolving 2 ppm"
+                  % (rms * 1000,))
+            print("    needs ~%.0f h; five-to-one confidence, ~%.0f h."
+                  % (need_h, 5 * need_h))
+            return 0
+
     if jitter_ms == jitter_ms and jitter_ms > 0:
         need_h = (jitter_ms / 1000) / 2e-6 / 3600
         if hours < need_h:
