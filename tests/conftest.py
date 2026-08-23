@@ -106,6 +106,11 @@ DEFAULT_CONFIG = dict(
 )
 
 
+def _firmware_module_names():
+    """Module names importable from micropython/ — i.e. the firmware."""
+    return [f[:-3] for f in os.listdir(MICROPYTHON_DIR) if f.endswith(".py")]
+
+
 @pytest.fixture
 def load_main():
     def _load(**overrides):
@@ -113,8 +118,15 @@ def load_main():
         cfg = types.ModuleType("config")
         for key, value in {**DEFAULT_CONFIG, **overrides}.items():
             setattr(cfg, key, value)
-        sys.modules["config"] = cfg
-        sys.modules.pop("main", None)  # force a fresh import each call
+        # Drop EVERY firmware module, not just `main`. As V1.6 splits
+        # main.py apart (docs/v1.6-refactor.md), a cached `settings` would
+        # keep the previous call's config values while `main` re-imported
+        # fresh — so overrides would silently have no effect and the test
+        # would pass against the wrong numbers. Discovered from the
+        # directory so future extractions need no change here.
+        for _name in _firmware_module_names():
+            sys.modules.pop(_name, None)
+        sys.modules["config"] = cfg  # after the purge: config lives there too
         if MICROPYTHON_DIR not in sys.path:
             sys.path.insert(0, MICROPYTHON_DIR)
         import importlib

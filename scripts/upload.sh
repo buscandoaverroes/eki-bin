@@ -92,8 +92,17 @@ cp_verified() {
 STATION="${STATION:-testbench}"
 SRC_DIR="${SRC_DIR:-micropython}"
 
+# Firmware modules, extracted from main.py by V1.6 (docs/v1.6-refactor.md).
+# main.py imports these, so a missing one is an ImportError at boot. Add a
+# line here in the SAME commit that creates the module — the host tests
+# cannot catch this, since they import from the source tree.
+FIRMWARE_MODULES="settings"
+
 cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
+for _mod in $FIRMWARE_MODULES; do
+    cp_verified "$SRC_DIR/$_mod.py" "$_mod.py"
+done
 cp_verified "$SRC_DIR/main.py"          main.py   # LAST — see header
 
-echo "✓ Uploaded and verified: config.py, schedule.json ($STATION), main.py"
+echo "✓ Uploaded and verified: config.py, schedule.json ($STATION), $FIRMWARE_MODULES, main.py"

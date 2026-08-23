@@ -161,8 +161,14 @@ def test_wifi_creds_optional_so_a_wifi_free_unit_can_boot():
         if key not in ("WIFI_SSID", "WIFI_PASS"):
             setattr(cfg, key, value)
     cfg.TIME_SOURCE = "rtc"
+    # Purge every firmware module before installing the stub config, not
+    # just `main`. This test builds its own config rather than using the
+    # load_main fixture, so it has to repeat the fixture's purge — a stale
+    # `settings` would keep a previous test's WIFI_SSID and the assertions
+    # below would check the wrong module. (V1.6 split: docs/v1.6-refactor.md)
+    for _name in conftest._firmware_module_names():
+        sys.modules.pop(_name, None)
     sys.modules["config"] = cfg
-    sys.modules.pop("main", None)
     if conftest.MICROPYTHON_DIR not in sys.path:
         sys.path.insert(0, conftest.MICROPYTHON_DIR)
 
