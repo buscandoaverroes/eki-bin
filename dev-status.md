@@ -804,6 +804,9 @@ overnight is far cheaper than discovering it inside the borrow checker.
 Framed that way this is not work that gets redone; it is the design pass the
 Rust rewrite needs finished before it starts.
 
+**Execution plan + runbook: `docs/v1.6-refactor.md`** (branch
+`feature/v1.6-single-target`).
+
 ### Open questions
 
 - Where does the split land — one module per contract, or one per layer?
