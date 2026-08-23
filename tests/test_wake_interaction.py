@@ -23,6 +23,8 @@ that gesture is CYCLE. Kept because they are small, pure, and a plausible
 future binding, but nothing invokes them today.
 """
 
+import sys
+
 
 # ── _StatusMessage ───────────────────────────────────────────────
 
@@ -92,7 +94,13 @@ def test_run_secondary_action_default_cycles_brightness(load_main):
         SECONDARY_ACTION="brightness_cycle",
     )
     m._run_secondary_action()
-    assert m.BRIGHTNESS == 0.35
+    # Asserted on `settings`, not `main`. BRIGHTNESS is mutable at runtime,
+    # and a star-import COPIES it — so main.BRIGHTNESS is a stale snapshot
+    # from import time. The V1.6 split surfaced this: _cycle_brightness was
+    # rebinding its own module's copy while leds._write_frame read another,
+    # which would have silently stopped brightness cycling on hardware while
+    # every test still passed. One home, read by attribute.
+    assert sys.modules["settings"].BRIGHTNESS == 0.35
 
 
 def test_run_secondary_action_unknown_action_is_noop(load_main):

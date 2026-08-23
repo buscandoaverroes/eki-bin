@@ -20,6 +20,11 @@
 from machine import Pin
 from neopixel import NeoPixel
 
+# Imported as a MODULE, not star-imported, because BRIGHTNESS is
+# mutable at runtime (_cycle_brightness). A star-import copies the
+# value once at import and would never see a change.
+import settings
+
 from settings import *  # noqa: F401,F403
 from primitives import *  # noqa: F401,F403
 
@@ -148,10 +153,10 @@ def _write_frame(frame):
             continue
         color, mult = entry[0], entry[1]
         if len(entry) > 2 and entry[2] == "static":
-            level = BRIGHTNESS * mult
+            level = settings.BRIGHTNESS * mult
             np[phys] = tuple(_clamp255(color[ch] * level) for ch in range(3))
             continue
-        level = BRIGHTNESS * gamma(mult)
+        level = settings.BRIGHTNESS * gamma(mult)
         if DITHER:
             res = _residual[phys]
             np[phys] = tuple(_quantize(color[ch] * level, res, ch) for ch in range(3))

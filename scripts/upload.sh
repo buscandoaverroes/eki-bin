@@ -98,7 +98,7 @@ SRC_DIR="${SRC_DIR:-micropython}"
 # cannot catch this, since they import from the source tree.
 # Order is irrelevant at upload time (every file lands before main.py
 # runs) — this simply lists what the board needs.
-FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock"
+FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock status gestures"
 
 cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
