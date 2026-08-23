@@ -116,8 +116,16 @@ actually needs once flashing is attempted; not yet tested.
   `print([n for n in dir(Pin.board) if not n.startswith('_')])`
   - **`LED` is ACTIVE-LOW** — `led.off()` lights it (bright yellow),
     `led.on()` extinguishes it. Verified at the REPL, not assumed.
-  - **`NEOPIXEL` — this board has an onboard addressable RGB LED**, power-
-    gated by `NEOPIXEL_POWER`. Not yet exercised. Potentially significant:
+  - **`NEOPIXEL` — onboard addressable RGB LED. ✅ CONFIRMED WORKING
+    2026-08-23** (bright blue at `(0, 0, 40)`). Power-gated by
+    `NEOPIXEL_POWER`, which is **active-high** — `.on()` enables it.
+    Driven exactly like the external strip:
+    ```python
+    Pin("NEOPIXEL_POWER", Pin.OUT).on()
+    np = NeoPixel(Pin("NEOPIXEL"), 1)
+    np[0] = (0, 0, 40); np.write()
+    ```
+    Significant:
     it's a full-colour status indicator that needs no external strip, which
     is exactly what `docs/contracts/led-status-messages.md` describes and
     has had no hardware to run on. Also relevant to a battery/Qi unit, since

@@ -1510,7 +1510,28 @@ def _get_imu():
     handle the "not found" case, not assume hardware is present."""
     global _imu_i2c, _imu_addr
     if _imu_i2c is None:
-        i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN), freq=400000)
+        try:
+            i2c = I2C(IMU_I2C_ID, scl=Pin(IMU_SCL_PIN), sda=Pin(IMU_SDA_PIN),
+                      freq=400000)
+        except ValueError as e:
+            # RP2040/RP2350 hard-wire each I2C peripheral to a fixed pin
+            # table, so a pin/ID disagreement is rejected HERE, at
+            # construction, before any bus activity — meaning no rewiring
+            # can fix it. It surfaces as a bare `ValueError: bad SCL pin`
+            # with no hint of which value is wrong.
+            #
+            # This has bitten four times now. imu_test.py and rtc_test.py
+            # each grew an explainer; main.py had none, so it took the
+            # whole display down mid-loop over an optional sensor. Treat a
+            # misconfigured IMU exactly like an absent one: say what's
+            # wrong, then let the clock keep running.
+            print("  ✗ IMU I2C rejected: %s" % e)
+            print("    IMU_I2C_ID=%d with SDA=%d/SCL=%d is not a legal"
+                  % (IMU_I2C_ID, IMU_SDA_PIN, IMU_SCL_PIN))
+            print("    combination on this chip. XIAO RP2350: GP6/GP7 are")
+            print("    I2C **1**, not 0. Run `make i2c-scan` for the values.")
+            print("    Continuing without gestures — display is unaffected.")
+            return None, None
         addr = _imu_find_device(i2c)
         if addr is None:
             return None, None

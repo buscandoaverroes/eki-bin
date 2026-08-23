@@ -19,12 +19,28 @@
 # single most common bring-up failure in this project's history. Grouped
 # here rather than scattered through the file for exactly that reason.
 #
-#   Value           | Pico 2W | XIAO ESP32-C3 |
-#   ----------------|---------|---------------|
-#   LED_PIN         | 6       | 2             |
-#   HEARTBEAT_PIN   | "LED"   | None          |
-#   IMU_SDA_PIN     | 0       | 6             |
-#   IMU_SCL_PIN     | 1       | 7             |
+#   Value           | Pico 2W | XIAO ESP32-C3 | XIAO RP2350 |
+#   ----------------|---------|---------------|-------------|
+#   LED_PIN         | 6       | 2             | 1  (= D7)   |
+#   HEARTBEAT_PIN   | "LED"   | None          | see below   |
+#   IMU_I2C_ID      | 0       | 0             | **1**       |
+#   IMU_SDA_PIN     | 0       | 6             | 6  (= D4)   |
+#   IMU_SCL_PIN     | 1       | 7             | 7  (= D5)   |
+#
+# ⚠ IMU_I2C_ID IS A PER-BOARD VALUE — it is not always 0. On RP2040/RP2350
+# each I2C peripheral is hard-wired to a fixed pin table in silicon, so the
+# XIAO RP2350's labeled D4/D5 (GP6/GP7) are on I2C**1**. An ID that
+# disagrees with the pins is rejected AT CONSTRUCTION with a bare
+# `ValueError: bad SCL pin` — before any bus activity, so no amount of
+# rewiring helps. This has now cost four separate sessions. `make i2c-scan`
+# finds the right combination and prints the values to paste.
+#
+# ⚠ HEARTBEAT_PIN on the XIAO RP2350: the "LED" alias DOES exist, unlike on
+# the ESP32-C3 — but it is ACTIVE-LOW, so a heartbeat would run inverted
+# (lit when it should be dark). Leave it None until main.py grows a
+# polarity flag. The board also has an onboard NEOPIXEL (power-gated via
+# NEOPIXEL_POWER) which is the better status indicator anyway —
+# pinouts/xiao_rp2350.md.
 #
 # Physical wiring for each: pinouts/<board>.md — that directory is the
 # source of truth for what's connected where; this file just mirrors it.
@@ -40,7 +56,9 @@ HEARTBEAT_PIN = "LED"  # status LED. "LED" is a **Pico-2W-only** alias (routed
 #                        catches that one before `make upload`.
 
 # IMU (LSM6DSV16X) — only read if you've actually wired one.
-IMU_I2C_ID = 0  # ESP32 maps I2C to any pins in software, so 0 works on both
+IMU_I2C_ID = 0  # ⚠ PER-BOARD — see the table above. 0 is right for the
+#                 Pico 2W and the ESP32-C3 (which maps I2C in software), but
+#                 the XIAO RP2350 needs 1. Not a free choice on RP2 chips.
 IMU_SDA_PIN = 0
 IMU_SCL_PIN = 1
 
