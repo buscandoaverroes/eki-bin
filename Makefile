@@ -13,6 +13,7 @@
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make i2c-scan          — find I2C devices without knowing pins/bus first
+#   make doctor            — is the board healthy? flash/fs/transport probe
 #   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
@@ -179,6 +180,17 @@ set-time: _check-mpremote
 	$(MPREMOTE) rtc --set
 	@$(MPREMOTE) rtc
 	@echo "✓ Device RTC set from host clock — re-run after any power cycle"
+
+# Is this board healthy enough to trust? Probes flash, filesystem and the
+# serial transport with disposable data, BEFORE real firmware goes on.
+# Crucially it separates a LOCAL write (device writes its own file) from a
+# TRANSFER (host sends one) — if local passes and transfer fails, the flash
+# is fine and the transport is at fault. That split was impossible all
+# through the 2026-08-24 corruptions, where every failure was seen through
+# a full upload with both in play. See docs/insights.md §13.
+.PHONY: doctor
+doctor: _check-mpremote
+	@MPREMOTE=$(MPREMOTE) $(PYTHON) scripts/board_check.py
 
 .PHONY: repl
 repl: _check-mpremote
