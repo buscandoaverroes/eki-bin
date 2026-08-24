@@ -795,6 +795,64 @@ on: through the opaque brown bottle, **only near-opposite hues are reliably
 distinguishable** — blue vs. yellow/red. Adjacent hues collapse, exactly as
 §3 predicted from the red-vs-orange finding.
 
+### The low-PWM floor, measured (2026-08-24)
+
+`make low-pwm-test` in `ramp` mode on the AE-WS2812B-STICK8, raw values, no
+gamma and no `BRIGHTNESS`:
+
+| raw | reads as |
+|---|---|
+| `(1,1,1)` | **red** — "a faint mars in the distance", no luminosity |
+| `(2,2,2)` | **purple** |
+| `(3,3,3)` | **neutral grey** — first honest white |
+| `(4,4,4)` | brighter, less soft than 3 |
+
+**The floor on this strip is 3.** Below it, equal values stop meaning
+neutral.
+
+The progression names the culprit. Purple at 2 is red + blue with green
+absent, so the low-PWM ordering here is **red > blue > green** — green is
+the weak channel. (An earlier guess in `low_pwm_test.py` assumed blue was
+weak and biased its compensation candidates the wrong way. The ramp settled
+it in one run, which is the argument for measuring rather than reasoning.)
+
+### Why marker ticks read warm — arithmetic, not mystery
+
+Markers take the STATIC path in `leds.py`, so what reaches the LED is:
+
+```
+raw = MARKER_COLOR[ch] × BRIGHTNESS × MARKER_BRIGHTNESS
+    = 80 × 0.15 × 0.15  =  1
+```
+
+**Exactly the `(1,1,1)` that reads red.** The default `MARKER_BRIGHTNESS =
+0.15` lands precisely on the worst value available. `MARKER_BRIGHTNESS = 0`
+was set to hide it, which removed the affordance rather than fixing it.
+
+| `MARKER_BRIGHTNESS` | raw | reads |
+|---|---|---|
+| 0.15 (old default) | 1 | red |
+| **0.25** | **3** | **neutral ✓** |
+| 0.40 | 4 | neutral |
+
+Two candidate fixes, and the `balanced` mode decides between them:
+
+1. **`MARKER_BRIGHTNESS ≥ 0.25`.** Simple, but it is a magic number tied to
+   `MARKER_COLOR` and `BRIGHTNESS` — change either and it silently lands
+   back in the collapse zone.
+2. **Clamp the marker's final value to the floor.** Robust across brightness
+   settings, and expresses the actual constraint: never emit a non-zero
+   value below the point where channels match.
+
+If a compensated tuple like `(1,2,1)` reads neutral, option 2 gets better
+still — it could clamp to a *balanced* minimum rather than a flat one, and
+markers could sit dimmer than `(3,3,3)` without a cast. That is what
+`balanced` mode is for.
+
+⚠ Per-strip. Confirm the floor on the 21-LED gift-jar strip before trusting
+it there, and confirm through the glass — the bottle changes what is
+*visible*, though not what the chip emits.
+
 Implications for the line palette:
 - **Cap the practical line count at what the glass supports**, not at what
   the data model allows. Three widely-separated hues is plausible; six is not.

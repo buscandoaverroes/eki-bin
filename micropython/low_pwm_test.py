@@ -44,8 +44,10 @@
 #   "channels"  Pairs of LEDs show pure R, pure G, pure B, then white, all
 #               at CHANNEL_TEST_VALUE.
 #               → If they differ in apparent brightness at the SAME numeric
-#                 value, that mismatch is the cause of the colour cast. Note
-#                 which channel is weakest; usually blue.
+#                 value, that mismatch is the cause of the colour cast.
+#                 Measured on this strip: red > blue > green. Confirm per
+#                 strip rather than assuming — the ramp above disproved an
+#                 earlier guess that blue was the weak one.
 #
 #   "balanced"  Eight hand-picked (r,g,b) candidates that are NOT equal —
 #               per-channel compensation attempts.
@@ -66,17 +68,28 @@ MODE = "ramp"  # "ramp" | "channels" | "balanced"
 
 CHANNEL_TEST_VALUE = 2  # "channels" mode: the raw value to compare across R/G/B
 
-# "balanced" mode candidates. Blue is typically the weak channel at low PWM,
-# so these mostly lift it. Edit freely — that's the point of the script.
+# "balanced" mode candidates — these LIFT GREEN.
+#
+# Measured on the 8-LED stick 2026-08-24, from the "ramp" mode above:
+#   (1,1,1) reads RED      → red is strongest at the bottom
+#   (2,2,2) reads PURPLE   → red + blue present, GREEN missing
+#   (3,3,3) reads neutral  → the equal-value floor on this strip
+# So the low-PWM ordering here is red > blue > green, and green is what
+# needs lifting. (An earlier version of this file assumed blue was weak and
+# biased these candidates the wrong way — the ramp is what settled it.)
+#
+# Ordered by total output, dimmest first: the useful answer is the FIRST one
+# that reads neutral, since anything below the (3,3,3) total of 9 beats the
+# equal-value floor.
 BALANCED_CANDIDATES = [
-    (1, 1, 1),   # the current marker colour — the one that reads yellow
-    (1, 1, 2),
-    (1, 1, 3),
-    (2, 2, 3),
-    (2, 2, 4),
-    (3, 3, 4),
-    (3, 3, 5),
-    (4, 4, 5),
+    (1, 1, 1),   # total 3 — the current marker colour, reads red
+    (1, 2, 1),   # total 4
+    (1, 2, 2),   # total 5
+    (1, 3, 1),   # total 5
+    (1, 3, 2),   # total 6
+    (2, 3, 2),   # total 7
+    (2, 4, 2),   # total 8
+    (2, 3, 3),   # total 8
 ]
 
 np = NeoPixel(Pin(DATA_PIN, Pin.OUT), NUM_LEDS)
