@@ -3,25 +3,41 @@ _Updated manually. Running log of what's done, what's next, and open decisions._
 
 ---
 
-## Current phase: two parallel branches off `dev` (colour, DS3231)
+## Current phase: `feature/provisioning`, with colour still open
 
-> **Gesture work is merged.** The IMU tap contract, the ACK/CONFIRM jolt, and
-> tap-to-cycle-**line** all run on the real assembled unit (XIAO C3 + IMU +
-> 21-LED strip, in the brown bottle, WiFi-free via `TIME_SOURCE="rtc"`).
-> Multi-line schedules and per-line colour shipped alongside. See
-> `docs/contracts/gesture-envelope.md` §11 and `docs/insights.md` §12.
+> **The production unit runs.** XIAO RP2350 (no radio) + DS3231 + IMU +
+> 8-LED strip, reading the correct time from the RTC, **surviving a power
+> cycle**, rendering `ApproachContract`. That was the point of the last two
+> branches and it is done.
 >
-> **Next, in parallel:**
-> - **`feature/color-consistency`** — the binding problem. Only near-opposite
->   hues survive the brown glass, capping the practical line count; and marker
->   ticks need a real fix rather than the current `MARKER_BRIGHTNESS = 0`
->   workaround, which removes the affordance instead of fixing the low-PWM
->   colour collapse. Raising in-bottle brightness likely addresses both.
-> - **`feature/ds3231-time`** — DS3231 bring-up on the Pico 2W breadboard.
+> **Merged since the last revision of this section:**
+> - **DS3231 bring-up + integration** — `TIME_SOURCE = "ds3231"` reads the
+>   chip every tick. An unreadable chip, a set oscillator-stop flag, or an
+>   implausible date all stop the display rather than showing departures
+>   from a clock we cannot vouch for: a plausible-looking wrong time is the
+>   worst output this device can produce. `docs/hardware.md` § DS3231.
+> - **V1.6 single-target firmware** — `main.py` split 3,127 → 616 lines
+>   across eleven modules; the radio-less board no longer carries radio
+>   code. `docs/v1.6-refactor.md`.
 >
-> Both converge on the intended production unit: **XIAO RP2350 (no radio) +
-> DS3231 + IMU + strip**. The C3/C6 WiFi-headroom work is deprioritized —
-> see Open decisions.
+> **Now: `feature/provisioning`.** Making a unit buildable by following a
+> document rather than by remembering this month. The runbook was actively
+> wrong (it claimed taps did nothing) and is now current. Remaining: walk it
+> end-to-end on a board, then decide on frozen firmware.
+>
+> **Still open: `feature/color-consistency`** — the binding problem. Only
+> near-opposite hues survive the brown glass, capping the practical line
+> count; and marker ticks need a real fix rather than the
+> `MARKER_BRIGHTNESS = 0` workaround, which removes the affordance instead
+> of fixing the low-PWM colour collapse. `micropython/low_pwm_test.py`
+> (`make low-pwm-test`) is parked on that branch to find the floor —
+> a **strip** property, answerable on the bench; hue separation is a
+> **bottle** property and is not.
+>
+> ⚠ **XIAO RP2350 needs firmware newer than 2026-04-06.** Builds up to
+> v1.28.0 create a filesystem larger than the flash that exists
+> (pico-sdk#2834 / micropython#18839), silently corrupting littlefs.
+> `make doctor` fails such a board. Full account: `docs/insights.md` §13.
 
 > **Provisioning pivot (2026-07-23):** the NFC-via-custom-iOS-app plan
 > (`docs/nfc-provisioning.md`) is **on hold, not active** — see Open decisions
@@ -724,10 +740,17 @@ boot-ceremony/connect-failure pattern and extends it to three new cases:
 
 ---
 
-## V1.6 (proposed, not scheduled) — single-target firmware for the XIAO RP2350
+## V1.6 ✅ MERGED (2026-08-24) — single-target firmware for the XIAO RP2350
 
-**Status: a proposal.** Nothing cut, nothing scheduled. Written up 2026-08-23
-while the evidence was fresh.
+**Status: shipped.** `main.py` went 3,127 → 616 lines across eleven modules,
+zero star-imports, 291 host tests. Execution notes, including two failed
+attempts at the automated import rewrite, are in `docs/v1.6-refactor.md`.
+
+The extraction exposed five real defects that the test suite could not have
+found on its own — a circular dependency, three `NameError`s on the DS3231
+boot path, and silently broken brightness cycling (a star-import *copies* a
+value, so `_cycle_brightness` rebound a number nothing rendered from). Each
+is documented in its own commit.
 
 ### What triggered it
 

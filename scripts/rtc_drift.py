@@ -46,7 +46,9 @@ testable is worth more than sharing one untestable copy.
 
 import argparse
 import json
+import socket
 import statistics
+import struct
 import subprocess
 import sys
 import time
@@ -81,6 +83,58 @@ while n < {samples}:
         prev = b[0]
         n += 1
 """
+
+
+NTP_SERVER = "time.apple.com"
+_NTP_EPOCH = 2208988800  # seconds between 1900-01-01 and the Unix epoch
+
+
+def ntp_offset_from_reply(data, t1, t4):
+    """Standard NTP offset from a 48-byte reply and the local send/recv times.
+
+    Returns SECONDS TO ADD to the host clock to get true time. Split out from
+    the socket work so it can be tested against a synthetic reply — getting
+    the sign wrong here would silently double the error it exists to remove.
+    """
+    if len(data) < 48:
+        raise OSError("short NTP reply (%d bytes)" % len(data))
+    t2_s, t2_f = struct.unpack("!II", data[32:40])   # server receive
+    t3_s, t3_f = struct.unpack("!II", data[40:48])   # server transmit
+    t2 = (t2_s - _NTP_EPOCH) + t2_f / 2.0 ** 32
+    t3 = (t3_s - _NTP_EPOCH) + t3_f / 2.0 ** 32
+    return ((t2 - t1) + (t3 - t4)) / 2.0
+
+
+def ntp_offset(server=NTP_SERVER, timeout=5.0):
+    """How far the HOST clock is from true time, in seconds.
+
+    ═══ WHY THIS EXISTS ════════════════════════════════════════════════
+    The host clock is not a fixed reference. macOS disciplines it against
+    NTP and steps it across sleep/wake, and on 2026-08-24 that showed up as
+    707 ms of scatter about the fit against 4 ms of measurement jitter —
+    168x. At that reference noise, resolving the DS3231's ±2 ppm would take
+    ~98 hours of elapsed time.
+    ...
+    Querying NTP directly at sample time removes the local clock's
+    wandering from the loop entirely: the measurement is then DS3231
+    against real time, not DS3231 against whatever macOS currently thinks.
+
+    ⚠ Makes ONE outbound UDP request to a public time server (nothing is
+    sent but an empty NTP packet). Falls back to the raw host clock when
+    offline, and records which reference was used — samples taken against
+    different references are never mixed into one fit.
+    """
+    pkt = b"\x1b" + 47 * b"\0"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        t1 = time.time()
+        sock.sendto(pkt, (server, 123))
+        data, _ = sock.recvfrom(48)
+        t4 = time.time()
+    finally:
+        sock.close()
+    return ntp_offset_from_reply(data, t1, t4)
 
 
 def _bcd(byte):
@@ -186,7 +240,7 @@ def drift_ppm(offset_a, t_a, offset_b, t_b):
     return (offset_b - offset_a) / elapsed * 1e6
 
 
-def collect(sda, scl, i2c_id, samples, mpremote=None):
+def collect(sda, scl, i2c_id, samples, mpremote=None, clock_offset=0.0):
     """Run the edge detector on-device, timestamping each line on arrival.
 
     Returns [(rtc_datetime, host_epoch_at_arrival), ...].
@@ -202,7 +256,7 @@ def collect(sda, scl, i2c_id, samples, mpremote=None):
     for line in proc.stdout:
         # Timestamp FIRST, parse after -- parsing before stamping would fold
         # this process's own work into the measurement.
-        arrived = time.time()
+        arrived = time.time() + clock_offset  # true time, not the host's guess
         line = line.strip()
         if not line.startswith("EDGE "):
             continue
@@ -244,6 +298,12 @@ def main(argv=None):
     ap.add_argument("--mark-seed", action="store_true",
                     help="record that you just re-set the chip. Starts a new "
                          "epoch; earlier samples stop counting toward drift.")
+    ap.add_argument("--no-ntp", action="store_true",
+                    help="don't query NTP; use the raw host clock. The host "
+                         "clock wanders (macOS steps it across sleep/wake), "
+                         "which is the dominant error source in this "
+                         "measurement — see ntp_offset().")
+    ap.add_argument("--ntp-server", default=NTP_SERVER)
     ap.add_argument("--log", type=Path, default=LOG_PATH)
     args = ap.parse_args(argv)
 
@@ -258,9 +318,23 @@ def main(argv=None):
               "next sample onward." % epoch)
         return 0
 
+    clock_offset, ref = 0.0, "host"
+    if not args.no_ntp:
+        try:
+            clock_offset = ntp_offset(args.ntp_server)
+            ref = "ntp"
+            print("Reference: NTP (%s) — host clock is %+.3f s off true time"
+                  % (args.ntp_server, clock_offset))
+        except (OSError, socket.gaierror) as e:
+            print("Reference: HOST CLOCK — NTP unreachable (%s)." % e)
+            print("  ⚠ The host clock wanders; expect scatter to dominate.")
+    else:
+        print("Reference: HOST CLOCK (--no-ntp)")
+
     print("Catching %d seconds-edges on I2C%d (SDA=GP%d SCL=GP%d)..."
           % (args.samples, args.i2c_id, args.sda, args.scl))
-    edges = collect(args.sda, args.scl, args.i2c_id, args.samples)
+    edges = collect(args.sda, args.scl, args.i2c_id, args.samples,
+                    clock_offset=clock_offset)
     if not edges:
         sys.exit("No edges seen. Is the DS3231 wired and powered? Try: make rtc-test")
 
@@ -277,7 +351,8 @@ def main(argv=None):
              "iso_rtc": edges[-1][0].isoformat(),
              "offset_s": round(offset, 4),
              "jitter_ms": round(jitter_ms, 1) if jitter_ms == jitter_ms else None,
-             "samples": len(offsets)}
+             "samples": len(offsets),
+             "ref": ref, "clock_offset_s": round(clock_offset, 4)}
     append_log(args.log, entry)
 
     print("\n  DS3231 : %s" % edges[-1][0].isoformat())
@@ -291,7 +366,20 @@ def main(argv=None):
               "probably\n        holding a different timezone than the host. "
               "Drift is unaffected.")
 
-    prior = [e for e in entries if e.get("event") == "sample" and e.get("epoch") == epoch]
+    # Only fit over samples sharing THIS reference. A host-referenced sample
+    # and an NTP-referenced one differ by whatever the host clock was wrong
+    # by at the time — mixing them would inject exactly the error the NTP
+    # reference exists to remove.
+    prior = [e for e in entries
+             if e.get("event") == "sample" and e.get("epoch") == epoch
+             and e.get("ref", "host") == ref]
+    dropped = [e for e in entries
+               if e.get("event") == "sample" and e.get("epoch") == epoch
+               and e.get("ref", "host") != ref]
+    if dropped:
+        print("\n  (%d earlier sample(s) used a different reference and are "
+              "excluded\n   from this fit — mixing them would reintroduce the "
+              "host clock's error.)" % len(dropped))
     if not prior:
         print("\n  Baseline recorded. Re-run in a few hours for a drift figure.")
         return 0

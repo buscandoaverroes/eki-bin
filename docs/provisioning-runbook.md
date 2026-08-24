@@ -3,7 +3,8 @@
 _One-glance checklist for building a unit from scratch. **Deliberately terse**
 — every step links to the detail rather than repeating it. First walked
 end-to-end 2026-08-16 on the v1.4+IMU dev unit
-(`pinouts/v1.4-imu-dev-unit.md`)._
+(`pinouts/v1.4-imu-dev-unit.md`); revised 2026-08-24 for the V1.6 module
+split and the XIAO RP2350 flash-size defect._
 
 ---
 
@@ -35,11 +36,67 @@ make flash-micropython BOARD=esp32c3
 make flash-micropython BOARD=xiao-rp2350
 ```
 
+Add `WIPE=1` to erase the filesystem too. **A plain reflash does not touch
+it** — firmware and filesystem live in separate flash regions — so a board
+that is unreachable because its filesystem is damaged will survive any
+number of reflashes unchanged (`docs/insights.md` §13).
+
+Multiple builds in `firmware/`? The **newest** wins (MicroPython filenames
+embed `YYYYMMDD`). Pin one explicitly with `FIRMWARE=<path>`.
+
+### ⚠ XIAO RP2350: the firmware VERSION is a correctness requirement
+
+Builds up to **v1.28.0** create a filesystem **larger than the flash that
+exists** — 3072 KB on a 2 MB part. The board header declared
+`PICO_FLASH_SIZE_BYTES` as 4 MB against a 2 MB chip
+([pico-sdk#2834](https://github.com/raspberrypi/pico-sdk/issues/2834)),
+propagating into MicroPython
+([#18839](https://github.com/micropython/micropython/issues/18839)). It
+corrupts littlefs, and the corruption is silent — a file can verify at the
+right size and still read back as the filesystem's own superblock.
+
+Fixed in pico-sdk 2.3.0 plus a follow-up trimming the partition to 1408k.
+**Use a build newer than 2026-04-06.** Step 2b proves it.
+
+## 2b. Prove the board before trusting it — MANDATORY
+
+```bash
+make doctor
+```
+
+Checks reachability, filesystem, heap, and write/read integrity at 4/24/40 KB
+— separately for a **local** write (device writes its own file) and a
+**transfer** (host sends one), so a flash fault is distinguishable from a
+transport one. It **fails outright** if the filesystem exceeds the physical
+flash.
+
+- [ ] XIAO RP2350 reports **~1408 KB**, not 3072 KB.
+- [ ] All six write tests intact.
+
+
 ## 3. Config
 
 - [ ] `cp micropython/config.example.py micropython/config.py`, fill in WiFi.
 - [ ] Set the **board-specific** values: `LED_PIN`, `NUM_LEDS`,
-      `HEARTBEAT_PIN` (`None` on XIAO), `IMU_SDA_PIN` / `IMU_SCL_PIN`.
+      `HEARTBEAT_PIN` (`None` on XIAO), **`IMU_I2C_ID`**, `IMU_SDA_PIN` /
+      `IMU_SCL_PIN`. The table at the top of `config.example.py` has all of
+      them per board.
+- [ ] **`IMU_I2C_ID` is per-board and is NOT always 0.** On RP2040/RP2350
+      each I²C peripheral is hard-wired to a fixed pin table, so the XIAO
+      RP2350's labelled D4/D5 (GP6/GP7) are on I²C**1**. A wrong ID is
+      rejected at *construction* with a bare `ValueError: bad SCL pin`,
+      before any bus activity — so no rewiring can fix it. Four separate
+      sessions lost to this one.
+- [ ] **`LED_PIN` wrong is a POWER fault, not a display bug.** An
+      unaddressed WS2812B strip holds whatever state it powered up in —
+      possibly full white, ≈480 mA for 8 LEDs — and `BRIGHTNESS` cannot
+      help, because it is a property of data you are not sending. Check it
+      against `pinouts/<board>.md` *before* connecting a strip
+      (`docs/insights.md` §13).
+- [ ] **`TIME_SOURCE`**: `"ds3231"` for a unit with the RTC (the only source
+      that survives a power cycle), `"rtc"` for a WiFi-free unit without one
+      (needs `make set-time`, lost on every power cycle), `"wifi"` otherwise.
+      A radio-less board must never be left on `"wifi"`.
 - [ ] `make schedule` if `schedules/<station>.json` doesn't exist yet.
 
 > `make upload` **fails fast** with a clear message if `config.py` is missing.
@@ -48,8 +105,45 @@ make flash-micropython BOARD=xiao-rp2350
 ## 4. Upload
 
 ```bash
-make upload              # runs make test first, then copies main/config/schedule
+make upload              # lint + tests, then config, schedule and 11 modules
+make upload WIFI=1       # also send net.py — WiFi units only
 ```
+
+Every file is **content-hashed** on the device and compared to the host, not
+just size-checked: a same-length corruption passes a size check and then
+fails to compile, which reads as a bug in your own source. Files already
+matching are skipped, so a re-run resumes rather than rewriting everything —
+**if it fails partway, just run it again.**
+
+`main.py` goes **last**, because it auto-runs and would otherwise compete
+with `mpremote` for the serial link.
+
+## 4b. Iterating? Don't upload at all
+
+```bash
+make dev                 # or: make dev STATION=<name>
+```
+
+`mpremote mount` serves `micropython/` as the device filesystem, so the
+firmware runs from your working copy with **zero flash writes**. Edit,
+Ctrl-C, re-run. The unit cannot run standalone this way, and startup is slow
+(every import crosses the serial link and is compiled on-device), so use
+`make upload` for a real unit — but for tuning colours, gestures or
+thresholds this is the right loop.
+
+> ⚠ **Seeding a clock copies your Mac's error into the unit.** The chain is
+> `host clock → mpremote rtc --set → board RTC → rtc_test.py SYNC → DS3231`,
+> and nothing in it checks the host against real time. A Mac measured at
+> **+4.14 s off true time** on 2026-08-24 produced a DS3231 sitting ~2 s
+> behind — a permanent floor no amount of RTC precision recovers.
+>
+> Harmless for a minute-granularity display, but check before seeding a unit
+> you care about:
+> ```bash
+> make rtc-drift        # first line reports the host's offset from NTP
+> ```
+> If it is seconds rather than milliseconds, fix the Mac's time sync first
+> (System Settings → General → Date & Time → Set automatically).
 
 ## 5. Bring-up tests — hardware only, no app logic
 
@@ -80,7 +174,7 @@ one axis near ±1000mg (gravity) at rest.
 
 ## 6. Run the real loop
 
-Set both gates **off** in `config.py`, then **run it from flash**:
+Run it from flash (`make dev` in §4b is the no-write alternative):
 
 ```bash
 make upload              # puts main.py on the device
@@ -107,24 +201,51 @@ power-cycle — same path, no laptop.
 > fault. Set `24` / `0` to disable while testing. The loop prints
 > `(quiet hours — display off)` to disambiguate.
 
-## 7. Gesture testing — separate, not in the main loop yet
+## 7. Gestures — shipped and in the main loop
 
-⚠ **Tapping the real main loop does nothing today.** The gesture-envelope work
-(`classify_valid_input`, `_TapCycleState`, the ACK/CONFIRM jolt) is validated
-but lives in `micropython/gesture_sandbox.py`, not in `main()`. See
-`docs/contracts/gesture-envelope.md` §11's "not yet done."
+Set **`GESTURE_ENABLED = True`** in `config.py`. A tap then wakes the display
+and a further tap cycles which line is shown
+(`docs/contracts/gesture-envelope.md` §11).
+
+**The boot banner tells you which way it went.** Off:
+
+```
+Gestures: OFF — set GESTURE_ENABLED = True in config.py to enable taps
+```
+
+On, once the schedule loads:
+
+```
+Lines: <line>, <line>, …  (tap to cycle)
+```
+
+⚠ **`GESTURE_ENABLED` is COMMENTED OUT in `config.example.py`** (the file's
+convention: commented lines show defaults). A `config.py` freshly copied
+from it therefore has gestures **off**, and a wired IMU is simply never
+read — indistinguishable from a broken one. That cost three rounds of
+hardware debugging; `imu-test` passed cleanly throughout. Check the banner
+before suspecting wiring.
+
+Note `make screen` attaches to a loop already running, so it shows
+mid-loop output, not the banner. Press **Ctrl-D** to soft-reset and watch
+from the top.
+
+| Gate | Runs | What it is |
+|---|---|---|
+| `GESTURE_DEBUG_ENABLED=True` | `_run_gesture_debug_loop()` | Terminal-only gesture exerciser. Bypasses time source, schedule and boot ceremony. **No LED output.** A bring-up tool, not a display mode. |
+| `GESTURE_ENABLED=True` | `_run_interactive_loop()` | The real loop **with** taps. Prints the `Lines: … (tap to cycle)` banner. |
+| both `False` | `_run_classic_loop()` | The real display loop, no IMU. What §6 describes. |
+
+> `WAKE_INTERACTION_ENABLED` still works as an alias so older `config.py`
+> files keep running, but prefer `GESTURE_ENABLED`. (Its historical warning —
+> that the tap detector was a stub returning `False` — no longer applies; that
+> stub was replaced by the shipped recognizer.)
+
+Iterate on jolt shape and thresholds without the full loop:
 
 ```bash
 make run-file FILE=micropython/gesture_sandbox.py    # real taps → real LED jolt
 ```
-
-`main.py`'s two IMU-related config gates and what they actually do:
-
-| Gate | Runs | Reality |
-|---|---|---|
-| `GESTURE_DEBUG_ENABLED=True` | `_run_gesture_debug_loop()` | Terminal-only multi-gesture exerciser. Bypasses WiFi/schedule/boot entirely. **No LED output.** |
-| `WAKE_INTERACTION_ENABLED=True` | `_run_interactive_loop()` | ⚠ **Don't** — its `_imu_tap_detected()` is still a stub returning `False`, so the display sleeps after `WAKE_MINUTES` and can never wake. |
-| both `False` | `_run_classic_loop()` | The real display loop. What you want for §6. |
 
 ---
 
@@ -132,8 +253,12 @@ make run-file FILE=micropython/gesture_sandbox.py    # real taps → real LED jo
 
 | Task | Command |
 |---|---|
-| Host tests only | `make test` |
+| **Is this board healthy?** | `make doctor` |
+| Host tests + lint | `make test` |
+| **Iterate with no flash writes** | `make dev` |
 | Push firmware | `make upload` |
+| Recover an unreachable board | `make flash-micropython BOARD=<b> WIPE=1` |
+| Measure DS3231 drift | `make rtc-drift` |
 | Run live, don't persist | `make run` |
 | Run any one script | `make run-file FILE=<path>` |
 | Make a script auto-run on boot | `make upload-file FILE=<path>` |
