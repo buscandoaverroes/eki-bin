@@ -10,13 +10,19 @@
 # Depends on leds (to paint) but NOT the reverse: contracts speak in logical
 # positions and never learn how the strip is wired.
 
-from settings import *  # noqa: F401,F403
-from primitives import *  # noqa: F401,F403
-from signals import *  # noqa: F401,F403
-from leds import *  # noqa: F401,F403
+import math
+from leds import (_layer_hue_shift, _layer_mult, _paint, _paint_layers,
+    _write_frame, clear)
+from primitives import (breathe, breathe_exponent, breathe_inverse,
+    desaturate, hue_rotate)
+from settings import (ANCHOR_BRIGHTNESS, ANCHOR_COLOR, ANCHOR_INDEX,
+    ARM_A_LEN, ARM_B_LEN, BREATHE_FLOOR, BREATHE_PERIOD_MS, COLOR_SCHEME,
+    CONTRACT_NAME, FRAME_MS, LINE_COLOR, LINE_SATURATION,
+    MARKER_BRIGHTNESS, MARKER_COLOR, MINUTES_PER_LED, NUM_LEDS, N_TRAINS,
+    POSITION_MINUTES_PER_LED, SECONDARY_BREATHE_FLOOR,
+    SECONDARY_BREATHE_PERIOD_MS, TRANSITION_MS)
+from signals import (HIDDEN, LEVEL_1, LEVEL_2, LEVEL_3)
 # `import *` skips underscore names; contracts needs these by name.
-from leds import (_clamp255, _heartbeat_pin, _layer_hue_shift, _layer_mult,
-    _paint, _paint_layers, _physical, _quantize, _residual, _write_frame)
 
 # ═════════════════════════════════════════════════════════════
 # STAGE 2 — signal → pixels (display contracts)

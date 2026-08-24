@@ -13,7 +13,7 @@
 #
 # [→ Rust] Urgency becomes a real `enum`, LeaveSignal a struct.
 
-from settings import *  # noqa: F401,F403
+from settings import (URGENCY_THRESHOLDS, WALK_TO_STATION_MINS)
 
 # ═════════════════════════════════════════════════════════════
 # STAGE 1 — time → abstract signal

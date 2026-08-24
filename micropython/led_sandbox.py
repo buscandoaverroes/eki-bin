@@ -22,7 +22,16 @@
 
 import time
 
-import main
+# V1.6 split main.py into modules (docs/v1.6-refactor.md), so this
+# script now imports the ones it actually uses. NOTE settings is
+# imported as a MODULE: BRIGHTNESS is mutable at runtime and a
+# from-import would freeze a copy.
+import contracts
+import gestures
+import leds
+import primitives
+import settings
+import signals
 
 # ── Segment painter ──────────────────────────────────────────────
 # Bypasses the arc/_paint_layers abstraction on purpose — a sandbox scene
@@ -36,20 +45,20 @@ def _write_segment(start, end, color, mult=1.0):
     # scenes (see "Gesture jolt prototypes" below) push mult above 1.0 —
     # gamma(mult) for mult>1 is mult**GAMMA, e.g. gamma(2.0)≈4.6 at the
     # default GAMMA=2.2 — so color[ch]*level can clear 255 well before
-    # BRIGHTNESS_PRESETS' top end (0.6). main._paint clamps for exactly
+    # BRIGHTNESS_PRESETS' top end (0.6). leds._paint clamps for exactly
     # this reason; every prior scene here just never multiplied past 1.0
     # so it never came up.
-    level = main.BRIGHTNESS * main.gamma(mult)
+    level = settings.BRIGHTNESS * primitives.gamma(mult)
     for logical in range(start, end):
-        phys = main._physical(logical)
-        if main.DITHER:
-            # _quantize clamps internally — same split main._paint uses.
-            res = main._residual[phys]
-            main.np[phys] = tuple(
-                main._quantize(color[ch] * level, res, ch) for ch in range(3)
+        phys = leds._physical(logical)
+        if settings.DITHER:
+            # _quantize clamps internally — same split leds._paint uses.
+            res = leds._residual[phys]
+            leds.np[phys] = tuple(
+                leds._quantize(color[ch] * level, res, ch) for ch in range(3)
             )
         else:
-            main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
+            leds.np[phys] = tuple(leds._clamp255(color[ch] * level) for ch in range(3))
 
 
 # ── Scenes ────────────────────────────────────────────────────────
@@ -61,8 +70,8 @@ def _write_segment(start, end, color, mult=1.0):
 
 RED = (255, 0, 0)
 YELLOW = (255, 200, 0)
-LEVEL_2_COLOR = main.PALETTE[main.LEVEL_2]
-STARTUP_COLOR = main.STARTUP_COLOR  # reuse the boot ceremony's colour language
+LEVEL_2_COLOR = contracts.PALETTE[signals.LEVEL_2]
+STARTUP_COLOR = settings.STARTUP_COLOR  # reuse the boot ceremony's colour language
 
 # ── Gesture jolt prototypes — gesture-envelope.md §11 ───────────────
 # The two-phase ACK/CONFIRM response has no LED rendering yet (only
@@ -80,7 +89,7 @@ STARTUP_COLOR = main.STARTUP_COLOR  # reuse the boot ceremony's colour language
 # stop watching once you've seen it play out.
 #
 # All timings pulled from main's real config knobs (ACK_FLASH_MS,
-# main._GESTURE_WINDOW_MS, WAKE_JOLT_MS, WAKE_JOLT_BRIGHTNESS_MULT) so
+# gestures._GESTURE_WINDOW_MS, WAKE_JOLT_MS, WAKE_JOLT_BRIGHTNESS_MULT) so
 # this plays at the ACTUAL production budget, not a guessed one.
 #
 # Real-hardware feedback on the first live version (gesture_sandbox.py,
@@ -132,7 +141,7 @@ SHELF_CEIL = 0.25
 PREVIEW_PEAK_MULT = ACK_PEAK_FLOOR + PREVIEW_STRENGTH * (ACK_PEAK_CEIL - ACK_PEAK_FLOOR)
 PREVIEW_SHELF_MULT = SHELF_FLOOR + PREVIEW_STRENGTH * (SHELF_CEIL - SHELF_FLOOR)
 
-# Real-hardware feedback (2026-08-16): at the old default (main.ACK_FLASH_MS
+# Real-hardware feedback (2026-08-16): at the old default (settings.ACK_FLASH_MS
 # * 3 = 150ms), the rise-to-peak happened too fast to actually see a
 # strength difference. Widened, still well under half the ~1200ms window
 # so the shelf keeps the larger share — see gesture_sandbox.py's matching
@@ -161,7 +170,7 @@ def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     return shelf_mult
 
 
-def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
+def confirm_jolt(phase_ms, total_ms=settings.WAKE_JOLT_MS, peak_mult=settings.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
     """The CONFIRM jolt: same linear rise/decay shape as _play_startup_burst
     (_startup_burst_mult) — quick bright rise, slower decay — but scaled to
     fit WAKE_JOLT_MS's real 500ms budget instead of the boot ceremony's
@@ -173,7 +182,7 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     the way to 0 — the shelf said "still deciding," decaying past it to
     black says "decided, done." mult>1.0 during the rise/peak is expected
     and intentional — see _write_segment's clamping above."""
-    rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
+    rise_ms = total_ms * (settings.STARTUP_BURST_MS / (settings.STARTUP_BURST_MS + settings.STARTUP_FADE_MS))
     decay_ms = total_ms - rise_ms
     if phase_ms < rise_ms:
         return start_mult + (phase_ms / rise_ms) * (peak_mult - start_mult)
@@ -183,11 +192,11 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     return peak_mult * (1.0 - decay_elapsed / decay_ms)
 
 
-def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=main._GESTURE_WINDOW_MS,
+def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=gestures._GESTURE_WINDOW_MS,
                  peak_mult=PREVIEW_PEAK_MULT, shelf_mult=PREVIEW_SHELF_MULT):
     """The full ACK -> (silent capture window, now bridged by the shelf) ->
     CONFIRM sequence. gap_ms defaults to the REAL capture window
-    (main._GESTURE_WINDOW_MS, 1200ms) deliberately — that gap isn't a
+    (gestures._GESTURE_WINDOW_MS, 1200ms) deliberately — that gap isn't a
     rendering choice, it's however long the recognizer actually takes to
     decide, so the prototype should feel exactly as long as production
     will."""
@@ -198,58 +207,58 @@ def double_hill(phase_ms, ack_fn=ack_flick, gap_ms=main._GESTURE_WINDOW_MS,
 
 SCENES = {
     "keihin_uniform": [
-        (0, main.NUM_LEDS, (0, 178, 229), None),
+        (0, settings.NUM_LEDS, (0, 178, 229), None),
     ],
     # Your literal example: half static red, half breathing yellow.
     # Longer period = more floor/static contrast at any glance (found: too
     # short and a breath peak can read as "primary, fully lit" by mistake).
     "half_static_half_breathe": [
-        (0, main.NUM_LEDS // 2, RED, None),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, YELLOW, lambda ms: main.breathe(ms, 6000, 0.35)),
+        (0, settings.NUM_LEDS // 2, RED, None),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, YELLOW, lambda ms: primitives.breathe(ms, 6000, 0.35)),
     ],
     # Colour-shift comparison: same urgency colour vs. a hue-rotated variant,
     # both at full brightness — the candidate fix for insights.md §6.
     "hue_shift_demo": [
-        (0, main.NUM_LEDS // 2, LEVEL_2_COLOR, None),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, main.hue_rotate(LEVEL_2_COLOR, 20), None),
+        (0, settings.NUM_LEDS // 2, LEVEL_2_COLOR, None),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, primitives.hue_rotate(LEVEL_2_COLOR, 20), None),
     ],
     # Same idea, but the "second train" band also breathes — animation-style
     # differentiation instead of (or combined with) colour.
     "hue_shift_plus_breathe": [
-        (0, main.NUM_LEDS // 2, LEVEL_2_COLOR, None),
+        (0, settings.NUM_LEDS // 2, LEVEL_2_COLOR, None),
         (
-            main.NUM_LEDS // 2, main.NUM_LEDS, main.hue_rotate(LEVEL_2_COLOR, 20),
-            lambda ms: main.breathe(ms, 4000, 0.6),
+            settings.NUM_LEDS // 2, settings.NUM_LEDS, primitives.hue_rotate(LEVEL_2_COLOR, 20),
+            lambda ms: primitives.breathe(ms, 4000, 0.6),
         ),
     ],
     # Two different breathing curves side by side, same period — compares the
     # SHAPE of the envelope (exponential build vs. plain sine), not the speed.
     "two_breathing_patterns": [
-        (0, main.NUM_LEDS // 2, RED, lambda ms: main.breathe(ms, 4000, 0.6, ceiling=0.9)),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, YELLOW, lambda ms: main.breathe(ms, 6000, 0.6)),
+        (0, settings.NUM_LEDS // 2, RED, lambda ms: primitives.breathe(ms, 4000, 0.6, ceiling=0.9)),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, YELLOW, lambda ms: primitives.breathe(ms, 6000, 0.6)),
     ],
     "hue_shift_plus_two_breathing_patterns": [
-        (0, main.NUM_LEDS // 2, LEVEL_2_COLOR, lambda ms: main.breathe(ms, 3000, 0.6)),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, main.hue_rotate(LEVEL_2_COLOR, 20), lambda ms: main.breathe(ms, 4000, 0.6, 0.9)),
+        (0, settings.NUM_LEDS // 2, LEVEL_2_COLOR, lambda ms: primitives.breathe(ms, 3000, 0.6)),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, primitives.hue_rotate(LEVEL_2_COLOR, 20), lambda ms: primitives.breathe(ms, 4000, 0.6, 0.9)),
     ],
     "hue_shift_plus_one_breathing_patterns": [
-        (0, main.NUM_LEDS // 2, LEVEL_2_COLOR, None),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, main.hue_rotate(LEVEL_2_COLOR, 20), lambda ms: main.breathe(ms, 3000, 0.7)),
+        (0, settings.NUM_LEDS // 2, LEVEL_2_COLOR, None),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, primitives.hue_rotate(LEVEL_2_COLOR, 20), lambda ms: primitives.breathe(ms, 3000, 0.7)),
     ],
     # gesture-envelope.md §11's open question: does an instant flat flash
     # or a quick rise-then-dip "flick" read better as the ACK? Left/right
     # both feed into the SAME confirm_jolt afterward — only the ACK shape
     # differs, so the comparison isolates that one variable.
     "jolt_ack_flash_vs_flick": [
-        (0, main.NUM_LEDS // 2, STARTUP_COLOR, lambda ms: double_hill(ms, ack_fn=ack_flash)),
-        (main.NUM_LEDS // 2, main.NUM_LEDS, STARTUP_COLOR, lambda ms: double_hill(ms, ack_fn=ack_flick)),
+        (0, settings.NUM_LEDS // 2, STARTUP_COLOR, lambda ms: double_hill(ms, ack_fn=ack_flash)),
+        (settings.NUM_LEDS // 2, settings.NUM_LEDS, STARTUP_COLOR, lambda ms: double_hill(ms, ack_fn=ack_flick)),
     ],
     # Whole-strip run of the full sequence — for feeling the overall
     # TIMING (is the ~1.2s gap too long, is the jolt itself still "too
     # slow" the way the boot burst was flagged) rather than comparing ACK
     # shapes side by side.
     "jolt_double_hill_full": [
-        (0, main.NUM_LEDS, STARTUP_COLOR, lambda ms: double_hill(ms)),
+        (0, settings.NUM_LEDS, STARTUP_COLOR, lambda ms: double_hill(ms)),
     ],
 }
 
@@ -273,12 +282,12 @@ def run(scene_name=ACTIVE_SCENE, seconds=None):
             for s, e, color, anim in segments:
                 mult = anim(elapsed) if anim else 1.0
                 _write_segment(s, e, color, mult)
-            main.np.write()
+            leds.np.write()
             time.sleep_ms(30)
     except KeyboardInterrupt:
         pass
     finally:
-        main.clear()
+        leds.clear()
         print("  cleared — bye")
 
 

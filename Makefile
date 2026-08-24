@@ -82,8 +82,18 @@ flash-xiao2350:
 # ── Tests ─────────────────────────────────────────────────────────
 # Host-side logic tests. Run automatically before `upload`.
 .PHONY: test
-test:
+test: lint
 	$(PYTHON) -m pytest -q
+
+# Narrow by design — see ruff.toml. Skips (loudly) rather than failing when
+# ruff isn't installed, so an existing .venv keeps working until `make setup`.
+.PHONY: lint
+lint:
+	@if [ -x $(VENV)/bin/ruff ]; then \
+		$(VENV)/bin/ruff check micropython/ scripts/ tests/ ; \
+	else \
+		echo "… ruff not installed — run 'make setup' to enable lint checks"; \
+	fi
 
 .PHONY: upload
 upload: test _check-mpremote

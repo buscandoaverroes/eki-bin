@@ -16,10 +16,12 @@
 # pretends to work. Different failure CAUSES take different colours so
 # someone holding a dark jar with no laptop can tell which one happened.
 
-from settings import *  # noqa: F401,F403
-from primitives import *  # noqa: F401,F403
-from leds import *  # noqa: F401,F403
-from leds import _paint_layers, _write_frame
+import time
+from leds import (_write_frame, clear)
+from primitives import (breathe, phase_sawtooth)
+from settings import (ERROR_BREATHE_PERIOD_MS, ERROR_COLOR, FRAME_MS,
+    NUM_LEDS, STARTUP_BURST_MS, STARTUP_COLOR, STARTUP_FADE_MS,
+    STARTUP_SPIN_HZ)
 
 
 

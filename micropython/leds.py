@@ -25,8 +25,9 @@ from neopixel import NeoPixel
 # value once at import and would never see a change.
 import settings
 
-from settings import *  # noqa: F401,F403
-from primitives import *  # noqa: F401,F403
+from primitives import gamma
+from settings import (ARC_ORIGIN, BACKGROUND_BRIGHTNESS, DITHER, LED_PIN,
+    NUM_LEDS, SECONDARY_HUE_SHIFT_DEG)
 
 np = NeoPixel(Pin(LED_PIN, Pin.OUT), NUM_LEDS)
 

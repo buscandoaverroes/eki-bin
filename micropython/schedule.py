@@ -15,7 +15,7 @@
 
 import json
 
-from settings import *  # noqa: F401,F403
+from settings import (QUIET_END, QUIET_START)
 
 def is_quiet(now):
     """True during the configured quiet hours. The window can wrap past midnight

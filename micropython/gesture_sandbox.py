@@ -52,7 +52,14 @@
 
 import time
 
-import main
+# V1.6 split main.py into modules (docs/v1.6-refactor.md), so this
+# script now imports the ones it actually uses. NOTE settings is
+# imported as a MODULE: BRIGHTNESS is mutable at runtime and a
+# from-import would freeze a copy.
+import gestures
+import leds
+import primitives
+import settings
 
 MODE = "v1"  # "full" | "v1" — see header
 
@@ -65,16 +72,21 @@ TRIGGER_INTERVAL_MS = 4
 TRIGGER_BUFFER_LEN = 20  # ~80ms of rolling local-baseline context at 4ms
 
 # Quick threshold overrides for THIS session, without touching config.py —
-# edit and re-run, no re-upload needed. Applied to the imported `main`
-# module's globals below. Leave empty to use whatever's already in
-# config.py on-device.
+# edit and re-run, no re-upload needed. Leave empty to use whatever's
+# already in config.py on-device.
+#
+# ⚠ Applied to `gestures`, NOT to `settings`, even though settings.py is
+# where these are DEFINED. gestures.py imports them by name, which takes a
+# COPY at import time — so rebinding them on settings would change a value
+# nothing reads. Set them where they are read. (Same trap that silently
+# broke BRIGHTNESS cycling during the V1.6 split; docs/v1.6-refactor.md.)
 THRESHOLD_OVERRIDES = {
     # "TAP_TRIGGER_THRESHOLD_MG": 30,
     "FLICK_MAGNITUDE_THRESHOLD_MG": 328,
     # "FLICK_SPACING_STDEV_THRESHOLD_MS": 20,
 }
 for _name, _value in THRESHOLD_OVERRIDES.items():
-    setattr(main, _name, _value)
+    setattr(gestures, _name, _value)
 
 
 # ── I2C resilience ────────────────────────────────────────────────
@@ -95,7 +107,7 @@ def _safe_read_accel(i2c, addr, now_ms, last_error_print):
     """Returns (raw_xyz_or_None, updated last_error_print). Caller skips
     the sample on None instead of crashing the whole run."""
     try:
-        return main._imu_read_accel_raw(i2c, addr), last_error_print
+        return gestures._imu_read_accel_raw(i2c, addr), last_error_print
     except OSError as e:
         if now_ms - last_error_print >= I2C_ERROR_PRINT_INTERVAL_MS:
             print(f"  ⚠ I2C read failed ({e}) — likely a connection jostled by the tap/grab itself, same finding as vibration_sandbox.py. Check the IMU's wiring if this repeats. Skipping this sample.")
@@ -152,16 +164,16 @@ def _write_segment(start, end, color, mult=1.0, use_gamma=True):
     gamma-corrected as normal — that range doesn't hit this problem, and
     losing gamma's extra emphasis at the bright end (gamma(2.0)≈4.6 vs a
     linear 2.0) would blunt the jolt's whole "brighter than normal" point."""
-    level = main.BRIGHTNESS * (main.gamma(mult) if use_gamma else mult)
+    level = settings.BRIGHTNESS * (primitives.gamma(mult) if use_gamma else mult)
     for logical in range(start, end):
-        phys = main._physical(logical)
-        if main.DITHER:
-            res = main._residual[phys]
-            main.np[phys] = tuple(
-                main._quantize(color[ch] * level, res, ch) for ch in range(3)
+        phys = leds._physical(logical)
+        if settings.DITHER:
+            res = leds._residual[phys]
+            leds.np[phys] = tuple(
+                leds._quantize(color[ch] * level, res, ch) for ch in range(3)
             )
         else:
-            main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
+            leds.np[phys] = tuple(leds._clamp255(color[ch] * level) for ch in range(3))
 
 
 def _write_segment_static(start, end, color, mult):
@@ -175,10 +187,10 @@ def _write_segment_static(start, end, color, mult):
     shelf whose entire point is staying visibly non-zero. Call this ONCE
     per shelf, not every frame — nothing here needs re-rendering while
     the value isn't moving."""
-    level = main.BRIGHTNESS * mult
+    level = settings.BRIGHTNESS * mult
     for logical in range(start, end):
-        phys = main._physical(logical)
-        main.np[phys] = tuple(main._clamp255(color[ch] * level) for ch in range(3))
+        phys = leds._physical(logical)
+        leds.np[phys] = tuple(leds._clamp255(color[ch] * level) for ch in range(3))
 
 
 # ── Tap-strength → brightness — "hardware-defined software" ─────────
@@ -208,7 +220,7 @@ def _write_segment_static(start, end, color, mult):
 # STRENGTH_MAX_DEV_MG nudged 400→460: observed real dev crept from 444mg
 # to 461mg between rounds, both clamping to strength=1.0 — a slightly
 # higher ceiling keeps "hard" taps from all reading identically.
-STRENGTH_MIN_DEV_MG = main.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
+STRENGTH_MIN_DEV_MG = settings.TAP_TRIGGER_THRESHOLD_MG  # at/below this → floor
 STRENGTH_MAX_DEV_MG = 460
 ACK_PEAK_FLOOR = 0.35  # lightest-tap ACK brightness
 ACK_PEAK_CEIL = 6.0    # hardest-tap ACK brightness — >1.0 is fine, same
@@ -221,7 +233,7 @@ SHELF_CEIL = 0.25      # hardest-tap shelf — stays below ACK_PEAK_FLOOR (0.35)
 #                        with a real (if narrower than before) margin, so
 #                        shelf never blurs into ACK
 
-# Real-hardware feedback (2026-08-16): at the old ack_ms (main.ACK_FLASH_MS
+# Real-hardware feedback (2026-08-16): at the old ack_ms (settings.ACK_FLASH_MS
 # * 3 = 150ms out of the ~1200ms window), the rise-to-peak happened too
 # fast to actually SEE a strength difference — 150ms isn't enough time to
 # track "how high did it climb" before it's already dipping to the shelf.
@@ -250,8 +262,8 @@ def _would_saturate(mult, color=None):
     silently clamped everything above ~65% strength to indistinguishable
     pure white. Pure function, no LED writes — checkable from a host test
     without hardware; see tests/test_gesture_sandbox.py."""
-    color = color or main.STARTUP_COLOR
-    level = main.BRIGHTNESS * mult
+    color = color or settings.STARTUP_COLOR
+    level = settings.BRIGHTNESS * mult
     return max(color) * level >= 255
 
 
@@ -279,7 +291,7 @@ def ack_flick(phase_ms, peak_mult=1.0, shelf_mult=0.0, ack_ms=ACK_HOLD_MS):
     return shelf_mult
 
 
-def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
+def confirm_jolt(phase_ms, total_ms=settings.WAKE_JOLT_MS, peak_mult=settings.WAKE_JOLT_BRIGHTNESS_MULT, start_mult=0.0):
     """WAKE's response: rises from start_mult (continuing from wherever
     the shelf left off, not necessarily 0) to peak_mult, then decays all
     the way to 0 — the shelf's job was "still here, deciding"; decaying
@@ -296,7 +308,7 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     not fixed pre-emptively. Watch for a brief dip right as CONFIRM
     starts; if it's there, a targeted fix (not a blanket use_gamma=False)
     would be needed."""
-    rise_ms = total_ms * (main.STARTUP_BURST_MS / (main.STARTUP_BURST_MS + main.STARTUP_FADE_MS))
+    rise_ms = total_ms * (settings.STARTUP_BURST_MS / (settings.STARTUP_BURST_MS + settings.STARTUP_FADE_MS))
     decay_ms = total_ms - rise_ms
     if phase_ms < rise_ms:
         return start_mult + (phase_ms / rise_ms) * (peak_mult - start_mult)
@@ -306,7 +318,7 @@ def confirm_jolt(phase_ms, total_ms=main.WAKE_JOLT_MS, peak_mult=main.WAKE_JOLT_
     return peak_mult * (1.0 - decay_elapsed / decay_ms)
 
 
-def cycle_flash(phase_ms, total_ms=main.CYCLE_TRANSITION_MS):
+def cycle_flash(phase_ms, total_ms=settings.CYCLE_TRANSITION_MS):
     """CYCLE's response: a quick flash + hard cut, not WAKE's fuller jolt —
     deliberately simpler, gesture-envelope.md §11's AWAKE→CYCLE decision
     (no crossfade, same reasoning as CHASE's transition redesign). Doesn't
@@ -329,13 +341,13 @@ def _render_confirm_jolt(shelf_mult=0.0):
     start = time.ticks_ms()
     while True:
         elapsed = time.ticks_diff(time.ticks_ms(), start)
-        if elapsed >= main.WAKE_JOLT_MS:
+        if elapsed >= settings.WAKE_JOLT_MS:
             break
         mult = confirm_jolt(elapsed, start_mult=shelf_mult)
-        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, mult)
-        main.np.write()
+        _write_segment(0, settings.NUM_LEDS, settings.STARTUP_COLOR, mult)
+        leds.np.write()
         time.sleep_ms(LED_RENDER_INTERVAL_MS)
-    main.clear()
+    leds.clear()
 
 
 def _render_cycle_flash():
@@ -343,18 +355,18 @@ def _render_cycle_flash():
     start = time.ticks_ms()
     while True:
         elapsed = time.ticks_diff(time.ticks_ms(), start)
-        if elapsed >= main.CYCLE_TRANSITION_MS:
+        if elapsed >= settings.CYCLE_TRANSITION_MS:
             break
-        _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, cycle_flash(elapsed))
-        main.np.write()
+        _write_segment(0, settings.NUM_LEDS, settings.STARTUP_COLOR, cycle_flash(elapsed))
+        leds.np.write()
         time.sleep_ms(LED_RENDER_INTERVAL_MS)
-    main.clear()
+    leds.clear()
 
 
 def _capture_window(i2c, addr, start_ms, ack_fn=None, ack_ms=0, shelf_mult=0.0):
     """Local, tunable capture loop — deliberately NOT main._capture_gesture_
     window, so its timing can be experimented with independently. Still
-    calls main._imu_read_accel_raw (the real HAL), never re-derives the
+    calls gestures._imu_read_accel_raw (the real HAL), never re-derives the
     I2C register logic itself.
 
     ack_fn, if given, renders live during the capture window instead of
@@ -383,14 +395,14 @@ def _capture_window(i2c, addr, start_ms, ack_fn=None, ack_ms=0, shelf_mult=0.0):
         if ack_fn is not None:
             if elapsed < ack_ms:
                 if now - last_render >= LED_RENDER_INTERVAL_MS:
-                    _write_segment(0, main.NUM_LEDS, main.STARTUP_COLOR, ack_fn(elapsed), use_gamma=False)
-                    main.np.write()
+                    _write_segment(0, settings.NUM_LEDS, settings.STARTUP_COLOR, ack_fn(elapsed), use_gamma=False)
+                    leds.np.write()
                     last_render = now
             elif not shelf_written:
-                _write_segment_static(0, main.NUM_LEDS, main.STARTUP_COLOR, shelf_mult)
-                main.np.write()
+                _write_segment_static(0, settings.NUM_LEDS, settings.STARTUP_COLOR, shelf_mult)
+                leds.np.write()
                 shelf_written = True
-        if elapsed >= main._GESTURE_WINDOW_MS:
+        if elapsed >= gestures._GESTURE_WINDOW_MS:
             break
         time.sleep_ms(TRIGGER_INTERVAL_MS)
     return samples
@@ -403,7 +415,7 @@ def _fmt(value, digits=1):
 def run_full():
     """Exercises classify_tap_or_flick/classify_position/_GestureMenu —
     the richer scrollwheel machinery, §4-10 of gesture-envelope.md."""
-    i2c, addr = main._get_imu()
+    i2c, addr = gestures._get_imu()
     if addr is None:
         print("  ✗ No LSM6DSV16X found — run imu_test.py first to debug wiring")
         return
@@ -411,15 +423,15 @@ def run_full():
     print("\n══ eki-bin gesture model sandbox (full) ══════════════")
     print(f"  IMU confirmed at {hex(addr)}")
     print(
-        f"  thresholds: trigger={main.TAP_TRIGGER_THRESHOLD_MG}mg"
-        f"  flick={main.FLICK_MAGNITUDE_THRESHOLD_MG}mg"
-        f"  flick_spacing={main.FLICK_SPACING_STDEV_THRESHOLD_MS}ms"
-        f"  position={main.POSITION_THRESHOLD_MG}mg"
+        f"  thresholds: trigger={settings.TAP_TRIGGER_THRESHOLD_MG}mg"
+        f"  flick={settings.FLICK_MAGNITUDE_THRESHOLD_MG}mg"
+        f"  flick_spacing={settings.FLICK_SPACING_STDEV_THRESHOLD_MS}ms"
+        f"  position={settings.POSITION_THRESHOLD_MG}mg"
     )
-    print(f"  trigger poll: {TRIGGER_INTERVAL_MS}ms  (vs. main.py's debug loop: FRAME_MS={main.FRAME_MS}ms)")
+    print(f"  trigger poll: {TRIGGER_INTERVAL_MS}ms  (vs. main.py's debug loop: FRAME_MS={settings.FRAME_MS}ms)")
     print("  gesture anytime — Ctrl+C to stop\n")
 
-    menu = main._GestureMenu(main.GESTURE_MENU_OPTIONS)
+    menu = gestures._GestureMenu(settings.GESTURE_MENU_OPTIONS)
     trigger_buffer = []
     last_heartbeat = time.ticks_ms()
     last_error_print = time.ticks_ms()
@@ -432,13 +444,13 @@ def run_full():
                 time.sleep_ms(TRIGGER_INTERVAL_MS)
                 continue
             sample = (now_ms,) + raw
-            mag = main._gesture_magnitude_mg(sample)
+            mag = gestures._gesture_magnitude_mg(sample)
 
             triggered = False
             baseline = None
             if len(trigger_buffer) >= TRIGGER_BUFFER_LEN:
-                baseline = main._gesture_median(trigger_buffer)
-                triggered = abs(mag - baseline) >= main.TAP_TRIGGER_THRESHOLD_MG
+                baseline = gestures._gesture_median(trigger_buffer)
+                triggered = abs(mag - baseline) >= settings.TAP_TRIGGER_THRESHOLD_MG
 
             trigger_buffer.append(mag)
             if len(trigger_buffer) > TRIGGER_BUFFER_LEN:
@@ -454,9 +466,9 @@ def run_full():
             if triggered:
                 samples = _capture_window(i2c, addr, now_ms)
                 trigger_buffer = []
-                features = main.extract_gesture_features(samples)
-                physical = main.classify_tap_or_flick(features)
-                position = main.classify_position(features) if physical is not None else None
+                features = gestures.extract_gesture_features(samples)
+                physical = gestures.classify_tap_or_flick(features)
+                position = gestures.classify_position(features) if physical is not None else None
 
                 print("\n  ── capture ──")
                 print(
@@ -476,7 +488,7 @@ def run_full():
                 print(f"    {tag}")
 
                 if physical is not None:
-                    response = main._classify_menu_response(menu.active, physical)
+                    response = gestures._classify_menu_response(menu.active, physical)
                     now_ms = time.ticks_ms()  # stale after the blocking capture
                     if response == "wake":
                         menu.wake(now_ms)
@@ -485,7 +497,7 @@ def run_full():
                         selected = menu.select()
                         print(f"    [SELECT] {selected}")
                     elif response == "scroll":
-                        direction = main._scroll_direction(position)
+                        direction = gestures._scroll_direction(position)
                         menu.scroll(now_ms, direction)
                         arrow = "+" if direction > 0 else "-"
                         print(f"    [SCROLL {arrow}] cursor: {menu.options[menu.cursor]}")
@@ -510,18 +522,18 @@ def run_v1():
     the simpler cycle_flash once the verdict is known. Still prints every
     transition — this stays the recognizer/state-machine regression check
     even with real rendering wired in."""
-    i2c, addr = main._get_imu()
+    i2c, addr = gestures._get_imu()
     if addr is None:
         print("  ✗ No LSM6DSV16X found — run imu_test.py first to debug wiring")
         return
 
     print("\n══ eki-bin gesture model sandbox (v1) ════════════════")
     print(f"  IMU confirmed at {hex(addr)}")
-    print(f"  tap energy threshold: {main.TAP_ENERGY_THRESHOLD}")
+    print(f"  tap energy threshold: {settings.TAP_ENERGY_THRESHOLD}")
     print(f"  trigger poll: {TRIGGER_INTERVAL_MS}ms")
     print("  tap anywhere — Ctrl+C to stop\n")
 
-    state = main._TapCycleState()
+    state = gestures._TapCycleState()
     trigger_buffer = []
     last_heartbeat = time.ticks_ms()
     last_error_print = time.ticks_ms()
@@ -549,24 +561,24 @@ def run_v1():
                     if sensor_error_start is None:
                         sensor_error_start = now_ms
                         print(f"  [SENSOR ERROR] no successful IMU read in over {SENSOR_ERROR_TIMEOUT_MS}ms — check wiring")
-                    mult = main.breathe(now_ms - sensor_error_start, main.ERROR_BREATHE_PERIOD_MS, floor=0.15)
-                    _write_segment(0, main.NUM_LEDS, SENSOR_ERROR_COLOR, mult)
-                    main.np.write()
+                    mult = primitives.breathe(now_ms - sensor_error_start, settings.ERROR_BREATHE_PERIOD_MS, floor=0.15)
+                    _write_segment(0, settings.NUM_LEDS, SENSOR_ERROR_COLOR, mult)
+                    leds.np.write()
                 time.sleep_ms(TRIGGER_INTERVAL_MS)
                 continue
             if sensor_error_start is not None:
                 print("  [SENSOR RECOVERED]")
                 sensor_error_start = None
-                main.clear()
+                leds.clear()
             last_success_ms = now_ms
             sample = (now_ms,) + raw
-            mag = main._gesture_magnitude_mg(sample)
+            mag = gestures._gesture_magnitude_mg(sample)
 
             triggered = False
             baseline = None
             if len(trigger_buffer) >= TRIGGER_BUFFER_LEN:
-                baseline = main._gesture_median(trigger_buffer)
-                triggered = abs(mag - baseline) >= main.TAP_TRIGGER_THRESHOLD_MG
+                baseline = gestures._gesture_median(trigger_buffer)
+                triggered = abs(mag - baseline) >= settings.TAP_TRIGGER_THRESHOLD_MG
 
             trigger_buffer.append(mag)
             if len(trigger_buffer) > TRIGGER_BUFFER_LEN:
@@ -591,9 +603,9 @@ def run_v1():
                     shelf_mult=shelf_mult,
                 )
                 trigger_buffer = []
-                features = main.extract_gesture_features(samples)
-                valid = main.classify_valid_input(features)
-                print(f"    energy={_fmt(features['energy'], 0)}  (threshold={main.TAP_ENERGY_THRESHOLD})")
+                features = gestures.extract_gesture_features(samples)
+                valid = gestures.classify_valid_input(features)
+                print(f"    energy={_fmt(features['energy'], 0)}  (threshold={settings.TAP_ENERGY_THRESHOLD})")
 
                 now_ms = time.ticks_ms()  # stale after the blocking capture
                 response = state.resolve(now_ms, valid)
@@ -605,7 +617,7 @@ def run_v1():
                     _render_cycle_flash()
                 else:
                     print("  [false start — noise]\n")
-                    main.clear()  # hard cut from the shelf to black —
+                    leds.clear()  # hard cut from the shelf to black —
                     #                "decided: no," same reasoning as
                     #                confirm_jolt's decay-to-0 for a "yes"
 

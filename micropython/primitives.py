@@ -14,7 +14,7 @@
 
 import math
 
-from settings import *  # noqa: F401,F403
+from settings import GAMMA
 
 # ─────────────────────────────────────────────────────────────
 # Animation primitives  ←  YOUR PART (reusable building blocks)

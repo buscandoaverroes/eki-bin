@@ -20,8 +20,8 @@ import time
 
 from machine import I2C, Pin
 
-from settings import *  # noqa: F401,F403
-from settings import _UTC_OFFSET_APPLIED  # `import *` skips underscores
+from settings import (RTC_I2C_ID, RTC_SCL_PIN, RTC_SDA_PIN, TIME_SOURCE,
+    _UTC_OFFSET_APPLIED)
 
 # ─────────────────────────────────────────────────────────────
 # DS3231 RTC (TIME_SOURCE="ds3231") — docs/hardware.md § DS3231

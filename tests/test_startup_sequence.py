@@ -173,8 +173,12 @@ def test_wifi_creds_optional_so_a_wifi_free_unit_can_boot():
         sys.path.insert(0, conftest.MICROPYTHON_DIR)
 
     m = importlib.import_module("main")  # must not raise
-    assert m.WIFI_SSID is None
-    assert m.TIME_SOURCE == "rtc"
+    # Asserted on `settings`, which OWNS the value. After the V1.6 split
+    # main.py imports only what it uses, and it no longer touches WiFi
+    # credentials at all — that is the point of the refactor, not a
+    # regression. net.py reads them, and only when TIME_SOURCE is "wifi".
+    assert sys.modules["settings"].WIFI_SSID is None
+    assert sys.modules["settings"].TIME_SOURCE == "rtc"
 
 
 def test_rtc_time_source_does_not_double_apply_the_utc_offset(load_main):

@@ -29,22 +29,32 @@ from neopixel import NeoPixel
 # re-exporting keeps all 265 tests passing unmodified while the split
 # proceeds. That is what makes a green suite evidence the move was
 # faithful. Replaced with explicit imports in V1.6's final step.
-from settings import *  # noqa: F401,F403
-from settings import _UTC_OFFSET_APPLIED  # `import *` skips underscore names
+from clock import (ClockUnavailable, _check_ds3231_at_boot, current_period,
+    fmt_time, local_time)
+from contracts import (ACTIVE_CONTRACT, ApproachContract,
+    geometry_problems)
+from diag import (_mem_checkpoint, _mem_report)
+from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
+    _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
+    _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+from leds import (_heartbeat_pin, _write_frame, clear)
+from schedule import (is_quiet, load_schedule, schedule_lines)
+from settings import (AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
+    CONFIG_ERROR_COLOR, DISPLAY_DIRECTION, DISPLAY_DIRECTION_B,
+    ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
+    HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
+    QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS, SCHEDULE_ERROR_COLOR,
+    SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
+    WAKE_INTERACTION_ENABLED)
+from signals import (LeaveSignal, leave_signal, next_departures)
+from status import (_play_startup_burst, _run_startup_failure_forever)
 
 # ─────────────────────────────────────────────────────────────
 # Signals, LED output, display contracts — extracted (V1.6)
 # ─────────────────────────────────────────────────────────────
 # Transitional star-imports; see docs/v1.6-refactor.md. Import ORDER is not
 # arbitrary: contracts depends on leds, leds on primitives, all on settings.
-from signals import *  # noqa: F401,F403
-from leds import *  # noqa: F401,F403
-from contracts import *  # noqa: F401,F403
 # `import *` skips underscores, and the tests reach into main._x.
-from leds import (_clamp255, _heartbeat_pin, _layer_hue_shift, _layer_mult,
-    _paint, _paint_layers, _physical, _quantize, _residual, _write_frame)
-from contracts import (_TrainState, _advance_arm, _advance_train, _arc_len,
-    _arm_target, _position_offset)
 
 
 
@@ -62,28 +72,21 @@ from contracts import (_TrainState, _advance_arm, _advance_train, _arc_len,
 # ─────────────────────────────────────────────────────────────
 # Memory instrumentation — extracted to diag.py (V1.6)
 # ─────────────────────────────────────────────────────────────
-from diag import *  # noqa: F401,F403  — transitional, see runbook
-from diag import _mem_checkpoint, _mem_marks, _mem_report  # skipped by *
 
 
 
 # ─────────────────────────────────────────────────────────────
 # Animation primitives — extracted to primitives.py (V1.6)
 # ─────────────────────────────────────────────────────────────
-from primitives import *  # noqa: F401,F403  — transitional, see runbook
-from primitives import _hsv_to_rgb, _rgb_to_hsv  # `import *` skips these
 
 
 
 # ─────────────────────────────────────────────────────────────
 # Schedule + clock — extracted (V1.6)
 # ─────────────────────────────────────────────────────────────
-from schedule import *  # noqa: F401,F403
-from clock import *  # noqa: F401,F403
 # `import *` skips underscores. run_startup_sequence() calls this, and
 # no host test reaches the ds3231 boot path — so a green suite would
 # have shipped a NameError straight to the hardware.
-from clock import _check_ds3231_at_boot, _ds3231_local_time
 def _local_time_or_die():
     """local_time(), but a clock we can't trust ends the run.
 
@@ -107,27 +110,9 @@ def _local_time_or_die():
 # ─────────────────────────────────────────────────────────────
 # Status displays + gesture envelope — extracted (V1.6)
 # ─────────────────────────────────────────────────────────────
-from status import *  # noqa: F401,F403
-from gestures import *  # noqa: F401,F403
 # `import *` skips underscore names. ALL of them are re-exported here
 # during the transition because the tests reach into main._x — see
 # docs/v1.6-refactor.md. Narrowed in V1.6's final step.
-from status import (_draw_startup_circle, _play_startup_burst,
-    _run_startup_failure_forever, _startup_burst_mult,
-    _startup_circle_index, _startup_error_mult)
-from gestures import (_GESTURE_CROSSING_FRAC, _GESTURE_SETTLE_FRAC,
-    _GESTURE_TRIGGER_BUFFER_LEN, _GESTURE_WINDOW_MS, _GestureMenu,
-    _IMU_CANDIDATE_ADDRS, _IMU_CTRL1_240HZ_HIGH_PERF,
-    _IMU_CTRL1_POWER_DOWN, _IMU_CTRL1_REG, _IMU_OUTX_L_A,
-    _IMU_WHO_AM_I_EXPECTED, _IMU_WHO_AM_I_REG, _StatusMessage,
-    _TapCycleState, _ack_flick, _all_signals_hidden,
-    _capture_gesture_window, _capture_with_ack, _classify_menu_response,
-    _confirm_jolt_mult, _cycle_brightness, _gesture_dominant_axis,
-    _gesture_magnitude_mg, _gesture_mean, _gesture_median, _gesture_stdev,
-    _get_imu, _handle_tap, _imu_find_device, _imu_read_accel_raw,
-    _play_confirm_jolt, _play_cycle_flash, _run_gesture_debug_loop,
-    _run_secondary_action, _safe_read_accel, _scroll_direction,
-    _tap_strength)
 def run_startup_sequence():
     """The whole boot ceremony. On success: connecting spin, then the
     success burst, then returns — the main loop takes over immediately

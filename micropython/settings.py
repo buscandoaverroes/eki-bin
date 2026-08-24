@@ -366,3 +366,7 @@ QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 # Relocated here by the V1.6 split: it is a config read, and this
 # module owns those. diag.py imports it.
 MEM_DEBUG_ENABLED = getattr(config, "MEM_DEBUG_ENABLED", False)
+
+# Relocated by the V1.6 tightening: a config read belongs here,
+# not stranded inside gestures.py.
+GESTURE_POLL_MS = getattr(config, "GESTURE_POLL_MS", 4)

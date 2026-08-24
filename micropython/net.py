@@ -20,8 +20,7 @@
 import gc
 import time
 
-from settings import *  # noqa: F401,F403
-from status import *  # noqa: F401,F403
+from settings import (FRAME_MS, WIFI_PASS, WIFI_SSID)
 from status import _draw_startup_circle
 
 try:

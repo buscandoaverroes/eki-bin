@@ -17,19 +17,28 @@
 # with _all_signals_hidden; splitting it would have been a rewrite, not a
 # move. Worth revisiting in V1.6's final tightening step.
 
+import gc
+import math
 import time
 
 import settings
 
 from machine import I2C, Pin
 
-from settings import *  # noqa: F401,F403
-from primitives import *  # noqa: F401,F403
-from signals import *  # noqa: F401,F403  — HIDDEN, LeaveSignal
-from leds import *  # noqa: F401,F403
-from leds import _paint, _paint_layers, _write_frame
-from status import *  # noqa: F401,F403
-from status import _play_startup_burst, _run_startup_failure_forever
+from leds import (_write_frame, clear)
+from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
+    AWAKE_MINUTES, BRIGHTNESS_PRESETS, CYCLE_TRANSITION_MS,
+    FLICK_MAGNITUDE_THRESHOLD_MG, FLICK_SPACING_STDEV_THRESHOLD_MS,
+    FRAME_MS, GESTURE_FLICK_ENABLED, GESTURE_FLIP_ENABLED,
+    GESTURE_MENU_OPTIONS, GESTURE_MODE_TIMEOUT_MS, GESTURE_POLL_MS,
+    GESTURE_POSITION_ENABLED, IMU_I2C_ID, IMU_SCL_PIN, IMU_SDA_PIN,
+    NO_DATA_COLOR, NO_DATA_DURATION_MS, NUM_LEDS, ORIENTATION_MAP,
+    ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
+    SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
+    STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
+    TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
+    WAKE_JOLT_BRIGHTNESS_MULT, WAKE_JOLT_MS, WAKE_SETTLE_MS)
+from signals import HIDDEN
 
 
 
@@ -480,7 +489,6 @@ _GESTURE_TRIGGER_BUFFER_LEN = 8  # rolling context for the trigger's cheap
 _GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
 #   _capture_gesture_window's docstring for the honest simplification this is
 
-GESTURE_POLL_MS = getattr(config, "GESTURE_POLL_MS", 4)
 #   ⚠ The trigger MUST poll faster than FRAME_MS. Every validated recognizer
 #   number (95-98%, insights.md §8-9) was measured at 4ms/240Hz, and
 #   gesture_sandbox.py's header records that polling at FRAME_MS (16ms)
