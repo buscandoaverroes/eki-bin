@@ -57,14 +57,15 @@
 #
 # Record what you find in docs/insights.md §12, with the strip and value.
 
+import time
+
 from machine import Pin
 from neopixel import NeoPixel
-import time
 
 DATA_PIN = 1  # ⚠ SET PER BOARD — see wiring above and pinouts/<board>.md
 NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21
 
-MODE = "ramp"  # "ramp" | "channels" | "balanced"
+MODE = "channels"  # "ramp" | "channels" | "balanced"
 
 CHANNEL_TEST_VALUE = 2  # "channels" mode: the raw value to compare across R/G/B
 
@@ -82,14 +83,14 @@ CHANNEL_TEST_VALUE = 2  # "channels" mode: the raw value to compare across R/G/B
 # that reads neutral, since anything below the (3,3,3) total of 9 beats the
 # equal-value floor.
 BALANCED_CANDIDATES = [
-    (1, 1, 1),   # total 3 — the current marker colour, reads red
-    (1, 2, 1),   # total 4
-    (1, 2, 2),   # total 5
-    (1, 3, 1),   # total 5
-    (1, 3, 2),   # total 6
-    (2, 3, 2),   # total 7
-    (2, 4, 2),   # total 8
-    (2, 3, 3),   # total 8
+    (1, 1, 1),  # total 3 — the current marker colour, reads red
+    (1, 2, 1),  # total 4
+    (1, 2, 2),  # total 5
+    (1, 3, 1),  # total 5
+    (1, 3, 2),  # total 6
+    (2, 3, 2),  # total 7
+    (2, 4, 2),  # total 8
+    (2, 3, 3),  # total 8
 ]
 
 np = NeoPixel(Pin(DATA_PIN, Pin.OUT), NUM_LEDS)
@@ -118,29 +119,48 @@ def channels():
     print("  CHANNELS — pure R, G, B and white, all at raw value %d" % v)
     print("  Unequal apparent brightness at the SAME value is the cause")
     print("  of the colour cast. Note which channel looks weakest.")
-    values = [(v, 0, 0), (v, 0, 0), (0, v, 0), (0, v, 0),
-              (0, 0, v), (0, 0, v), (v, v, v), (v, v, v)]
-    _show(values, ["red %d" % v, "red %d" % v, "green %d" % v, "green %d" % v,
-                   "blue %d" % v, "blue %d" % v, "white %d" % v, "white %d" % v])
+    values = [
+        (v, 0, 0),
+        (v, 0, 0),
+        (0, v, 0),
+        (0, v, 0),
+        (0, 0, v),
+        (0, 0, v),
+        (v, v, v),
+        (v, v, v),
+    ]
+    _show(
+        values,
+        [
+            "red %d" % v,
+            "red %d" % v,
+            "green %d" % v,
+            "green %d" % v,
+            "blue %d" % v,
+            "blue %d" % v,
+            "white %d" % v,
+            "white %d" % v,
+        ],
+    )
 
 
 def balanced():
     print("  BALANCED — per-channel compensation candidates")
     print("  Find the DIMMEST one that still reads neutral.")
-    _show(BALANCED_CANDIDATES,
-          ["%s" % (c,) for c in BALANCED_CANDIDATES])
+    _show(BALANCED_CANDIDATES, ["%s" % (c,) for c in BALANCED_CANDIDATES])
 
 
 def main():
     print("\n══ eki-bin low-PWM floor test ════════════════════")
-    print("  %d LEDs on GPIO%d — RAW values, no gamma, no BRIGHTNESS"
-          % (NUM_LEDS, DATA_PIN))
+    print(
+        "  %d LEDs on GPIO%d — RAW values, no gamma, no BRIGHTNESS"
+        % (NUM_LEDS, DATA_PIN)
+    )
     print("  mode: %r" % MODE)
 
     modes = {"ramp": ramp, "channels": channels, "balanced": balanced}
     if MODE not in modes:
-        print("  ✗ MODE=%r unknown — pick one of %s"
-              % (MODE, ", ".join(sorted(modes))))
+        print("  ✗ MODE=%r unknown — pick one of %s" % (MODE, ", ".join(sorted(modes))))
         return
     modes[MODE]()
 

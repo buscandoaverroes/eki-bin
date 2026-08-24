@@ -816,6 +816,33 @@ the weak channel. (An earlier guess in `low_pwm_test.py` assumed blue was
 weak and biased its compensation candidates the wrong way. The ramp settled
 it in one run, which is the argument for measuring rather than reasoning.)
 
+### Per-channel compensation: `(2,3,2)` is the dimmest neutral
+
+`balanced` mode, same strip, same run conditions:
+
+| raw | reads as | total |
+|---|---|---|
+| `(1,1,1)` | dim red ("mars") | 3 |
+| `(1,2,1)` | forest green | 4 |
+| `(1,2,2)` | deep blue | 5 |
+| `(1,3,1)` | grass, bright green | 5 |
+| `(1,3,2)` | sky blue | 6 |
+| **`(2,3,2)`** | **first neutral grey** | **7** |
+| `(2,4,2)` / `(2,3,3)` | neutral | 8 |
+
+So **green wants +1 over red and blue**, and compensation buys a neutral at
+a total of 7 instead of `(3,3,3)`'s 9 — about 22% less output for the same
+apparent colour. Real, but modest; not the order-of-magnitude win that would
+force a redesign.
+
+`channels` mode at value 2 confirms it independently: **white reads purple**,
+i.e. red + blue with green under-contributing at equal value.
+
+**Control worth noting:** the two LEDs showing each candidate looked
+identical to each other. That rules out per-die manufacturing scatter — this
+is a systematic property of the WS2812B's channels, so one compensation
+applies strip-wide and no per-pixel calibration is needed.
+
 ### Why marker ticks read warm — arithmetic, not mystery
 
 Markers take the STATIC path in `leds.py`, so what reaches the LED is:
@@ -844,10 +871,18 @@ Two candidate fixes, and the `balanced` mode decides between them:
    settings, and expresses the actual constraint: never emit a non-zero
    value below the point where channels match.
 
-If a compensated tuple like `(1,2,1)` reads neutral, option 2 gets better
-still — it could clamp to a *balanced* minimum rather than a flat one, and
-markers could sit dimmer than `(3,3,3)` without a cast. That is what
-`balanced` mode is for.
+`balanced` mode has now answered the follow-up: the dimmest neutral is
+`(2,3,2)`, total 7 against `(3,3,3)`'s 9. So a *shaped* clamp is available
+and would let markers sit ~22% dimmer than a flat one.
+
+**Recommendation: take the flat floor of 3 first.** The shaped version costs
+a non-neutral `MARKER_COLOR` and a compensation that is itself per-strip, to
+buy 22% on an element that is meant to be barely-there anyway. And §12's
+in-bottle finding points the other way regardless — the bench-tuned
+`BRIGHTNESS = 0.15` is too dim once diffused, so markers will clear the
+floor naturally at whatever brightness the glass actually needs. Keep
+`(2,3,2)` recorded for the case where markers must be as dim as possible,
+which is not today's problem.
 
 ⚠ Per-strip. Confirm the floor on the 21-LED gift-jar strip before trusting
 it there, and confirm through the glass — the bottle changes what is
