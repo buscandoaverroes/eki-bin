@@ -3,6 +3,9 @@ config.py
 micropython/config.py
 micropython/config_friend1.py
 
+# `make dev` stages the schedule here for mpremote mount.
+micropython/schedule.json
+
 # ── Schedules — the real timetable reveals where you live ─────────
 # Keep everything local except the committed example template.
 schedules/*

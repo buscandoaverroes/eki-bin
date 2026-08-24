@@ -925,6 +925,197 @@ Practical rules:
 - **A strip lighting up before any code runs is a warning**, not a nice sign
   that the wiring works.
 
+### A second presentation: enumerates, but never answers (2026-08-23)
+
+The same corruption recurred with a **different symptom**, worth knowing so
+it isn't mistaken for something else:
+
+| | first occurrence | second |
+|---|---|---|
+| `/dev/cu.usbmodem*` | absent | **present** |
+| BOOTSEL | worked | worked |
+| `mpremote exec` | "no device found" | **opens, then 15s of silence** |
+
+So a device node existing does **not** mean the board is reachable. The RP2
+runtime brings USB CDC up before `_boot.py` runs, so a filesystem too
+damaged to mount leaves you with an enumerated port and no Python behind it.
+
+There's a trap in how this surfaces. `make screen` interrupted with Ctrl-C
+produces a traceback ending in `self.serial.open()` → `os.open(...)`, which
+reads exactly like a busy port held by another process. It isn't — that is
+just where mpremote was waiting. Check before believing it:
+
+```bash
+lsof /dev/cu.usbmodem*        # who holds it (usually: nobody)
+ls -la /dev/cu.usbmodem*      # does the node exist at all
+```
+
+**The discriminating test is a timed probe**, not a REPL attempt:
+
+```bash
+.venv/bin/mpremote exec "print('alive')"   # under a ~15s timeout
+```
+
+Node present + no answer = this bug. Recover with `WIPE=1`.
+
+### A third presentation: the file reads back as the FILESYSTEM (2026-08-24)
+
+The worst one, because every check passes. `diag.py` uploaded, verified at
+the correct 4,011 bytes, and then failed to compile:
+
+```
+File "diag.py", line 1
+SyntaxError: invalid syntax
+```
+
+Line 1 is a comment. Reading the file on the device showed why:
+
+```python
+>>> print(repr(open('diag.py','rb').read()[:90]))
+b'\x03\x00\x00\x00\xf0\x0f\xff\xf7littlefs/\xe0\x00\x10\x01...\x11config.py...'
+```
+
+That is **littlefs's own superblock** — its magic string, then directory
+entries for other files. The inode's size was right; its data pointers were
+aimed at the filesystem's internal structures instead of the file's content.
+
+What makes this the nastiest variant so far:
+
+| | mount | size check | reads back |
+|---|---|---|---|
+| §13 original | ✗ fails, board looks dead | — | — |
+| second presentation | ✗ hangs before USB CDC | — | — |
+| **this one** | **✓ fine** | **✓ correct** | **✗ wrong data** |
+
+Nothing announces a problem. The board boots, the filesystem mounts, the
+upload verifies, and the failure surfaces as a *syntax error in your own
+source* — pointing at a code bug that does not exist.
+
+**Rule: when a reported error cannot be true of the source you wrote, stop
+debugging the source.** A SyntaxError on a line that is a comment — a
+comment byte-identical in style to ones in every module that loaded fine
+moments earlier — is not a language problem. The file being read is not the
+file you wrote.
+
+**This is why upload verification now hashes CONTENT, not size**
+(`scripts/upload.sh`). A size check passes here and actively misdirects: it
+prints `✓ verified` over a file that is entirely wrong. A check that passes
+for the wrong reason is worse than no check.
+
+**Recovery is a wipe, not a re-upload.** Do not trust a filesystem that
+returns its own superblock as file content — rewriting into a damaged
+structure is a coin flip:
+
+```
+make flash-micropython BOARD=xiao-rp2350 WIPE=1
+make upload
+```
+
+⚠ **Three corruption events in one day is not normal**, and they share a
+suspect: this board is on a breadboard, and breadboard contacts are already
+the leading explanation for the intermittent transfer failures below. Flash
+writes are the operation least tolerant of a power glitch. If it recurs
+after a wipe, treat it as evidence for soldering the unit rather than as
+bad luck.
+
+### ROOT CAUSE FOUND: the filesystem is bigger than the flash (2026-08-24)
+
+**`make doctor` on a bare XIAO RP2350 reports a 3072 KB filesystem. The chip
+has 2048 KB of flash, ~320 KB of which is the MicroPython image.** The
+filesystem is 1.78× larger than the space that physically exists.
+
+This is a **known, filed, fixed defect**, not a quirk of one unit:
+
+- **raspberrypi/pico-sdk#2834** — the XIAO RP2350 board header declares
+  `PICO_FLASH_SIZE_BYTES` as 4MB; the board ships a 2MB (16-Mbit) part.
+  Confirmed against `picotool info -a` (`flash size: 2048K`), the P25Q16H
+  datasheet, and Seeed's own documentation. The report notes it propagates
+  to anything relying on that constant — MicroPython included.
+- **micropython/micropython#18839** — the downstream issue, reproducing the
+  identical numbers: 768 blocks, 3072 KB total, 3064 KB free.
+- **Fixed** in pico-sdk 2.3.0, plus a MicroPython follow-up trimming the
+  filesystem to 1408k to match SEEED_XIAO_RP2040. Both land **after** the
+  v1.28.0 (2026-04-06) build this project was running.
+
+That a brand-new second board failed identically is exactly what a wrong
+compile-time constant predicts: it is wrong for every unit of this board.
+
+**Why this likely explains the corruption, not just the wrong number.** The
+failures land at 87–145 KB, far below any boundary, so "ran off the end of
+the chip" does not fit on its own. The stronger hypothesis is the
+filesystem's *start offset*: partition layout typically computes it as
+`flash_size − fs_size`, so a phantom 4MB figure can map the filesystem at
+the wrong physical address entirely — corrupting from early writes, at
+unpredictable points. That matches the most damning symptom exactly: a
+file's data pointer resolving to littlefs's own superblock is a **block
+address miscalculation**, not the half-written-page damage a power glitch
+produces.
+
+**Not yet confirmed.** The test is to flash a build with the corrected flash
+size and see whether corruption disappears independent of write count.
+`make doctor` now fails the board outright when the filesystem exceeds the
+physical flash, so this can never again be mistaken for bad luck.
+
+Also fixed as a direct consequence: `scripts/flash_firmware.sh` used to glob
+the firmware directory and take the **first** match, which sorts to the
+OLDEST build — it would have silently reflashed v1.28.0 over a preview
+installed specifically to test this fix. It now takes the newest, says so
+when there is a choice, and accepts `FIRMWARE=<path>` to pin one.
+
+### The variable is the NUMBER OF WRITES, not size or tool (2026-08-24)
+
+Narrowed by two experiments that finally isolated it.
+
+**`make doctor` on a freshly wiped board passes everything** — 4KB, 24KB and
+40KB written locally by the device, then the same three transferred from the
+host via `mpremote cp`, all content-verified. Six write operations, no
+failures. So flash, littlefs and the serial transport are each fine in
+isolation, at sizes larger than any real module.
+
+**Thonny hangs too.** Uploading the firmware by hand through Thonny — a
+different tool with its own transfer implementation over the same USB CDC —
+wrote clock, config, contracts, diag, gestures, leds, main and net, then
+hung on the ninth file.
+
+| | board | tool | outcome |
+|---|---|---|---|
+| `make doctor` | original | mpremote | ✓ 6 writes, all pass |
+| Thonny | original | Thonny | ✗ hung on the 9th (~145 KB in) |
+| `make upload` | **brand new, out of the box** | mpremote | ✗ died on the 6th (~87 KB in) |
+
+**A second, unused board fails the same way**, which settles it: the first
+board is not damaged, and today's three corruptions were symptom rather than
+cause. Two boards, two host tools, two cables, two USB ports, on and off the
+breadboard — the only surviving variable is the platform itself
+(MicroPython 1.28.0 on RP2350, its littlefs, and USB CDC).
+
+Note it is not a fixed file count OR a fixed byte count — 6 files/87 KB on
+one board, 9 files/145 KB on the other. Both land in the same band, which is
+what a block-reclamation pause would look like rather than a hard limit.
+
+So it is **not mpremote**, and **not the board**. What is left is the
+accumulation of flash writes within one session.
+
+The leading explanation is littlefs garbage collection: after enough writes
+it must compact and erase blocks, and on RP2 a long flash operation is
+exactly the thing that starves USB CDC. Not confirmed.
+
+**This reframes the V1.6 split's cost.** Going from 3 files to 13 did not
+make transfers *slower*, it pushed them past a threshold that had always
+been there — which is why occasional failures became reliable ones on the
+same day the module count quadrupled.
+
+Two things follow, one of which is a genuine fix:
+
+- **`make dev` avoids the problem entirely.** `mpremote mount` serves
+  `micropython/` over the serial link as the device filesystem, so the
+  firmware runs from the working copy with **zero flash writes**. For
+  iteration this is strictly better; a real standalone unit still needs
+  `make upload`.
+- **`make upload` now skips files whose content already matches**, so a
+  typical run writes one or two modules rather than thirteen — staying
+  under the threshold by doing less work.
+
 ### Upload failures: free space ruled out, overwrite is the suspect
 
 The intermittent `make upload` failures outlived every physical fix — new
@@ -952,9 +1143,35 @@ different reason: a failed overwrite can leave a truncated blend of old and
 new content, whereas a failed write after removal leaves the file **absent**
 — which fails loudly at import instead of running as subtly-wrong code.
 
-Worth noting `main.py` is now **154,602 bytes**, rewritten in full on every
-upload. If write duration is the variable, that number is the lever — and
-another argument for the V1.6 modularization in `dev-status.md`.
+**File size is now the strongest signal.** On the upload that triggered the
+second corruption, every smaller file went through and only the big one
+failed:
+
+| file | bytes | result |
+|---|---|---|
+| `diag.py` | 4,011 | ✓ |
+| `primitives.py` | 9,353 | ✓ |
+| `config.py` | 16,806 | ✓ |
+| `settings.py` | 23,415 | ✓ |
+| `testbench.json` | 28,582 | ✓ |
+| **`main.py`** | **122,011** | **✗ ×3** |
+
+That fits a roughly constant per-unit-time failure probability, where
+exposure scales with transfer duration — and it explains why `config.py`
+failed *sometimes* earlier rather than never. It predicts that **uploads get
+more reliable as V1.6 shrinks `main.py`**, which is a claim this project can
+confirm by construction rather than argument.
+
+Two consequences worth acting on:
+
+- **Each failed retry is another chance to corrupt the filesystem.**
+  `upload.sh` tries three times, so a doomed large write gets three
+  attempts to damage littlefs. Both corruptions to date followed a failed
+  large write.
+- **A `.mpy` shortcut exists if this stays painful.** `mpy-cross` compiles
+  to bytecode a fraction of the source size, with a tiny `main.py` shim to
+  import it. Not done — V1.6 shrinks the file anyway, and one mechanism is
+  better than two.
 
 ### Rule of thumb
 

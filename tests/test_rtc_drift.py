@@ -151,3 +151,41 @@ class TestLeastSquaresFit:
 
     def test_samples_all_at_one_instant_return_none(self):
         assert rtc_drift.drift_ppm_fit([(5.0, 0.0), (5.0, 1.0)]) is None
+
+
+class TestScatterCheck:
+    """The honesty check. A long elapsed time alone was enough for the tool
+    to call a figure "meaningful" — which it did on 2026-08-23 over samples
+    whose two segments disagreed by 17.5 ppm. Elapsed time says the signal
+    COULD be big enough; only scatter says the data actually fits a line.
+    """
+
+    def test_a_clean_line_has_no_scatter(self):
+        per_sec = 1.0 / 86400
+        samples = [(i * 3600.0, i * 3600.0 * per_sec) for i in range(6)]
+        assert rtc_drift.fit_rms_residual(samples) == pytest.approx(0.0, abs=1e-9)
+
+    def test_a_moving_reference_shows_up_as_scatter(self):
+        # Drift-free chip, host stepping +/-50ms between samples.
+        steps = [0.0, 0.05, -0.05, 0.05, -0.05, 0.0]
+        samples = [(i * 3600.0, steps[i]) for i in range(6)]
+        rms = rtc_drift.fit_rms_residual(samples)
+        assert rms > 0.03, "a 50ms reference step must be visible as scatter"
+
+    def test_scatter_is_independent_of_the_slope(self):
+        """Real drift must NOT register as scatter — otherwise the check
+        would fire on exactly the chips it's meant to measure."""
+        per_sec = 20.0 / 1e6  # a wildly out-of-spec 20 ppm, but constant
+        samples = [(i * 3600.0, i * 3600.0 * per_sec) for i in range(6)]
+        assert rtc_drift.fit_rms_residual(samples) == pytest.approx(0.0, abs=1e-9)
+
+    def test_the_real_2026_08_23_data_is_flagged(self):
+        """The observed samples: two segments at +11.94 and -5.54 ppm. No
+        TCXO does that, and the tool must not report a slope as if it had."""
+        samples = [(0.0, -1.6644), (8154.9, -1.567), (47275.1, -1.7836)]
+        rms = rtc_drift.fit_rms_residual(samples)
+        assert rms * 1000 > 5 * 4.0, "must exceed 5x the ~4ms jitter"
+
+    def test_fit_line_returns_none_when_undefined(self):
+        assert rtc_drift.fit_line([(1.0, 0.0)]) is None
+        assert rtc_drift.fit_line([(5.0, 0.0), (5.0, 1.0)]) is None

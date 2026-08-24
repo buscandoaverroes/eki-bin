@@ -1,7 +1,6 @@
 """Animation primitives — pure wave/colour math. This file would have caught the
 inverted `tri01` (and the negative `pulse` it caused)."""
 
-import math
 
 
 def test_phase_sawtooth_wraps(load_main):

@@ -10,3 +10,6 @@ mpremote==1.28.0
 pyyaml>=6.0
 pytest>=7  # host-side logic tests (make test); device fakes live in tests/conftest.py
 esptool>=5.3
+# Lint: catches used-but-never-imported names, the bug class the
+# V1.6 split surfaced. See ruff.toml for why the selection is narrow.
+ruff

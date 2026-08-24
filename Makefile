@@ -4,6 +4,8 @@
 #   make flash-micropython — flash MicroPython to any supported board.
 #                             Optionally BOARD=pico2w|esp32c3|xiao-rp2350;
 #                             omit it for an interactive picker.
+#                             FIRMWARE=<path> pins a specific .uf2;
+#                             otherwise the NEWEST build in firmware/ wins.
 #                             WIPE=1 also erases the filesystem (RP2350 only —
 #                             the ESP32 path always does). Reach for it when the
 #                             board is unreachable over serial: a plain reflash
@@ -13,9 +15,11 @@
 #   make led-test          — run the WS2812B bring-up sketch
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make i2c-scan          — find I2C devices without knowing pins/bus first
+#   make doctor            — is the board healthy? flash/fs/transport probe
 #   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
+#   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
 #   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
 #                             handling_test.py data files on the device's flash
@@ -64,26 +68,36 @@ setup: requirements.txt
 # then ran picotool with an empty path).
 .PHONY: flash-micropython
 flash-micropython:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh $(BOARD)
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh $(BOARD)
 
 # Kept so existing docs, scripts and muscle memory don't break. The old
 # names were also inconsistent with each other — one named for the firmware
 # (flash-micropython), one for the board (flash-esp32-c3).
 .PHONY: flash-esp32-c3
 flash-esp32-c3:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh esp32c3
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh esp32c3
 
 .PHONY: flash-xiao2350
 flash-xiao2350:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh xiao-rp2350
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh xiao-rp2350
 
 # ── Python files ──────────────────────────────────────────────────
 
 # ── Tests ─────────────────────────────────────────────────────────
 # Host-side logic tests. Run automatically before `upload`.
 .PHONY: test
-test:
+test: lint
 	$(PYTHON) -m pytest -q
+
+# Narrow by design — see ruff.toml. Skips (loudly) rather than failing when
+# ruff isn't installed, so an existing .venv keeps working until `make setup`.
+.PHONY: lint
+lint:
+	@if [ -x $(VENV)/bin/ruff ]; then \
+		$(VENV)/bin/ruff check micropython/ scripts/ tests/ ; \
+	else \
+		echo "… ruff not installed — run 'make setup' to enable lint checks"; \
+	fi
 
 .PHONY: upload
 upload: test _check-mpremote
@@ -92,7 +106,7 @@ upload: test _check-mpremote
 	@# Copy order, retries and size verification all live in the script.
 	@# An UNVERIFIED cp is the dangerous case: a truncated write corrupted
 	@# the filesystem and bricked a board for a morning (insights.md §13).
-	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) \
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) WIFI=$(WIFI) \
 		bash scripts/upload.sh
 
 .PHONY: run
@@ -169,6 +183,33 @@ set-time: _check-mpremote
 	$(MPREMOTE) rtc --set
 	@$(MPREMOTE) rtc
 	@echo "✓ Device RTC set from host clock — re-run after any power cycle"
+
+# Is this board healthy enough to trust? Probes flash, filesystem and the
+# serial transport with disposable data, BEFORE real firmware goes on.
+# Crucially it separates a LOCAL write (device writes its own file) from a
+# TRANSFER (host sends one) — if local passes and transfer fails, the flash
+# is fine and the transport is at fault. That split was impossible all
+# through the 2026-08-24 corruptions, where every failure was seen through
+# a full upload with both in play. See docs/insights.md §13.
+.PHONY: doctor
+doctor: _check-mpremote
+	@MPREMOTE=$(MPREMOTE) $(PYTHON) scripts/board_check.py
+
+# Run the firmware STRAIGHT FROM THE HOST — zero flash writes.
+# `mpremote mount` serves micropython/ over the serial link as the device's
+# filesystem, so main.py and every module are read from your working copy.
+# Edit, Ctrl-C, re-run: no upload, no flash erase cycle, and therefore none
+# of the corruption risk that comes with writing (docs/insights.md §13).
+#
+# ⚠ The unit CANNOT run standalone this way — unplug the cable and there is
+# nothing on the board. Use `make upload` for a real unit. Reads are also
+# slower, since every import crosses the serial link.
+.PHONY: dev
+dev: _check-mpremote
+	@test -f schedules/$(STATION).json \
+		|| (echo "✗ schedules/$(STATION).json missing — run: make schedule" && exit 1)
+	@cp schedules/$(STATION).json $(SRC_DIR)/schedule.json
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) bash scripts/dev.sh
 
 .PHONY: repl
 repl: _check-mpremote
