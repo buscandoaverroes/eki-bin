@@ -7,6 +7,8 @@ would produce numbers that look entirely plausible while being wrong, which
 is exactly the failure a host test can catch and a bench session can't.
 """
 
+import struct
+
 import importlib.util
 from datetime import datetime
 from pathlib import Path
@@ -189,3 +191,51 @@ class TestScatterCheck:
     def test_fit_line_returns_none_when_undefined(self):
         assert rtc_drift.fit_line([(1.0, 0.0)]) is None
         assert rtc_drift.fit_line([(5.0, 0.0), (5.0, 1.0)]) is None
+
+
+class TestNtpOffset:
+    """The NTP offset maths, tested against synthetic replies.
+
+    Worth pinning because a sign error here would DOUBLE the error this is
+    meant to remove, silently — the numbers would still look plausible. The
+    socket work is separated out so this needs no network.
+    """
+
+    @staticmethod
+    def _reply(server_recv, server_send):
+        """A 48-byte NTP reply carrying the two server timestamps."""
+        def stamp(unix_seconds):
+            ntp = unix_seconds + 2208988800
+            return struct.pack("!II", int(ntp), int((ntp % 1) * 2 ** 32))
+        return b"\x00" * 32 + stamp(server_recv) + stamp(server_send)
+
+    def test_a_perfectly_synced_host_reads_zero(self):
+        # Host sends at 1000, server sees 1000.05 both ways, host gets it at
+        # 1000.1 — symmetric 100ms round trip, no clock error.
+        data = self._reply(1000.05, 1000.05)
+        off = rtc_drift.ntp_offset_from_reply(data, t1=1000.0, t4=1000.1)
+        assert off == pytest.approx(0.0, abs=1e-3)
+
+    def test_a_host_running_SLOW_gets_a_POSITIVE_offset(self):
+        """Sign check. A host 5s behind must be told to ADD 5s."""
+        data = self._reply(1005.05, 1005.05)
+        off = rtc_drift.ntp_offset_from_reply(data, t1=1000.0, t4=1000.1)
+        assert off == pytest.approx(5.0, abs=1e-2)
+
+    def test_a_host_running_FAST_gets_a_NEGATIVE_offset(self):
+        data = self._reply(995.05, 995.05)
+        off = rtc_drift.ntp_offset_from_reply(data, t1=1000.0, t4=1000.1)
+        assert off == pytest.approx(-5.0, abs=1e-2)
+
+    def test_round_trip_latency_cancels(self):
+        """The whole point of the four-timestamp form: a slow link must not
+        masquerade as clock error."""
+        fast = rtc_drift.ntp_offset_from_reply(
+            self._reply(1000.005, 1000.005), t1=1000.0, t4=1000.01)
+        slow = rtc_drift.ntp_offset_from_reply(
+            self._reply(1000.25, 1000.25), t1=1000.0, t4=1000.5)
+        assert fast == pytest.approx(slow, abs=1e-2)
+
+    def test_a_short_reply_is_rejected(self):
+        with pytest.raises(OSError):
+            rtc_drift.ntp_offset_from_reply(b"\x00" * 20, t1=0.0, t4=0.1)
