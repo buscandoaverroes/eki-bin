@@ -40,35 +40,41 @@ ATTEMPTS="${ATTEMPTS:-3}"
 device_digest() {
     # CONTENT hash, not just size. Size alone cannot detect a transfer that
     # corrupts bytes without changing length — and on 2026-08-24 a diag.py
-    # that verified at the right size still failed to compile on the device.
+    # that verified at the right size read back as littlefs's own superblock
+    # (docs/insights.md §13).
     #
-    # sha256 where the port has it (C-speed); otherwise a chunked byte sum,
+    # sha256 where the port has it (C speed); otherwise a chunked byte sum,
     # which is weaker but uses only builtins and stays O(n) at C speed via
-    # sum(). Prefixed with the length either way, so truncation is always
-    # caught even by the fallback.
+    # sum(). Prefixed with the length either way, so truncation is caught
+    # even by the fallback. Prints "missing" when the file is absent — with
+    # no exception and no SystemExit, so the device is left in a clean state
+    # for the copy that follows.
     "$MPREMOTE" exec "import os
-try:
-    n = os.stat('$1')[6]
-except OSError:
-    print('missing'); raise SystemExit
-try:
-    import hashlib
-    h = hashlib.sha256()
-    with open('$1','rb') as f:
-        while True:
-            b = f.read(1024)
-            if not b: break
-            h.update(b)
-    import binascii
-    print('%d:sha256:%s' % (n, binascii.hexlify(h.digest()).decode()))
-except (ImportError, AttributeError):
-    t = 0
-    with open('$1','rb') as f:
-        while True:
-            b = f.read(1024)
-            if not b: break
-            t = (t + sum(b)) & 0xFFFFFFFF
-    print('%d:sum:%d' % (n, t))" 2>/dev/null | tr -d ' \r\n'
+def _digest(path):
+    try:
+        n = os.stat(path)[6]
+    except OSError:
+        return 'missing'
+    try:
+        import binascii, hashlib
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            while True:
+                b = f.read(1024)
+                if not b:
+                    break
+                h.update(b)
+        return '%d:sha256:%s' % (n, binascii.hexlify(h.digest()).decode())
+    except (ImportError, AttributeError):
+        t = 0
+        with open(path, 'rb') as f:
+            while True:
+                b = f.read(1024)
+                if not b:
+                    break
+                t = (t + sum(b)) & 0xFFFFFFFF
+        return '%d:sum:%d' % (n, t)
+print(_digest('$1'))" 2>/dev/null | tr -d ' \r\n'
 }
 
 host_digest() {
@@ -130,7 +136,14 @@ cp_verified() {
         #    erase/garbage-collect blocks to overwrite. Freeing them first
         #    may avoid a stall long enough to break mpremote's raw paste.
         #    NOT confirmed — see the note in insights.md §13.
-        "$MPREMOTE" rm ":$dst" > /dev/null 2>&1 || true
+        # Only remove a file that actually EXISTS. On a freshly wiped
+        # board every rm fails, which is a wasted round trip immediately
+        # before the copy — and the first copy after a wipe is exactly
+        # where uploads have been dying. $_got is left by digest_matches
+        # above and reads "missing" when there is nothing to remove.
+        if [ "$_got" != "missing" ]; then
+            "$MPREMOTE" rm ":$dst" > /dev/null 2>&1 || true
+        fi
         if "$MPREMOTE" cp "$src" ":$dst" > /dev/null 2>&1; then
             got=$(device_digest "$dst")
             case "$got" in

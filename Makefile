@@ -17,6 +17,7 @@
 #   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
+#   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
 #   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
 #                             handling_test.py data files on the device's flash
@@ -191,6 +192,23 @@ set-time: _check-mpremote
 .PHONY: doctor
 doctor: _check-mpremote
 	@MPREMOTE=$(MPREMOTE) $(PYTHON) scripts/board_check.py
+
+# Run the firmware STRAIGHT FROM THE HOST — zero flash writes.
+# `mpremote mount` serves micropython/ over the serial link as the device's
+# filesystem, so main.py and every module are read from your working copy.
+# Edit, Ctrl-C, re-run: no upload, no flash erase cycle, and therefore none
+# of the corruption risk that comes with writing (docs/insights.md §13).
+#
+# ⚠ The unit CANNOT run standalone this way — unplug the cable and there is
+# nothing on the board. Use `make upload` for a real unit. Reads are also
+# slower, since every import crosses the serial link.
+.PHONY: dev
+dev: _check-mpremote
+	@test -f schedules/$(STATION).json \
+		|| (echo "✗ schedules/$(STATION).json missing — run: make schedule" && exit 1)
+	@cp schedules/$(STATION).json $(SRC_DIR)/schedule.json
+	@echo "→ Mounting $(SRC_DIR)/ as the device filesystem (nothing is written to flash)"
+	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/main.py
 
 .PHONY: repl
 repl: _check-mpremote
