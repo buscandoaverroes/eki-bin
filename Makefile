@@ -157,6 +157,16 @@ i2c-scan: _check-mpremote
 low-pwm-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/low_pwm_test.py
 
+# Colour bring-up: HOW MANY LINES CAN THE GLASS SUPPORT? Shows candidate line
+# colours side by side to judge hue separation THROUGH A VESSEL. Unlike
+# low-pwm-test (a property of the LED, answerable on a bench), this one needs
+# the actual glass — diffusion and tint change what is distinguishable
+# without changing what the chip emits. Edit MODE/COUNT/BRIGHTNESS at the top
+# of the file. docs/insights.md §12.
+.PHONY: hue-test
+hue-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/hue_test.py
+
 # Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
 .PHONY: imu-test
 imu-test: _check-mpremote
