@@ -1033,16 +1033,24 @@ different tool with its own transfer implementation over the same USB CDC —
 wrote clock, config, contracts, diag, gestures, leds, main and net, then
 hung on the ninth file.
 
-| | writes | outcome |
-|---|---|---|
-| `make doctor` | 6 | ✓ all pass |
-| Thonny | 9th | ✗ hangs |
-| `make upload` | 13 | ✗ fails partway |
+| | board | tool | outcome |
+|---|---|---|---|
+| `make doctor` | original | mpremote | ✓ 6 writes, all pass |
+| Thonny | original | Thonny | ✗ hung on the 9th (~145 KB in) |
+| `make upload` | **brand new, out of the box** | mpremote | ✗ died on the 6th (~87 KB in) |
 
-That is the same threshold from two independent tools, so it is **not
-mpremote**. Combined with everything already ruled out — two cables, two USB
-ports, on and off the breadboard, file size, file content — what is left is
-**the count of consecutive flash writes in one session**.
+**A second, unused board fails the same way**, which settles it: the first
+board is not damaged, and today's three corruptions were symptom rather than
+cause. Two boards, two host tools, two cables, two USB ports, on and off the
+breadboard — the only surviving variable is the platform itself
+(MicroPython 1.28.0 on RP2350, its littlefs, and USB CDC).
+
+Note it is not a fixed file count OR a fixed byte count — 6 files/87 KB on
+one board, 9 files/145 KB on the other. Both land in the same band, which is
+what a block-reclamation pause would look like rather than a hard limit.
+
+So it is **not mpremote**, and **not the board**. What is left is the
+accumulation of flash writes within one session.
 
 The leading explanation is littlefs garbage collection: after enough writes
 it must compact and erase blocks, and on RP2 a long flash operation is

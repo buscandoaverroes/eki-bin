@@ -207,8 +207,7 @@ dev: _check-mpremote
 	@test -f schedules/$(STATION).json \
 		|| (echo "✗ schedules/$(STATION).json missing — run: make schedule" && exit 1)
 	@cp schedules/$(STATION).json $(SRC_DIR)/schedule.json
-	@echo "→ Mounting $(SRC_DIR)/ as the device filesystem (nothing is written to flash)"
-	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/main.py
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) bash scripts/dev.sh
 
 .PHONY: repl
 repl: _check-mpremote
