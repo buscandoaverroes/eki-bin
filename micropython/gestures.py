@@ -53,6 +53,13 @@ _IMU_OUTX_L_A = 0x28
 _IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
 
 
+# Lazy singletons — _get_imu() declares these `global` and READS them
+# before assigning, so they must exist at module level. They were left
+# behind in main.py by the V1.6 split; see tests/test_module_wiring.py.
+_imu_i2c = None  # lazy singleton — see _get_imu()
+_imu_addr = None
+
+
 def _imu_find_device(i2c):
     """Scan the bus, confirm WHO_AM_I. Returns the confirmed 7-bit address,
     or None — mirrors imu_test.py's _find_device exactly."""

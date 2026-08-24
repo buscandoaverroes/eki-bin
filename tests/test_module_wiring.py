@@ -69,3 +69,53 @@ def test_private_names_resolve(module):
         "underscore names — add an explicit `from <module> import ...`."
         % (module, ", ".join(sorted(unresolved)))
     )
+
+
+@pytest.mark.parametrize("module", _firmware_modules())
+def test_declared_globals_exist_at_module_level(module):
+    """A `global X` whose X is never assigned at module level.
+
+    This is a BLIND SPOT in every other check we have, and it shipped a
+    NameError to hardware on 2026-08-24:
+
+        File "gestures.py", line 74, in _get_imu
+        NameError: name '_imu_i2c' isn't defined
+
+    `_get_imu()` is a lazy singleton — it declares `global _imu_i2c` and then
+    READS it (`if _imu_i2c is None:`) before ever assigning. The initialisers
+    `_imu_i2c = None` were left behind in main.py by the V1.6 split.
+
+    Why nothing caught it: a `global X` declaration makes X look defined to
+    both ruff's F821 and to test_private_names_resolve above — and in general
+    that is correct, since a global CAN be created by first assignment inside
+    a function. It is only a bug when the function reads before writing, which
+    is exactly the lazy-singleton pattern this firmware uses for every piece
+    of hardware it touches (_imu_i2c, _rtc_i2c, _rtc_cache).
+
+    Nor could the suite reach it: _get_imu() is I/O, so no host test calls it.
+
+    Treating any unassigned `global` as an error is stricter than Python
+    requires, but it matches how this codebase actually uses them.
+    """
+    tree = ast.parse(open(os.path.join(MICROPYTHON_DIR, module + ".py")).read())
+
+    assigned = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            assigned.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            assigned.add(node.target.id)
+
+    declared = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            declared.update(node.names)
+
+    missing = declared - assigned
+    assert not missing, (
+        "%s.py declares `global %s` but never assigns %s at module level. "
+        "A lazy singleton that reads before writing needs an initialiser "
+        "(e.g. `%s = None`) in this module — `global` alone does not create it."
+        % (module, ", ".join(sorted(missing)),
+           "them" if len(missing) > 1 else "it", sorted(missing)[0])
+    )

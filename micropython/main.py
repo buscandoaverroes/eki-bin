@@ -166,8 +166,6 @@ def run_startup_sequence():
 # import time like `np` — this is opt-in hardware, unlike the LED strip
 # which every deployment has.
 # ─────────────────────────────────────────────────────────────
-_imu_i2c = None  # lazy singleton — see _get_imu()
-_imu_addr = None
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────
