@@ -1018,6 +1018,52 @@ writes are the operation least tolerant of a power glitch. If it recurs
 after a wipe, treat it as evidence for soldering the unit rather than as
 bad luck.
 
+### The variable is the NUMBER OF WRITES, not size or tool (2026-08-24)
+
+Narrowed by two experiments that finally isolated it.
+
+**`make doctor` on a freshly wiped board passes everything** — 4KB, 24KB and
+40KB written locally by the device, then the same three transferred from the
+host via `mpremote cp`, all content-verified. Six write operations, no
+failures. So flash, littlefs and the serial transport are each fine in
+isolation, at sizes larger than any real module.
+
+**Thonny hangs too.** Uploading the firmware by hand through Thonny — a
+different tool with its own transfer implementation over the same USB CDC —
+wrote clock, config, contracts, diag, gestures, leds, main and net, then
+hung on the ninth file.
+
+| | writes | outcome |
+|---|---|---|
+| `make doctor` | 6 | ✓ all pass |
+| Thonny | 9th | ✗ hangs |
+| `make upload` | 13 | ✗ fails partway |
+
+That is the same threshold from two independent tools, so it is **not
+mpremote**. Combined with everything already ruled out — two cables, two USB
+ports, on and off the breadboard, file size, file content — what is left is
+**the count of consecutive flash writes in one session**.
+
+The leading explanation is littlefs garbage collection: after enough writes
+it must compact and erase blocks, and on RP2 a long flash operation is
+exactly the thing that starves USB CDC. Not confirmed.
+
+**This reframes the V1.6 split's cost.** Going from 3 files to 13 did not
+make transfers *slower*, it pushed them past a threshold that had always
+been there — which is why occasional failures became reliable ones on the
+same day the module count quadrupled.
+
+Two things follow, one of which is a genuine fix:
+
+- **`make dev` avoids the problem entirely.** `mpremote mount` serves
+  `micropython/` over the serial link as the device filesystem, so the
+  firmware runs from the working copy with **zero flash writes**. For
+  iteration this is strictly better; a real standalone unit still needs
+  `make upload`.
+- **`make upload` now skips files whose content already matches**, so a
+  typical run writes one or two modules rather than thirteen — staying
+  under the threshold by doing less work.
+
 ### Upload failures: free space ruled out, overwrite is the suspect
 
 The intermittent `make upload` failures outlived every physical fix — new
