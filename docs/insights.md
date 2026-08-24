@@ -1018,6 +1018,50 @@ writes are the operation least tolerant of a power glitch. If it recurs
 after a wipe, treat it as evidence for soldering the unit rather than as
 bad luck.
 
+### ROOT CAUSE FOUND: the filesystem is bigger than the flash (2026-08-24)
+
+**`make doctor` on a bare XIAO RP2350 reports a 3072 KB filesystem. The chip
+has 2048 KB of flash, ~320 KB of which is the MicroPython image.** The
+filesystem is 1.78× larger than the space that physically exists.
+
+This is a **known, filed, fixed defect**, not a quirk of one unit:
+
+- **raspberrypi/pico-sdk#2834** — the XIAO RP2350 board header declares
+  `PICO_FLASH_SIZE_BYTES` as 4MB; the board ships a 2MB (16-Mbit) part.
+  Confirmed against `picotool info -a` (`flash size: 2048K`), the P25Q16H
+  datasheet, and Seeed's own documentation. The report notes it propagates
+  to anything relying on that constant — MicroPython included.
+- **micropython/micropython#18839** — the downstream issue, reproducing the
+  identical numbers: 768 blocks, 3072 KB total, 3064 KB free.
+- **Fixed** in pico-sdk 2.3.0, plus a MicroPython follow-up trimming the
+  filesystem to 1408k to match SEEED_XIAO_RP2040. Both land **after** the
+  v1.28.0 (2026-04-06) build this project was running.
+
+That a brand-new second board failed identically is exactly what a wrong
+compile-time constant predicts: it is wrong for every unit of this board.
+
+**Why this likely explains the corruption, not just the wrong number.** The
+failures land at 87–145 KB, far below any boundary, so "ran off the end of
+the chip" does not fit on its own. The stronger hypothesis is the
+filesystem's *start offset*: partition layout typically computes it as
+`flash_size − fs_size`, so a phantom 4MB figure can map the filesystem at
+the wrong physical address entirely — corrupting from early writes, at
+unpredictable points. That matches the most damning symptom exactly: a
+file's data pointer resolving to littlefs's own superblock is a **block
+address miscalculation**, not the half-written-page damage a power glitch
+produces.
+
+**Not yet confirmed.** The test is to flash a build with the corrected flash
+size and see whether corruption disappears independent of write count.
+`make doctor` now fails the board outright when the filesystem exceeds the
+physical flash, so this can never again be mistaken for bad luck.
+
+Also fixed as a direct consequence: `scripts/flash_firmware.sh` used to glob
+the firmware directory and take the **first** match, which sorts to the
+OLDEST build — it would have silently reflashed v1.28.0 over a preview
+installed specifically to test this fix. It now takes the newest, says so
+when there is a choice, and accepts `FIRMWARE=<path>` to pin one.
+
 ### The variable is the NUMBER OF WRITES, not size or tool (2026-08-24)
 
 Narrowed by two experiments that finally isolated it.

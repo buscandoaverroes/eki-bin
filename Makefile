@@ -4,6 +4,8 @@
 #   make flash-micropython — flash MicroPython to any supported board.
 #                             Optionally BOARD=pico2w|esp32c3|xiao-rp2350;
 #                             omit it for an interactive picker.
+#                             FIRMWARE=<path> pins a specific .uf2;
+#                             otherwise the NEWEST build in firmware/ wins.
 #                             WIPE=1 also erases the filesystem (RP2350 only —
 #                             the ESP32 path always does). Reach for it when the
 #                             board is unreachable over serial: a plain reflash
@@ -66,18 +68,18 @@ setup: requirements.txt
 # then ran picotool with an empty path).
 .PHONY: flash-micropython
 flash-micropython:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh $(BOARD)
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh $(BOARD)
 
 # Kept so existing docs, scripts and muscle memory don't break. The old
 # names were also inconsistent with each other — one named for the firmware
 # (flash-micropython), one for the board (flash-esp32-c3).
 .PHONY: flash-esp32-c3
 flash-esp32-c3:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh esp32c3
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh esp32c3
 
 .PHONY: flash-xiao2350
 flash-xiao2350:
-	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) bash scripts/flash_firmware.sh xiao-rp2350
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh xiao-rp2350
 
 # ── Python files ──────────────────────────────────────────────────
 

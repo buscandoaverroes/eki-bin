@@ -133,6 +133,22 @@ def main():
         total, free, nfiles = (int(x) for x in out.split("\n")[:3])
         print("  ✓ filesystem mounts — %d KB free of %d KB, %d files"
               % (free // 1024, total // 1024, nfiles))
+        # A filesystem larger than the physical flash is a KNOWN firmware
+        # defect, not a curiosity: the XIAO RP2350 board header declared
+        # PICO_FLASH_SIZE_BYTES as 4MB against a 2MB part
+        # (raspberrypi/pico-sdk#2834), which propagated into MicroPython's
+        # partition sizing (micropython/micropython#18839). Fixed in
+        # pico-sdk 2.3.0 plus a follow-up that trims the filesystem to
+        # 1408k — after the v1.28.0 (2026-04-06) build. A board reporting
+        # 3072 KB is running firmware that predates the fix.
+        if total > 2048 * 1024:
+            print("    ⚠ %d KB is LARGER THAN THE 2MB FLASH ON THIS BOARD."
+                  % (total // 1024))
+            print("      Known defect — pico-sdk#2834 / micropython#18839.")
+            print("      Fixed after v1.28.0; a corrected build reports ~1408 KB.")
+            print("      Flash a newer firmware before trusting this board:")
+            print("        make flash-micropython BOARD=xiao-rp2350 WIPE=1")
+            failures.append("filesystem larger than physical flash")
     except ValueError:
         print("  ✗ could not read filesystem stats: %r" % out)
         failures.append("filesystem stats")

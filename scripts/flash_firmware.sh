@@ -101,13 +101,34 @@ echo "→ Board: $(board_label "$BOARD")" >&2
 # Unquoted on purpose: this is where the glob expands. Guard against bash's
 # no-match behaviour (leaves the literal pattern) by testing the result is a
 # real file — the same [[ -e ]] guard detect_port.sh uses for its globs.
-FIRMWARE=""
+# FIRMWARE=<path> overrides everything — for testing a specific build:
+#   FIRMWARE=firmware/SEEED_XIAO_RP2350-...-v1.29.0-preview.uf2 \
+#     make flash-micropython BOARD=xiao-rp2350 WIPE=1
+#
+# Otherwise: pick the NEWEST match, not the first. MicroPython filenames
+# embed the build date as YYYYMMDD, so a plain lexical sort orders them
+# correctly. Taking the first match silently preferred the OLDEST build,
+# which would have quietly reflashed v1.28.0 over a v1.29.0 preview
+# installed to test a firmware bug fix — see docs/insights.md §13.
+FIRMWARE="${FIRMWARE:-}"
+if [ -n "$FIRMWARE" ]; then
+    [ -e "$FIRMWARE" ] || { echo "✗ FIRMWARE=$FIRMWARE not found" >&2; exit 1; }
+    echo "→ FIRMWARE override in effect" >&2
+else
+    for f in $(board_glob "$BOARD"); do
+        [ -e "$f" ] && FIRMWARE="$f"      # no break: keep the last = newest
+    done
+fi
+
+# Say out loud when there was a choice, so a stale build can't be flashed
+# by accident without it appearing in the log.
+_matches=0
 for f in $(board_glob "$BOARD"); do
-    if [ -e "$f" ]; then
-        FIRMWARE="$f"
-        break
-    fi
+    [ -e "$f" ] && _matches=$((_matches + 1))
 done
+if [ "$_matches" -gt 1 ] && [ -z "${FIRMWARE_OVERRIDE:-}" ]; then
+    echo "→ $_matches builds present in $FIRMWARE_DIR/ — using the newest" >&2
+fi
 
 if [ -z "$FIRMWARE" ]; then
     echo "✗ No firmware for '$BOARD' in $FIRMWARE_DIR/" >&2
