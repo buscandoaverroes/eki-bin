@@ -589,7 +589,17 @@ def main():
             f"  N trains: {N_TRAINS} "
             f"LEDs: {NUM_LEDS} on GPIO{LED_PIN}"
         )
-        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop")
+        # Say when gestures are OFF. A wired IMU that is simply never read
+        # is indistinguishable from a broken one, and the only previous
+        # signal was the ABSENCE of the "Lines: … (tap to cycle)" banner —
+        # which you cannot notice if you have never seen it present. Cost
+        # three rounds of hardware debugging on 2026-08-24; the sensor was
+        # fine the whole time and GESTURE_ENABLED was simply unset.
+        if not WAKE_INTERACTION_ENABLED:
+            print("  Gestures: OFF — set GESTURE_ENABLED = True in config.py "
+                  "to enable taps")
+        print()
 
         _mem_checkpoint("entering loop")
         _mem_report()

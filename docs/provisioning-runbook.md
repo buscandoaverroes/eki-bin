@@ -193,16 +193,28 @@ Set **`GESTURE_ENABLED = True`** in `config.py`. A tap then wakes the display
 and a further tap cycles which line is shown
 (`docs/contracts/gesture-envelope.md` §11).
 
-**The tell that it is live:** the boot banner prints
+**The boot banner tells you which way it went.** Off:
+
+```
+Gestures: OFF — set GESTURE_ENABLED = True in config.py to enable taps
+```
+
+On, once the schedule loads:
 
 ```
 Lines: <line>, <line>, …  (tap to cycle)
 ```
 
-That line comes only from `_run_interactive_loop`. If it is absent you are in
-`_run_classic_loop`, which never reads the IMU at all — so taps cannot
-register no matter how healthy the sensor is. Check `GESTURE_ENABLED` before
-suspecting wiring.
+⚠ **`GESTURE_ENABLED` is COMMENTED OUT in `config.example.py`** (the file's
+convention: commented lines show defaults). A `config.py` freshly copied
+from it therefore has gestures **off**, and a wired IMU is simply never
+read — indistinguishable from a broken one. That cost three rounds of
+hardware debugging; `imu-test` passed cleanly throughout. Check the banner
+before suspecting wiring.
+
+Note `make screen` attaches to a loop already running, so it shows
+mid-loop output, not the banner. Press **Ctrl-D** to soft-reset and watch
+from the top.
 
 | Gate | Runs | What it is |
 |---|---|---|
