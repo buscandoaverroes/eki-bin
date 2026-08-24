@@ -27,6 +27,12 @@
 # necessary but proves nothing about the actual reason it was bought.
 #
 # ══ WORKFLOW ═════════════════════════════════════════════════════════════
+#   0. ⚠ CHECK YOUR HOST CLOCK FIRST. Seeding copies its error straight
+#      into the chip: host → `mpremote rtc --set` → board RTC → here →
+#      DS3231, with nothing checking against real time along the way. A Mac
+#      found +4.14s off true time on 2026-08-24 left the DS3231 ~2s behind
+#      permanently. `make rtc-drift` reports the host's NTP offset on its
+#      first line. Seconds rather than milliseconds = fix the Mac first.
 #   1. First-ever run: leave SYNC_DS3231_FROM_BOARD_RTC = True (below).
 #      `make set-time` first (sets the BOARD's own volatile RTC from this
 #      Mac's clock — the existing mechanism, docs/provisioning-runbook.md),

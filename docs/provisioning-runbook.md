@@ -131,6 +131,20 @@ Ctrl-C, re-run. The unit cannot run standalone this way, and startup is slow
 `make upload` for a real unit — but for tuning colours, gestures or
 thresholds this is the right loop.
 
+> ⚠ **Seeding a clock copies your Mac's error into the unit.** The chain is
+> `host clock → mpremote rtc --set → board RTC → rtc_test.py SYNC → DS3231`,
+> and nothing in it checks the host against real time. A Mac measured at
+> **+4.14 s off true time** on 2026-08-24 produced a DS3231 sitting ~2 s
+> behind — a permanent floor no amount of RTC precision recovers.
+>
+> Harmless for a minute-granularity display, but check before seeding a unit
+> you care about:
+> ```bash
+> make rtc-drift        # first line reports the host's offset from NTP
+> ```
+> If it is seconds rather than milliseconds, fix the Mac's time sync first
+> (System Settings → General → Date & Time → Set automatically).
+
 ## 5. Bring-up tests — hardware only, no app logic
 
 ```bash
