@@ -17,8 +17,11 @@
 # Suspects are USB-C connector strain (the board is held rigid in a
 # breadboard while the cable hangs off it) and breadboard power contacts.
 #
-# So: retry, and VERIFY BY SIZE after every copy. An unverified success is
-# the one outcome that can quietly brick the board.
+# So: retry, and VERIFY THE CONTENT after every copy — by hash, not by
+# size. A same-length corruption passes a size check and then fails to
+# compile on the device, which reads as a code bug rather than a bad
+# transfer. An unverified success is the one outcome that can quietly
+# brick the board.
 #
 # ══ ORDER MATTERS ═══════════════════════════════════════════════════════
 # main.py goes LAST. It's the boot script — once on the device it auto-runs
@@ -34,19 +37,62 @@ set -e
 MPREMOTE="${MPREMOTE:-.venv/bin/mpremote}"
 ATTEMPTS="${ATTEMPTS:-3}"
 
-device_size() {
-    # os.stat()[6] is st_size. Missing file -> empty, which never matches.
+device_digest() {
+    # CONTENT hash, not just size. Size alone cannot detect a transfer that
+    # corrupts bytes without changing length — and on 2026-08-24 a diag.py
+    # that verified at the right size still failed to compile on the device.
+    #
+    # sha256 where the port has it (C-speed); otherwise a chunked byte sum,
+    # which is weaker but uses only builtins and stays O(n) at C speed via
+    # sum(). Prefixed with the length either way, so truncation is always
+    # caught even by the fallback.
     "$MPREMOTE" exec "import os
 try:
-    print(os.stat('$1')[6])
+    n = os.stat('$1')[6]
 except OSError:
-    print('missing')" 2>/dev/null | tr -d ' \r\n'
+    print('missing'); raise SystemExit
+try:
+    import hashlib
+    h = hashlib.sha256()
+    with open('$1','rb') as f:
+        while True:
+            b = f.read(1024)
+            if not b: break
+            h.update(b)
+    import binascii
+    print('%d:sha256:%s' % (n, binascii.hexlify(h.digest()).decode()))
+except (ImportError, AttributeError):
+    t = 0
+    with open('$1','rb') as f:
+        while True:
+            b = f.read(1024)
+            if not b: break
+            t = (t + sum(b)) & 0xFFFFFFFF
+    print('%d:sum:%d' % (n, t))" 2>/dev/null | tr -d ' \r\n'
+}
+
+host_digest() {
+    python3 - "$1" << 'HOSTPY'
+import hashlib, sys
+data = open(sys.argv[1], "rb").read()
+print("%d:sha256:%s" % (len(data), hashlib.sha256(data).hexdigest()))
+HOSTPY
+}
+
+host_digest_sum() {
+    python3 - "$1" << 'HOSTPY'
+import sys
+data = open(sys.argv[1], "rb").read()
+t = 0
+for i in range(0, len(data), 1024):
+    t = (t + sum(data[i:i+1024])) & 0xFFFFFFFF
+print("%d:sum:%d" % (len(data), t))
+HOSTPY
 }
 
 cp_verified() {
     src="$1"
     dst="$2"
-    want=$(wc -c < "$src" | tr -d ' ')
     attempt=1
     while [ "$attempt" -le "$ATTEMPTS" ]; do
         # Remove before writing. Two reasons, one certain and one a
@@ -62,12 +108,19 @@ cp_verified() {
         #    NOT confirmed — see the note in insights.md §13.
         "$MPREMOTE" rm ":$dst" > /dev/null 2>&1 || true
         if "$MPREMOTE" cp "$src" ":$dst" > /dev/null 2>&1; then
-            got=$(device_size "$dst")
+            got=$(device_digest "$dst")
+            case "$got" in
+                *:sha256:*) want=$(host_digest "$src") ;;
+                *:sum:*)    want=$(host_digest_sum "$src") ;;
+                *)          want="(unreadable)" ;;
+            esac
             if [ "$want" = "$got" ]; then
-                echo "  ✓ $dst  ($want bytes verified)"
+                echo "  ✓ $dst  (${want%%:*} bytes, content verified)"
                 return 0
             fi
-            echo "  ⚠ $dst size mismatch — host $want, device $got" >&2
+            echo "  ⚠ $dst CONTENT mismatch" >&2
+            echo "      host   $want" >&2
+            echo "      device $got" >&2
         else
             echo "  ⚠ $dst transfer failed (attempt $attempt/$ATTEMPTS)" >&2
         fi
