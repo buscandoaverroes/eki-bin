@@ -90,9 +90,33 @@ print("%d:sum:%d" % (len(data), t))
 HOSTPY
 }
 
+# True when the device already holds byte-identical content. Read-only —
+# costs no flash write, which is the entire point.
+digest_matches() {
+    _got=$(device_digest "$2")
+    case "$_got" in
+        *:sha256:*) _want=$(host_digest "$1") ;;
+        *:sum:*)    _want=$(host_digest_sum "$1") ;;
+        *)          return 1 ;;
+    esac
+    [ "$_want" = "$_got" ]
+}
+
 cp_verified() {
     src="$1"
     dst="$2"
+
+    # SKIP WHAT IS ALREADY CORRECT. This matters more than it looks: the
+    # V1.6 split took this upload from 3 files to 13, quadrupling the flash
+    # operations per session — and flash writes are the operation least
+    # tolerant of a power glitch. Three littlefs corruptions in one day
+    # followed that increase (docs/insights.md §13). A typical upload
+    # changes one or two modules; rewriting the other eleven is pure risk
+    # for no benefit. Only possible because verification is by CONTENT now.
+    if digest_matches "$src" "$dst"; then
+        echo "  = $dst  (unchanged, not rewritten)"
+        return 0
+    fi
     attempt=1
     while [ "$attempt" -le "$ATTEMPTS" ]; do
         # Remove before writing. Two reasons, one certain and one a
@@ -126,6 +150,8 @@ cp_verified() {
         fi
         attempt=$((attempt + 1))
         [ "$attempt" -le "$ATTEMPTS" ] && sleep 1
+        # Let the device finish any flash housekeeping before we ask again.
+        sleep 0.3
     done
 
     echo "" >&2
@@ -162,6 +188,7 @@ cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
 for _mod in $FIRMWARE_MODULES; do
     cp_verified "$SRC_DIR/$_mod.py" "$_mod.py"
+    sleep 0.2   # brief settle between flash writes — see the header
 done
 cp_verified "$SRC_DIR/main.py"          main.py   # LAST — see header
 
