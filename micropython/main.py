@@ -8,9 +8,6 @@
 # "What's the urgency?" is computed once per tick and is independent of "how do
 # we show it?" — swap visual strategies by changing CONTRACT in config.py.
 
-import gc
-import json
-import math
 import time
 
 # No radio imports here, deliberately. `network`/`ntptime` DO NOT EXIST on
@@ -19,8 +16,6 @@ import time
 # could not rescue it. They now live in net.py, imported LAZILY inside the
 # TIME_SOURCE == "wifi" branch of run_startup_sequence(). A XIAO RP2350
 # never reaches that line. See docs/v1.6-refactor.md and insights.md §13.
-from machine import I2C, Pin
-from neopixel import NeoPixel
 
 # ─────────────────────────────────────────────────────────────
 # Settings — extracted to settings.py (V1.6, docs/v1.6-refactor.md)
