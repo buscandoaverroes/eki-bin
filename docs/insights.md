@@ -958,6 +958,66 @@ ls -la /dev/cu.usbmodem*      # does the node exist at all
 
 Node present + no answer = this bug. Recover with `WIPE=1`.
 
+### A third presentation: the file reads back as the FILESYSTEM (2026-08-24)
+
+The worst one, because every check passes. `diag.py` uploaded, verified at
+the correct 4,011 bytes, and then failed to compile:
+
+```
+File "diag.py", line 1
+SyntaxError: invalid syntax
+```
+
+Line 1 is a comment. Reading the file on the device showed why:
+
+```python
+>>> print(repr(open('diag.py','rb').read()[:90]))
+b'\x03\x00\x00\x00\xf0\x0f\xff\xf7littlefs/\xe0\x00\x10\x01...\x11config.py...'
+```
+
+That is **littlefs's own superblock** — its magic string, then directory
+entries for other files. The inode's size was right; its data pointers were
+aimed at the filesystem's internal structures instead of the file's content.
+
+What makes this the nastiest variant so far:
+
+| | mount | size check | reads back |
+|---|---|---|---|
+| §13 original | ✗ fails, board looks dead | — | — |
+| second presentation | ✗ hangs before USB CDC | — | — |
+| **this one** | **✓ fine** | **✓ correct** | **✗ wrong data** |
+
+Nothing announces a problem. The board boots, the filesystem mounts, the
+upload verifies, and the failure surfaces as a *syntax error in your own
+source* — pointing at a code bug that does not exist.
+
+**Rule: when a reported error cannot be true of the source you wrote, stop
+debugging the source.** A SyntaxError on a line that is a comment — a
+comment byte-identical in style to ones in every module that loaded fine
+moments earlier — is not a language problem. The file being read is not the
+file you wrote.
+
+**This is why upload verification now hashes CONTENT, not size**
+(`scripts/upload.sh`). A size check passes here and actively misdirects: it
+prints `✓ verified` over a file that is entirely wrong. A check that passes
+for the wrong reason is worse than no check.
+
+**Recovery is a wipe, not a re-upload.** Do not trust a filesystem that
+returns its own superblock as file content — rewriting into a damaged
+structure is a coin flip:
+
+```
+make flash-micropython BOARD=xiao-rp2350 WIPE=1
+make upload
+```
+
+⚠ **Three corruption events in one day is not normal**, and they share a
+suspect: this board is on a breadboard, and breadboard contacts are already
+the leading explanation for the intermittent transfer failures below. Flash
+writes are the operation least tolerant of a power glitch. If it recurs
+after a wipe, treat it as evidence for soldering the unit rather than as
+bad luck.
+
 ### Upload failures: free space ruled out, overwrite is the suspect
 
 The intermittent `make upload` failures outlived every physical fix — new
