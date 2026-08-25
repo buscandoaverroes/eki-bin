@@ -888,6 +888,71 @@ which is not today's problem.
 it there, and confirm through the glass — the bottle changes what is
 *visible*, though not what the chip emits.
 
+### Vessel comparison: the glass sets the line count (2026-08-24)
+
+`make hue-test` across three brown bottles, 8-LED stick on jumpers dropped
+in unfastened.
+
+| vessel | `even` | `tokyo` (5 lines) | verdict |
+|---|---|---|---|
+| **thick, opaque brown** | 3 OK; **4 fails** (red≈violet); 5 fails (blue≈green) | keihin_tohoku reads "faint vomit yellow/green"; ginza "looks red" | **2-3 lines** |
+| **mid brown** | 4 OK at `BRIGHTNESS=0.05` | 5 separable; orange/yellow slightly harder than clear | **4-5 lines** |
+| **clear brown** | 5 "clear, super obvious" | 5 "totally clear, easily separable" — still clear at `0.05` | **5+ lines** |
+
+### The mechanism: amber glass is a BLUE-CUT FILTER
+
+Not a general loss of saturation — a specific missing channel. Amber glass
+exists to block short wavelengths, and every failure above is that one fact:
+
+- `keihin_tohoku` `(0,178,229)`, a light **blue**, reads yellow-green: its
+  blue is absorbed, leaving only the green component.
+- Red vs violet merge at 4 hues, because **violet minus blue IS red**.
+- Blue vs green merge at 5, same cause.
+- `ginza` (orange) "looks red" — with blue already at zero, orange can only
+  slide toward red.
+
+The thick bottle does not compress the hue wheel evenly. It **collapses it
+onto the red-green axis and deletes a dimension.**
+
+### ⚠ CORRECTION to this section's earlier claim about brightness
+
+§12 previously said raising in-bottle brightness would fix both the marker
+floor and hue separation — *"the two findings share one fix."* **That is
+wrong, and the data is unambiguous:** `0.15 → 0.30` in the thick bottle gave
+"not much improvement from first run."
+
+It cannot work. Scaling brightness preserves the **ratios** between channels,
+so it can never restore one the glass is removing. The two findings are
+independent:
+
+- **Marker floor** — a property of the LED. Brightness fixes it.
+- **Hue separation** — a property of the glass. Brightness does nothing.
+
+The one compensation still untested is *disproportionate* blue gain, now
+available as `GAIN` in `hue_test.py`. There is headroom: at `BRIGHTNESS=0.30`
+keihin_tohoku's blue reaches only 68/255, so `B×3` gives 206 before clipping.
+
+### The real tension: the most beautiful vessel is the least functional
+
+Field note from the session: *"thick opaque glass provides most refraction
+and most beautiful effect."* It is also the one capped at 2-3 lines.
+
+That is a product decision, not a bug, and the options are:
+
+1. **Thick brown, 2-3 lines.** Keep the look; accept the cap. Fits the
+   project's stated thesis — this is an ambient object, not a departure board.
+2. **Clear/mid brown, 5+ lines.** Trade some of the glow for capacity.
+   `docs/glass-stone-concept.md` §3 already argues clear glass on these
+   grounds.
+3. **Thick brown + a non-colour identity channel.** If hue is capped at 2-3,
+   line identity could ride on *animation* — blink rate, pulse shape, chase
+   direction — which diffusion does not attenuate. Untested, and the most
+   interesting of the three because it makes the glass's limitation
+   irrelevant rather than accepting it.
+
+Note option 3 is only visible because the constraint was measured rather
+than assumed.
+
 Implications for the line palette:
 - **Cap the practical line count at what the glass supports**, not at what
   the data model allows. Three widely-separated hues is plausible; six is not.

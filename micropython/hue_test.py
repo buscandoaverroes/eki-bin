@@ -47,22 +47,45 @@
 #
 # Record what you find in docs/insights.md §12, with the vessel described.
 
-from machine import Pin
-from neopixel import NeoPixel
 import time
 
-DATA_PIN = 1   # ⚠ SET PER BOARD — verify against pinouts/<board>.md FIRST.
+from machine import Pin
+from neopixel import NeoPixel
+
+DATA_PIN = 1  # ⚠ SET PER BOARD — verify against pinouts/<board>.md FIRST.
 #                A wrong pin leaves the strip unaddressed, holding whatever
 #                state it powered up in, at up to ~480mA (insights.md §13).
 NUM_LEDS = 8
 
-MODE = "even"        # "even" | "tokyo" | "pairs"
-COUNT = 3            # how many distinct hues to show (even/tokyo)
-BRIGHTNESS = 0.15    # scales everything; §12 expects the bottle needs more
+MODE = "tokyo"  # "even" | "tokyo" | "pairs"
+COUNT = 5  # how many distinct hues to show (even/tokyo)
+BRIGHTNESS = 0.30  # scales everything; §12 expects the bottle needs more
 HUE_SHIFT_DEG = 0.0  # rotate the whole palette — cheap probe for whether a
 #                      tinted glass can be compensated by pre-rotating hues
-SPREAD = True        # True: repeat hues to fill the strip (bigger patches,
+SPREAD = True  # True: repeat hues to fill the strip (bigger patches,
 #                      easier to judge). False: one LED each, rest dark.
+
+# Per-channel GAIN, applied BEFORE brightness. The glass-compensation probe,
+# and the one thing raising BRIGHTNESS cannot do.
+#
+# Measured 2026-08-24: a thick opaque brown bottle collapses the hue wheel
+# onto the RED-GREEN axis. Amber glass is a blue-cut filter by design — it
+# exists to block short wavelengths — so a light blue (0,178,229) read as
+# "faint vomit yellow/green": its blue absorbed, only green surviving. Red
+# and violet merged for the same reason (violet minus blue IS red).
+#
+# BRIGHTNESS could never fix that: scaling preserves the RATIOS between
+# channels, so it cannot restore one the glass removes. 0.15 -> 0.30 changed
+# nothing in that bottle, exactly as this predicts.
+#
+# GAIN can. Try (1.0, 1.0, 3.0) or higher in a thick brown vessel. Both
+# outcomes are useful:
+#   * blue recovers     -> the vessel is usable, at the cost of a compensated
+#                          palette and less blue headroom before clipping
+#   * blue stays absent -> the glass has removed a dimension. The palette
+#                          must live on red-green, or line identity needs a
+#                          non-colour channel — see docs/insights.md §12.
+GAIN = (1.0, 1.0, 1.0)
 
 # Real Tokyo line colours, mirroring scripts/make_test_schedule.py's TOKYO
 # palette so what you see here is what a generated schedule would render.
@@ -86,19 +109,27 @@ def _hsv_to_rgb(h, s, v):
     f = h * 6.0 - i
     p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
     i %= 6
-    r, g, b = ((v, t, p), (q, v, p), (p, v, t),
-               (p, q, v), (t, p, v), (v, p, q))[i]
+    r, g, b = ((v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q))[i]
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
 def even_palette(n):
-    return [("hue %d" % i,
-             _hsv_to_rgb(((i / float(n)) + HUE_SHIFT_DEG / 360.0) % 1.0, 1.0, 1.0))
-            for i in range(n)]
+    return [
+        (
+            "hue %d" % i,
+            _hsv_to_rgb(((i / float(n)) + HUE_SHIFT_DEG / 360.0) % 1.0, 1.0, 1.0),
+        )
+        for i in range(n)
+    ]
 
 
 def _scaled(rgb):
-    return tuple(max(0, min(255, int(c * BRIGHTNESS))) for c in rgb)
+    """GAIN first, then BRIGHTNESS, then clamp. Clipping is REPORTED rather
+    than hidden: a channel pinned at 255 stops responding to further gain,
+    and reading that as "the glass ate it" is the obvious wrong conclusion."""
+    return tuple(
+        max(0, min(255, int(c * GAIN[ch] * BRIGHTNESS))) for ch, c in enumerate(rgb)
+    )
 
 
 def _show(palette):
@@ -116,23 +147,32 @@ def _show(palette):
             print("    LED %d : —" % led)
         else:
             name, rgb = palette[idx]
-            print("    LED %d : %-14s %-16s → %s"
-                  % (led, name, rgb, _scaled(rgb)))
+            clipped = "".join(
+                "RGB"[ch] for ch in range(3) if rgb[ch] * GAIN[ch] * BRIGHTNESS > 255
+            )
+            print(
+                "    LED %d : %-14s %-16s → %s%s"
+                % (led, name, rgb, _scaled(rgb),
+                   "  ⚠ %s CLIPPED" % clipped if clipped else "")
+            )
     print()
 
 
 def main():
     print("\n══ eki-bin hue separation test ═══════════════════")
-    print("  %d LEDs on GPIO%d   brightness %.2f   hue shift %+.0f°"
-          % (NUM_LEDS, DATA_PIN, BRIGHTNESS, HUE_SHIFT_DEG))
+    print(
+        "  %d LEDs on GPIO%d   brightness %.2f   hue shift %+.0f°"
+        % (NUM_LEDS, DATA_PIN, BRIGHTNESS, HUE_SHIFT_DEG)
+    )
+    if GAIN != (1.0, 1.0, 1.0):
+        print("  gain: R x%.1f  G x%.1f  B x%.1f" % GAIN)
     print("  mode: %r   count: %d" % (MODE, COUNT))
 
     if MODE == "even":
         palette = even_palette(COUNT)
     elif MODE == "tokyo":
         if COUNT > len(TOKYO):
-            print("  ✗ tokyo palette has %d colours; COUNT=%d"
-                  % (len(TOKYO), COUNT))
+            print("  ✗ tokyo palette has %d colours; COUNT=%d" % (len(TOKYO), COUNT))
             return
         palette = TOKYO[:COUNT]
     elif MODE == "pairs":
