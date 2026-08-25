@@ -116,7 +116,14 @@ LINE_SATURATION = getattr(config, "LINE_SATURATION", 1.0)  # 1.0=unchanged;
 # train at all). Two independent brightness surfaces total:
 # ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS (the idle ticks, below) —
 # BRIGHTNESS itself is the train's, with no separate scalar on top.
-MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.15)  # LINEAR multiplier
+# Default RAISED from 0.15 to 0.25 on 2026-08-24. The old value put markers
+# at raw 1 per channel — MARKER_COLOR 80 x BRIGHTNESS 0.15 x 0.15 — which is
+# exactly where WS2812B channel matching collapses and neutral reads RED.
+# Measured floor on this strip is 3; 0.25 lands on it. docs/insights.md §12.
+# ⚠ The floor is per-strip, and this is a magic number tied to MARKER_COLOR
+# and BRIGHTNESS: change either and markers can silently fall back into the
+# collapse zone. A clamp on the final value is the durable fix (§12).
+MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.25)  # LINEAR multiplier
 #   of BRIGHTNESS for the idle "tick" LEDs — every position that ISN'T the
 #   anchor or the train right now (the gaps on the thermometer). Rendered via
 #   the STATIC path (see _write_frame) — direct linear, no gamma. Needs to

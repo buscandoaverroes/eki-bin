@@ -795,6 +795,164 @@ on: through the opaque brown bottle, **only near-opposite hues are reliably
 distinguishable** — blue vs. yellow/red. Adjacent hues collapse, exactly as
 §3 predicted from the red-vs-orange finding.
 
+### The low-PWM floor, measured (2026-08-24)
+
+`make low-pwm-test` in `ramp` mode on the AE-WS2812B-STICK8, raw values, no
+gamma and no `BRIGHTNESS`:
+
+| raw | reads as |
+|---|---|
+| `(1,1,1)` | **red** — "a faint mars in the distance", no luminosity |
+| `(2,2,2)` | **purple** |
+| `(3,3,3)` | **neutral grey** — first honest white |
+| `(4,4,4)` | brighter, less soft than 3 |
+
+**The floor on this strip is 3.** Below it, equal values stop meaning
+neutral.
+
+The progression names the culprit. Purple at 2 is red + blue with green
+absent, so the low-PWM ordering here is **red > blue > green** — green is
+the weak channel. (An earlier guess in `low_pwm_test.py` assumed blue was
+weak and biased its compensation candidates the wrong way. The ramp settled
+it in one run, which is the argument for measuring rather than reasoning.)
+
+### Per-channel compensation: `(2,3,2)` is the dimmest neutral
+
+`balanced` mode, same strip, same run conditions:
+
+| raw | reads as | total |
+|---|---|---|
+| `(1,1,1)` | dim red ("mars") | 3 |
+| `(1,2,1)` | forest green | 4 |
+| `(1,2,2)` | deep blue | 5 |
+| `(1,3,1)` | grass, bright green | 5 |
+| `(1,3,2)` | sky blue | 6 |
+| **`(2,3,2)`** | **first neutral grey** | **7** |
+| `(2,4,2)` / `(2,3,3)` | neutral | 8 |
+
+So **green wants +1 over red and blue**, and compensation buys a neutral at
+a total of 7 instead of `(3,3,3)`'s 9 — about 22% less output for the same
+apparent colour. Real, but modest; not the order-of-magnitude win that would
+force a redesign.
+
+`channels` mode at value 2 confirms it independently: **white reads purple**,
+i.e. red + blue with green under-contributing at equal value.
+
+**Control worth noting:** the two LEDs showing each candidate looked
+identical to each other. That rules out per-die manufacturing scatter — this
+is a systematic property of the WS2812B's channels, so one compensation
+applies strip-wide and no per-pixel calibration is needed.
+
+### Why marker ticks read warm — arithmetic, not mystery
+
+Markers take the STATIC path in `leds.py`, so what reaches the LED is:
+
+```
+raw = MARKER_COLOR[ch] × BRIGHTNESS × MARKER_BRIGHTNESS
+    = 80 × 0.15 × 0.15  =  1
+```
+
+**Exactly the `(1,1,1)` that reads red.** The default `MARKER_BRIGHTNESS =
+0.15` lands precisely on the worst value available. `MARKER_BRIGHTNESS = 0`
+was set to hide it, which removed the affordance rather than fixing it.
+
+| `MARKER_BRIGHTNESS` | raw | reads |
+|---|---|---|
+| 0.15 (old default) | 1 | red |
+| **0.25** | **3** | **neutral ✓** |
+| 0.40 | 4 | neutral |
+
+Two candidate fixes, and the `balanced` mode decides between them:
+
+1. **`MARKER_BRIGHTNESS ≥ 0.25`.** Simple, but it is a magic number tied to
+   `MARKER_COLOR` and `BRIGHTNESS` — change either and it silently lands
+   back in the collapse zone.
+2. **Clamp the marker's final value to the floor.** Robust across brightness
+   settings, and expresses the actual constraint: never emit a non-zero
+   value below the point where channels match.
+
+`balanced` mode has now answered the follow-up: the dimmest neutral is
+`(2,3,2)`, total 7 against `(3,3,3)`'s 9. So a *shaped* clamp is available
+and would let markers sit ~22% dimmer than a flat one.
+
+**Recommendation: take the flat floor of 3 first.** The shaped version costs
+a non-neutral `MARKER_COLOR` and a compensation that is itself per-strip, to
+buy 22% on an element that is meant to be barely-there anyway. And §12's
+in-bottle finding points the other way regardless — the bench-tuned
+`BRIGHTNESS = 0.15` is too dim once diffused, so markers will clear the
+floor naturally at whatever brightness the glass actually needs. Keep
+`(2,3,2)` recorded for the case where markers must be as dim as possible,
+which is not today's problem.
+
+⚠ Per-strip. Confirm the floor on the 21-LED gift-jar strip before trusting
+it there, and confirm through the glass — the bottle changes what is
+*visible*, though not what the chip emits.
+
+### Vessel comparison: the glass sets the line count (2026-08-24)
+
+`make hue-test` across three brown bottles, 8-LED stick on jumpers dropped
+in unfastened.
+
+| vessel | `even` | `tokyo` (5 lines) | verdict |
+|---|---|---|---|
+| **thick, opaque brown** | 3 OK; **4 fails** (red≈violet); 5 fails (blue≈green) | keihin_tohoku reads "faint vomit yellow/green"; ginza "looks red" | **2-3 lines** |
+| **mid brown** | 4 OK at `BRIGHTNESS=0.05` | 5 separable; orange/yellow slightly harder than clear | **4-5 lines** |
+| **clear brown** | 5 "clear, super obvious" | 5 "totally clear, easily separable" — still clear at `0.05` | **5+ lines** |
+
+### The mechanism: amber glass is a BLUE-CUT FILTER
+
+Not a general loss of saturation — a specific missing channel. Amber glass
+exists to block short wavelengths, and every failure above is that one fact:
+
+- `keihin_tohoku` `(0,178,229)`, a light **blue**, reads yellow-green: its
+  blue is absorbed, leaving only the green component.
+- Red vs violet merge at 4 hues, because **violet minus blue IS red**.
+- Blue vs green merge at 5, same cause.
+- `ginza` (orange) "looks red" — with blue already at zero, orange can only
+  slide toward red.
+
+The thick bottle does not compress the hue wheel evenly. It **collapses it
+onto the red-green axis and deletes a dimension.**
+
+### ⚠ CORRECTION to this section's earlier claim about brightness
+
+§12 previously said raising in-bottle brightness would fix both the marker
+floor and hue separation — *"the two findings share one fix."* **That is
+wrong, and the data is unambiguous:** `0.15 → 0.30` in the thick bottle gave
+"not much improvement from first run."
+
+It cannot work. Scaling brightness preserves the **ratios** between channels,
+so it can never restore one the glass is removing. The two findings are
+independent:
+
+- **Marker floor** — a property of the LED. Brightness fixes it.
+- **Hue separation** — a property of the glass. Brightness does nothing.
+
+The one compensation still untested is *disproportionate* blue gain, now
+available as `GAIN` in `hue_test.py`. There is headroom: at `BRIGHTNESS=0.30`
+keihin_tohoku's blue reaches only 68/255, so `B×3` gives 206 before clipping.
+
+### The real tension: the most beautiful vessel is the least functional
+
+Field note from the session: *"thick opaque glass provides most refraction
+and most beautiful effect."* It is also the one capped at 2-3 lines.
+
+That is a product decision, not a bug, and the options are:
+
+1. **Thick brown, 2-3 lines.** Keep the look; accept the cap. Fits the
+   project's stated thesis — this is an ambient object, not a departure board.
+2. **Clear/mid brown, 5+ lines.** Trade some of the glow for capacity.
+   `docs/glass-stone-concept.md` §3 already argues clear glass on these
+   grounds.
+3. **Thick brown + a non-colour identity channel.** If hue is capped at 2-3,
+   line identity could ride on *animation* — blink rate, pulse shape, chase
+   direction — which diffusion does not attenuate. Untested, and the most
+   interesting of the three because it makes the glass's limitation
+   irrelevant rather than accepting it.
+
+Note option 3 is only visible because the constraint was measured rather
+than assumed.
+
 Implications for the line palette:
 - **Cap the practical line count at what the glass supports**, not at what
   the data model allows. Three widely-separated hues is plausible; six is not.
