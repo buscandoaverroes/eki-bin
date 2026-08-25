@@ -55,7 +55,35 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+def _main_worktree(start):
+    """The MAIN worktree root, even when called from a linked worktree.
+
+    ⚠ Why this is not just `parent.parent`: `data/` is gitignored, so every
+    git worktree has its OWN copy and none of them share. A drift campaign
+    run from two worktrees silently splits into two logs, each too short to
+    yield a figure — which happened on 2026-08-25 and cost a day's sample.
+    A multi-week measurement cannot tolerate the log moving with the cwd.
+
+    In a linked worktree `.git` is a FILE containing
+    `gitdir: /path/to/main/.git/worktrees/<name>`, so the main root is two
+    levels above that gitdir. In the main worktree `.git` is a directory and
+    `start` is already right.
+    """
+    dot_git = start / ".git"
+    if dot_git.is_file():
+        try:
+            line = dot_git.read_text().strip()
+            if line.startswith("gitdir:"):
+                gitdir = Path(line.split(":", 1)[1].strip())
+                # .../main/.git/worktrees/<name>  ->  .../main
+                if gitdir.parent.name == "worktrees":
+                    return gitdir.parent.parent.parent
+        except OSError:
+            pass
+    return start
+
+
+REPO = _main_worktree(Path(__file__).resolve().parent.parent)
 LOG_PATH = REPO / "data" / "rtc-drift.jsonl"
 MPREMOTE = REPO / ".venv" / "bin" / "mpremote"
 
@@ -103,6 +131,29 @@ def ntp_offset_from_reply(data, t1, t4):
     t2 = (t2_s - _NTP_EPOCH) + t2_f / 2.0 ** 32
     t3 = (t3_s - _NTP_EPOCH) + t3_f / 2.0 ** 32
     return ((t2 - t1) + (t3 - t4)) / 2.0
+
+
+def ntp_offset_median(server=NTP_SERVER, timeout=5.0, queries=3):
+    """Median of several NTP queries.
+
+    The dominant remaining error is round-trip ASYMMETRY — the four-timestamp
+    form cancels symmetric latency exactly, but a path that is slower one way
+    than the other biases the result. That asymmetry varies per packet, so a
+    median over a few queries suppresses it where a single query cannot.
+
+    Median rather than mean: one badly-delayed packet should be outvoted, not
+    averaged in.
+    """
+    offsets = []
+    last = None
+    for _ in range(max(1, queries)):
+        try:
+            offsets.append(ntp_offset(server, timeout))
+        except (OSError, socket.gaierror) as e:
+            last = e
+    if not offsets:
+        raise last if last else OSError("no NTP replies")
+    return statistics.median(offsets), len(offsets)
 
 
 def ntp_offset(server=NTP_SERVER, timeout=5.0):
@@ -287,6 +338,44 @@ def current_epoch(entries):
     return max((e.get("epoch", 0) for e in entries), default=0)
 
 
+def _print_history(entries, log_path):
+    """Every logged sample, with the running drift. The campaign view."""
+    print("\n  log: %s" % log_path)
+    samples = [e for e in entries if e.get("event") == "sample"]
+    if not samples:
+        print("  (no samples yet)")
+        return 0
+    print("  %-20s %-6s %10s %9s %10s" % ("when", "ref", "offset s", "jitter", "Δ vs prev"))
+    prev = None
+    for e in samples:
+        ref = e.get("ref", "host")
+        delta = "" if prev is None else "%+.4f" % (e["offset_s"] - prev["offset_s"])
+        print("  %-20s %-6s %10.4f %8.1fms %10s"
+              % (e["iso_host"], ref, e["offset_s"],
+                 e.get("jitter_ms") or 0, delta))
+        prev = e
+
+    # Drift only over the trustworthy reference, and only within one epoch.
+    ntp = [e for e in samples if e.get("ref") == "ntp"
+           and e.get("epoch") == samples[-1].get("epoch")]
+    print()
+    if len(ntp) < 2:
+        print("  Not enough NTP-referenced samples in this epoch for a drift")
+        print("  figure — host-referenced ones are excluded on purpose, see")
+        print("  ntp_offset(). Run again after a few hours.")
+        return 0
+    span = (ntp[-1]["ts"] - ntp[0]["ts"]) / 3600.0
+    ppm = drift_ppm_fit([(e["ts"], e["offset_s"]) for e in ntp])
+    rms = fit_rms_residual([(e["ts"], e["offset_s"]) for e in ntp])
+    print("  %d NTP samples over %.1f h" % (len(ntp), span))
+    print("  drift: %+.2f ppm  (%+.3f s/day, %+.0f s/year)"
+          % (ppm, ppm * 86400 / 1e6, ppm * 86400 * 365 / 1e6))
+    if rms is not None and len(ntp) >= 3:
+        print("  scatter about the fit: %.0f ms RMS" % (rms * 1000))
+    print("  DS3231 spec: ±2.00 ppm")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--sda", type=int, default=DEFAULT_SDA)
@@ -304,11 +393,20 @@ def main(argv=None):
                          "which is the dominant error source in this "
                          "measurement — see ntp_offset().")
     ap.add_argument("--ntp-server", default=NTP_SERVER)
+    ap.add_argument("--ntp-queries", type=int, default=3,
+                    help="NTP queries to take the median of. Suppresses "
+                         "round-trip asymmetry, the dominant remaining error.")
+    ap.add_argument("--history", action="store_true",
+                    help="print every logged sample and exit — the campaign "
+                         "view for a long-running measurement.")
     ap.add_argument("--log", type=Path, default=LOG_PATH)
     args = ap.parse_args(argv)
 
     entries = load_log(args.log)
     epoch = current_epoch(entries)
+
+    if args.history:
+        return _print_history(entries, args.log)
 
     if args.mark_seed:
         epoch += 1
@@ -321,10 +419,11 @@ def main(argv=None):
     clock_offset, ref = 0.0, "host"
     if not args.no_ntp:
         try:
-            clock_offset = ntp_offset(args.ntp_server)
+            clock_offset, n_ok = ntp_offset_median(args.ntp_server,
+                                                   queries=args.ntp_queries)
             ref = "ntp"
-            print("Reference: NTP (%s) — host clock is %+.3f s off true time"
-                  % (args.ntp_server, clock_offset))
+            print("Reference: NTP (%s, median of %d) — host clock is %+.3f s "
+                  "off true time" % (args.ntp_server, n_ok, clock_offset))
         except (OSError, socket.gaierror) as e:
             print("Reference: HOST CLOCK — NTP unreachable (%s)." % e)
             print("  ⚠ The host clock wanders; expect scatter to dominate.")
