@@ -239,3 +239,64 @@ class TestNtpOffset:
     def test_a_short_reply_is_rejected(self):
         with pytest.raises(OSError):
             rtc_drift.ntp_offset_from_reply(b"\x00" * 20, t1=0.0, t4=0.1)
+
+
+class TestSummary:
+    """The derived rollup. Pure, so the arithmetic AND the honesty flags are
+    testable without hardware or a network."""
+
+    @staticmethod
+    def _s(ts, offset, ref="ntp", jitter=4.0, epoch=0):
+        return {"event": "sample", "ts": ts, "offset_s": offset, "ref": ref,
+                "jitter_ms": jitter, "epoch": epoch, "iso_host": "t%d" % ts}
+
+    def test_empty_log_reports_nothing_rather_than_crashing(self):
+        s = rtc_drift.build_summary([])
+        assert s["current"] is None and s["history"] == []
+
+    def test_two_samples_give_a_figure_but_NOT_trust(self):
+        """The distinction that matters: a number can be inside the spec band
+        and still be meaningless. Two points always fit a line perfectly, so
+        zero scatter proves nothing."""
+        s = rtc_drift.build_summary([self._s(0, 0.0), self._s(86400.0, -0.05)])
+        c = s["current"]
+        assert c["drift_ppm"] == pytest.approx(-0.579, abs=0.01)
+        assert c["within_spec"] is True
+        assert c["trustworthy"] is False
+        assert "no scatter check" in c["why"]
+
+    def test_three_consistent_samples_are_trusted(self):
+        per_s = -0.6 / 1e6
+        rows = [self._s(i * 86400.0, i * 86400.0 * per_s) for i in range(3)]
+        c = rtc_drift.build_summary(rows)["current"]
+        assert c["trustworthy"] is True
+        assert c["drift_ppm"] == pytest.approx(-0.6, abs=0.01)
+
+    def test_a_wandering_reference_is_flagged_untrustworthy(self):
+        # Drift-free chip, reference stepping ±300ms — vastly above jitter.
+        steps = [0.0, 0.3, -0.3, 0.3, -0.3]
+        rows = [self._s(i * 86400.0, steps[i]) for i in range(5)]
+        c = rtc_drift.build_summary(rows)["current"]
+        assert c["trustworthy"] is False
+        assert "scatter" in c["why"]
+
+    def test_host_referenced_samples_are_excluded_and_counted(self):
+        rows = [self._s(0, 5.0, ref="host"), self._s(100.0, 9.0, ref="host"),
+                self._s(200.0, 0.0), self._s(86400.0, -0.05)]
+        s = rtc_drift.build_summary(rows)
+        assert s["excluded_host_referenced"] == 2
+        assert s["current"]["samples"] == 2      # only the NTP pair
+        assert s["log_samples_total"] == 4       # history keeps everything
+
+    def test_history_carries_running_deltas(self):
+        h = rtc_drift.build_summary(
+            [self._s(0, -1.0), self._s(86400.0, -1.05)])["history"]
+        assert h[0]["delta_s"] is None
+        assert h[1]["delta_s"] == pytest.approx(-0.05)
+
+    def test_out_of_spec_drift_is_reported_as_such(self):
+        per_s = 12.0 / 1e6           # 12 ppm, like the early bad readings
+        rows = [self._s(i * 86400.0, i * 86400.0 * per_s) for i in range(3)]
+        c = rtc_drift.build_summary(rows)["current"]
+        assert c["within_spec"] is False
+        assert c["trustworthy"] is True   # consistent, just bad

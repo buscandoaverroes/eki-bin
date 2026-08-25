@@ -85,6 +85,12 @@ def _main_worktree(start):
 
 REPO = _main_worktree(Path(__file__).resolve().parent.parent)
 LOG_PATH = REPO / "data" / "rtc-drift.jsonl"
+# Derived rollup, rewritten from the log on every run. The .jsonl is the
+# record (append-only, never edited); this is the answer (regenerable, safe
+# to delete). Both gitignored under data/.
+SUMMARY_PATH = REPO / "data" / "rtc-drift-summary.json"
+SPEC_PPM = 2.0            # DS3231 datasheet, 0-40°C
+NTP_REFERENCE_ERROR_S = 0.020   # assumed round-trip asymmetry, ~20ms
 MPREMOTE = REPO / ".venv" / "bin" / "mpremote"
 
 # Board defaults: XIAO RP2350. Same per-board values rtc_test.py documents --
@@ -338,6 +344,101 @@ def current_epoch(entries):
     return max((e.get("epoch", 0) for e in entries), default=0)
 
 
+def build_summary(entries):
+    """Key figures derived from the raw log. PURE — no I/O, so the arithmetic
+    and (more importantly) the honesty flags are host-testable.
+
+    Reports `trustworthy` separately from `within_spec`, because they answer
+    different questions. A figure can sit inside the spec band and still be
+    meaningless: two samples admit no scatter check, and this project has
+    already published two confident numbers (+11.94 and -3.66 ppm) that were
+    the host clock rather than the chip.
+    """
+    samples = [e for e in entries if e.get("event") == "sample"]
+    out = {
+        "chip": "DS3231",
+        "spec_ppm": SPEC_PPM,
+        "log_samples_total": len(samples),
+        "current": None,
+        "history": [],
+    }
+    prev = None
+    for e in samples:
+        out["history"].append({
+            "ts": e["ts"],
+            "iso": e.get("iso_host"),
+            "ref": e.get("ref", "host"),
+            "offset_s": e["offset_s"],
+            "delta_s": None if prev is None else round(e["offset_s"] - prev["offset_s"], 4),
+            "host_clock_offset_s": e.get("clock_offset_s"),
+        })
+        prev = e
+    if not samples:
+        return out
+
+    epoch = max(e.get("epoch", 0) for e in samples)
+    ntp = [e for e in samples if e.get("ref") == "ntp" and e.get("epoch", 0) == epoch]
+    out["excluded_host_referenced"] = sum(
+        1 for e in samples if e.get("ref", "host") != "ntp")
+
+    if len(ntp) < 2:
+        out["current"] = {
+            "epoch": epoch, "reference": "ntp", "samples": len(ntp),
+            "drift_ppm": None, "trustworthy": False,
+            "why": "need at least 2 NTP-referenced samples in this epoch",
+        }
+        return out
+
+    series = [(e["ts"], e["offset_s"]) for e in ntp]
+    ppm = drift_ppm_fit(series)
+    rms = fit_rms_residual(series)
+    span_s = ntp[-1]["ts"] - ntp[0]["ts"]
+    jitters = [e["jitter_ms"] for e in ntp if e.get("jitter_ms")]
+    jitter = statistics.median(jitters) if jitters else None
+    unc = (2 ** 0.5) * NTP_REFERENCE_ERROR_S / span_s * 1e6 if span_s else None
+
+    if len(ntp) < 3:
+        trust, why = False, "only %d samples — no scatter check possible" % len(ntp)
+    elif rms is not None and jitter and rms * 1000 > 5 * jitter:
+        trust, why = False, ("scatter %.0f ms is %.0fx the %.0f ms jitter — the "
+                             "samples do not describe a constant drift"
+                             % (rms * 1000, rms * 1000 / jitter, jitter))
+    else:
+        trust, why = True, "consistent across %d samples over %.1f h" % (
+            len(ntp), span_s / 3600)
+
+    out["current"] = {
+        "epoch": epoch,
+        "reference": "ntp",
+        "samples": len(ntp),
+        "first": ntp[0].get("iso_host"),
+        "last": ntp[-1].get("iso_host"),
+        "span_hours": round(span_s / 3600, 2),
+        "drift_ppm": round(ppm, 3),
+        "drift_s_per_day": round(ppm * 86400 / 1e6, 4),
+        "drift_s_per_year": round(ppm * 86400 * 365 / 1e6, 1),
+        "uncertainty_ppm": round(unc, 3) if unc else None,
+        "scatter_ms": round(rms * 1000, 1) if rms is not None else None,
+        "jitter_ms": jitter,
+        "within_spec": (abs(ppm) + (unc or 0)) < SPEC_PPM,
+        "trustworthy": trust,
+        "why": why,
+        "current_offset_s": ntp[-1]["offset_s"],
+    }
+    return out
+
+
+def write_summary(entries, path=None):
+    path = Path(path or SUMMARY_PATH)
+    summary = build_summary(entries)
+    summary["generated"] = datetime.now().isoformat(timespec="seconds")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        json.dump(summary, fh, indent=2)
+        fh.write("\n")
+    return summary
+
+
 def _print_history(entries, log_path):
     """Every logged sample, with the running drift. The campaign view."""
     print("\n  log: %s" % log_path)
@@ -406,6 +507,7 @@ def main(argv=None):
     epoch = current_epoch(entries)
 
     if args.history:
+        write_summary(entries)
         return _print_history(entries, args.log)
 
     if args.mark_seed:
@@ -453,6 +555,10 @@ def main(argv=None):
              "samples": len(offsets),
              "ref": ref, "clock_offset_s": round(clock_offset, 4)}
     append_log(args.log, entry)
+    # Rewrite the derived rollup from the WHOLE log, not incrementally — it
+    # is cheap, and a summary that can drift from its source is worse than no
+    # summary. Delete it any time; the next run regenerates it.
+    summary = write_summary(entries + [entry])
 
     print("\n  DS3231 : %s" % edges[-1][0].isoformat())
     print("  host   : %s" % datetime.now().isoformat(timespec="seconds"))
@@ -487,6 +593,7 @@ def main(argv=None):
     hours = (now - base["ts"]) / 3600
     series = [(e["ts"], e["offset_s"]) for e in prior] + [(now, offset)]
     ppm = drift_ppm_fit(series)
+    print("\n  key figures → %s" % SUMMARY_PATH.relative_to(REPO))
     print("\n  ── drift, over %.1f h since this epoch's baseline ──" % hours)
     if ppm is None:
         print("  baseline too recent to divide by.")

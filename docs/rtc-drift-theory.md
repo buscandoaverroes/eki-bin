@@ -206,6 +206,18 @@ comparable to the CR1220's own life.
   logs, each too short to yield a figure. The script resolves the *main*
   worktree deliberately. (This happened, and cost a day's sample.)
 - **`--history`** prints every sample with running deltas: the campaign view.
+- **`data/rtc-drift-summary.json`** is rewritten from the whole log on every
+  run — the key figures in machine-readable form, for plotting or for pulling
+  a number into a doc without re-deriving it. The `.jsonl` is the *record*
+  (append-only, never edited); the summary is the *answer* (regenerable, safe
+  to delete). Both gitignored.
+
+  It reports **`within_spec` and `trustworthy` separately**, because they
+  answer different questions. A figure can sit inside the ±2 ppm band and
+  still be meaningless — two samples always fit a line perfectly, so zero
+  scatter proves nothing. This project has already published two confident
+  numbers (+11.94 and −3.66 ppm) that were the host clock rather than the
+  chip, and `why` says which case you are in.
 - **Re-seeding destroys the baseline.** `--mark-seed` starts a new epoch;
   drift only ever fits within one.
 - **Check the host before seeding a unit you care about.** `rtc-drift`'s first
