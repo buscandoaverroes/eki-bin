@@ -269,6 +269,52 @@ choice; a bronze koro would need the reader positioned so nothing conductive
 sits between it and the page. This is a real input to stand selection, not an
 afterthought — see `glass-stone-concept.md` §4.
 
+### 8.6a ⚠ A TIMETABLE DOES NOT FIT ON A STICKER (2026-08-25)
+
+The book (§8.4) assumes a station's schedule lives on a tag. Measured against
+the project's own test schedule — 3 lines, 1,229 weekday departures — it does
+not, by two orders of magnitude:
+
+| encoding | 1 line | 3 lines | NTAG213 (144 B) | NTAG216 (888 B) |
+|---|---|---|---|---|
+| raw JSON | 9,527 B | 28,582 B | ✗ | ✗ |
+| uint16 minute-of-day *(what `concept.md` assumes)* | 818 B | 2,458 B | ✗ | ✗ |
+| 4-bit inter-departure deltas | 204 B | 614 B | ✗ | ✓ |
+| **parametric** | **32 B** | **96 B** | **✓** | ✓ |
+
+`concept.md`'s "array of minute-of-day values on each NFC station card" is
+**5.7× too large for an NTAG213**, and only fits an NTAG216 for a single line
+in one direction.
+
+**The fix is to stop shipping the timetable and ship the RULE that generates
+it.** A high-frequency urban line is nearly fully described by: first train,
+last train, off-peak headway, rush headway, two rush windows, name, colour.
+That is ~32 bytes, and it is *exactly the argument list*
+`scripts/make_test_schedule.py` already takes — the generator exists, it has
+simply been running on the host.
+
+Consequences worth stating plainly:
+
+- **It is an approximation.** Real timetables are not perfectly regular. For a
+  Yamanote-class line at 2.5-4 min headway the error is well under the
+  display's one-minute granularity; for a suburban line with 20-minute gaps
+  and irregular express patterns it would be visibly wrong. **This scopes the
+  product to high-frequency urban lines**, which is where it was aimed anyway.
+- **The generator has to move on-device**, or at least its evaluation half.
+  Today `make_test_schedule.py` emits YAML on the host; the firmware would
+  instead expand parameters to departures at boot, or answer
+  "next departure after now" directly from the parameters without expanding
+  anything — the latter is cheaper and removes the 10 KB schedule-load cost
+  measured in `dev-status.md`.
+- **Irregular lines need a fallback**, e.g. parametric plus a short exception
+  list (skipped trains, extras), still inside 144 bytes for most cases.
+
+Untested. The cheapest falsification is to fit a real published timetable —
+one actual Tokyo line, from the operator's own PDF — to the parametric form
+and measure the worst-case error in minutes. If that is under a minute, the
+sticker book works. If it is not, the book needs NTAG216 and delta coding, or
+the schedule does not travel by NFC at all.
+
 ### 8.6 What this leaves open
 
 - **The tag data contract (§4) still stands**, and is still the durable
