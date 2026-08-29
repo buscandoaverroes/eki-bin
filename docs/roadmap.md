@@ -179,6 +179,64 @@ where a (possibly annular) Qi coil would sit anyway.
 
 ## Hard Variant: Standalone / Battery-Only — Open Problems
 
+### Battery power — the arithmetic (2026-08-25)
+
+Modelled in `scripts/power_budget.py`. Run it rather than trusting the
+numbers below; every unmeasured input is marked ESTIMATE in the file.
+
+**The finding that decides the whole question: a WS2812B draws current when
+it is BLACK.** Each pixel's constant-current driver IC is powered whenever
+VDD is present, regardless of the colour latched in — roughly 0.7-1.0 mA
+each. Twenty-one of them is **~17 mA continuously, displaying nothing.**
+
+| configuration | idle | per day | 3× AA alkaline |
+|---|---|---|---|
+| strip permanently powered | **17.8 mA** | 504 mAh | **4 days** |
+| strip on a load switch | 1.0 mA | 126 mAh | 16 days |
+| + `AWAKE_MINUTES` 15→3, 4 taps/day, 2 lit | 1.0 mA | 36 mAh | **55 days** |
+
+So a battery build **requires a P-MOSFET or load-switch IC cutting VDD to
+the strip while idle.** That is not an optimisation, it is the difference
+between four days and two months. (It also explains something already
+observed: an unaddressed strip browned out the board — `insights.md` §13.
+Same root cause, the strip draws on its own terms.)
+
+**The second-largest lever is `AWAKE_MINUTES`, and it is free.** 15 → 3
+minutes is +181% runtime, larger than any hardware change available. A tap
+means "am I about to leave?", and that question is answered in well under
+three minutes. Worth revisiting even on a mains-powered unit.
+
+By contrast, MCU sleep current is worth only ~19% across a 10× improvement,
+and lit-pixel count ~14%. **Effort spent chasing deep-sleep microamps is
+misallocated** until the strip is gated and the wake window is short.
+
+**Voltage constrains the pack.** WS2812B wants ≥3.5 V, so 2× cells is out
+without a boost converter. 3× alkaline (4.5 V fresh, sagging to ~3 V) or
+4× NiMH (4.8 V) are the practical arrangements — and NiMH's flat discharge
+curve suits a fixed-threshold load better than alkaline's slope.
+
+**What this buys beyond runtime**, which is the actual argument: Qi needs a
+flat bottom (roughly 1 bottle in 5 qualifies), and a cable needs either a
+cord out the top or a hole drilled in glass — no local fab has the tooling.
+**Batteries free the vessel choice entirely**, which the colour work
+(`insights.md` §12) has just made a first-class design variable rather than
+a detail.
+
+Cells fit through the mouth of even a narrow bottle and can be daisy-chained;
+inverting the jar drops the pack out for replacement, needing no fixture.
+The DS3231 keeps its own coin cell, so **the clock survives every pack
+change** — which is what makes a months-long replacement interval tolerable
+rather than a re-provisioning event.
+
+### ⚠ Qi concern worth testing, not dismissing
+
+Observed: the transmitter appears to keep delivering power with the MCU
+asleep, and the giving side heats the glass noticeably. Neither is surprising
+— Qi transmitters ping continuously to detect a receiver, and coupling losses
+become heat — but the long-term effect of sustained local heating on glass,
+and on a coin cell sitting inside, is untested. **Not a reason to abandon Qi;
+a reason to run a multi-day thermal test before committing a gift to it.**
+
 ### Power
 - **PN532 is the wrong NFC chip for battery** — ~100 mA standby (not a typo),
   dropping to µA only via finicky power-down/wake. For "passively wait for a tap
