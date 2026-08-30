@@ -531,3 +531,88 @@ fragile. **Silicone-insulated** stranded wire is worth the small premium
 here — it stays flexible, tolerates soldering-iron contact far better than
 PVC, and this build has wires that must flex as the assembly goes into an
 enclosure.
+
+---
+
+## Battery build: gating the LED rail (2026-08-25)
+
+_Follows from `docs/roadmap.md` § Battery power and `scripts/power_budget.py`.
+The whole battery question turns on cutting power to the strip when idle._
+
+### What a load switch is, and why high-side
+
+A load switch is a transistor in the power line, opened and closed by a GPIO
+— a relay with no moving parts. The strip's VDD stops being "always 5 V" and
+becomes "5 V when the firmware says so".
+
+```
+   HIGH-SIDE (correct here)          LOW-SIDE (wrong here)
+
+   +5V ──[P-MOSFET]── strip VDD      +5V ─────────── strip VDD
+              │                                          │
+            gate ← GPIO                strip GND ──[N-MOSFET]── GND
+                                                     │
+   strip GND ──────── GND                          gate ← GPIO
+```
+
+**Low-side is the easy circuit and the wrong one.** Switch the ground and the
+strip's GND floats up; the MCU's data pin is then *above* the strip's local
+ground, so current flows in through the WS2812B's input protection diodes.
+The strip stays partly powered through its own data line, which is exactly
+the leak being eliminated. Switch the **positive** rail instead.
+
+### ⚠ The firmware half nobody mentions
+
+**Gating VDD is not enough. The data pin must also stop driving high.** With
+the rail off but DIN held at 3.3 V, current flows through the input ESD diode
+into the strip's supply and partially powers it — the same parasitic path, by
+another route. Before opening the switch, set `LED_PIN` to input (or drive it
+low). This is a firmware change, not a wiring one, and skipping it silently
+undoes the hardware.
+
+### Parts to buy — Japanese search terms
+
+Shops: **秋月電子通商** (Akizuki), **千石電商** (Sengoku), **マルツ**,
+**スイッチサイエンス**.
+
+| Need | Search for | Notes |
+|---|---|---|
+| Load-switch IC *(easiest)* | 「ロードスイッチ」 / TPS22918, TPS22860 | Takes a **3.3 V enable** and switches a 5 V rail. Handles gate drive and inrush internally — no level-shifting to get wrong. **Start here.** |
+| P-MOSFET *(discrete)* | 「Pチャネル MOSFET」 / AO3401, IRLML6402 | Cheap and everywhere, but a 3.3 V GPIO cannot pull a gate referenced to 5 V fully off — needs a pull-up to 5 V plus a small N-MOSFET or an open-drain pin as a level shifter. Two parts, one more thing to get wrong. |
+| AA holder ×3 | 「電池ボックス 単3 3本」 | AA = **単3形**, AAA = **単4形** |
+| AAA holder ×4 | 「電池ボックス 単4 4本」 | |
+| Rechargeables | 「ニッケル水素電池」 / eneloop | Flat discharge curve suits a fixed threshold better than alkaline's slope |
+| Boost converter *(only for 2-cell)* | 「昇圧DCDCコンバータ」 | Avoidable — 3× or 4× cells clear the WS2812B's 3.5 V minimum without one |
+
+Also budget an **inrush** thought: a 21-LED strip switching on is a current
+step. Load-switch ICs usually slew it deliberately; a bare MOSFET does not.
+
+### Does this design need WS2812B at all?
+
+Worth asking, because **the ~0.8 mA-per-pixel idle draw is the price of
+per-pixel addressability** — an IC inside every LED, powered whenever the rail
+is. Three ways out, and they are not equivalent:
+
+| option | position | colour | idle | verdict |
+|---|---|---|---|---|
+| **WS2812B + load switch** | full | full | ~0 gated | the current plan; the gate is mandatory |
+| **Driver IC + passive LEDs** (IS31FL3731, TLC59711, MAX7219) | full | full w/ RGB parts | **µA in shutdown** | technically the best fit for battery. One driver instead of 21 ICs; costs a matrix to wire. |
+| **Discrete filament LEDs** | **coarse only** | usually none | ~0 when off | beautiful, but see below |
+
+**Filament LEDs are not a drop-in.** A filament is one light — not
+addressable, and typically fixed warm white. Adopting them deletes *both*
+signalling channels this design uses: **position means urgency, colour means
+line identity** (`docs/contracts/approach-contract.md`). That is not an LED
+swap, it is a different product.
+
+There is a real version of the idea though: **several filaments as coarse
+position** — say 5, arranged vertically, each on its own PWM channel. You
+lose fine position and colour, and gain the Edison-glow aesthetic plus
+near-zero idle. Whether that is a downgrade depends on a decision not yet
+made: `insights.md` §12 found the most beautiful vessel (thick opaque brown)
+caps colour at 2-3 lines anyway. **If colour is already nearly spent as a
+channel, trading it for diffusion quality is a much smaller loss than it
+sounds.**
+
+The driver-IC route is the one to reach for if the goal is purely battery
+life without giving anything up.
