@@ -1,6 +1,33 @@
-# Hardware Memo — eki-bin V1
-_Breadboard phase. Parts and electrical notes — for pin assignments (what
-connects to what, per board), see `pinouts/`._
+# Hardware Memo — eki-bin
+_Parts and electrical notes. For pin assignments (what connects to what, per
+board), see `pinouts/`._
+
+> **How to read this file.** The table below is **the current build** — what
+> to buy and wire if you are making a unit today. Everything after it is the
+> **record**: bring-up logs, evaluations, dead ends and open threads, roughly
+> in the order they happened. The spiral is deliberate; the answer is at the
+> top so you do not have to walk it.
+
+---
+
+## THE CURRENT BUILD (2026-08-25)
+
+| | choice | status |
+|---|---|---|
+| **MCU** | Seeed XIAO RP2350 | ✅ decided — no radio, which is the point |
+| **Firmware** | MicroPython **newer than 2026-04-06** | ⚠ **hard requirement.** Earlier builds size the filesystem larger than the flash and corrupt it — `insights.md` §13. `make doctor` fails such a board. |
+| **Clock** | DS3231 (Adafruit #3013) + CR1220 | ✅ in hand, verified, survives power cycle. Drift measured **−0.61 ppm**, within the ±2 ppm spec |
+| **IMU** | LSM6DSV16X | ✅ in hand, taps working on hardware |
+| **Display** | WS2812B — 8-LED stick (bench), 21-LED strip (jar) | ✅ working. `MARKER_BRIGHTNESS ≥ 0.25`; below that channel matching collapses and neutral reads red (§12) |
+| **Power** | Qi / battery / wired | 🔲 **OPEN — the live decision.** See § Battery build below |
+| **Vessel** | thick vs mid vs clear brown | 🔲 **OPEN.** Thick is the most beautiful and caps colour at 2–3 lines (§12). This is a product decision, not a detail |
+| **I²C** | shared bus, `IMU_I2C_ID = 1`, SDA GP6 / SCL GP7 | ✅ DS3231 `0x68` + IMU `0x6b`, no conflict |
+
+**Two open decisions interact**, which is why neither has been forced: Qi
+needs a flat bottom (roughly one bottle in five qualifies), so the power
+choice silently constrains the vessel choice — and the vessel now carries a
+design consequence (how many lines the palette supports) rather than being
+cosmetic.
 
 ---
 
@@ -577,15 +604,62 @@ Shops: **秋月電子通商** (Akizuki), **千石電商** (Sengoku), **マルツ
 
 | Need | Search for | Notes |
 |---|---|---|
-| Load-switch IC *(easiest)* | 「ロードスイッチ」 / TPS22918, TPS22860 | Takes a **3.3 V enable** and switches a 5 V rail. Handles gate drive and inrush internally — no level-shifting to get wrong. **Start here.** |
-| P-MOSFET *(discrete)* | 「Pチャネル MOSFET」 / AO3401, IRLML6402 | Cheap and everywhere, but a 3.3 V GPIO cannot pull a gate referenced to 5 V fully off — needs a pull-up to 5 V plus a small N-MOSFET or an open-drain pin as a level shifter. Two parts, one more thing to get wrong. |
+| Load-switch IC | 「ロードスイッチ」 / **TCK107AF** (Akizuki [116072](https://akizukidenshi.com/catalog/g/g116072/)) | ⚠ **SOT23-5 — and Akizuki stocks no SOT23 breakout.** See below. |
+| Discrete high-side switch *(recommended: all through-hole)* | see circuit below | 2N7000 + a P-channel MOSFET + 3 passives. Breadboardable, no SMD |
 | AA holder ×3 | 「電池ボックス 単3 3本」 | AA = **単3形**, AAA = **単4形** |
 | AAA holder ×4 | 「電池ボックス 単4 4本」 | |
 | Rechargeables | 「ニッケル水素電池」 / eneloop | Flat discharge curve suits a fixed threshold better than alkaline's slope |
 | Boost converter *(only for 2-cell)* | 「昇圧DCDCコンバータ」 | Avoidable — 3× or 4× cells clear the WS2812B's 3.5 V minimum without one |
 
-Also budget an **inrush** thought: a 21-LED strip switching on is a current
-step. Load-switch ICs usually slew it deliberately; a bare MOSFET does not.
+#### The TCK107AF is the right chip in the wrong package
+
+Toshiba TCK107AF, Akizuki's best-selling load switch, is genuinely well
+suited: 1.1–5.5 V, 1 A, **110 nA quiescent**, positive logic (a 3.3 V GPIO
+drives it directly), **slew-rate control** and **auto-discharge**. Those last
+two matter more than they look — slew control ramps the turn-on instead of
+stepping it, which is exactly the inrush that browned this board out twice;
+auto-discharge actively drains the output so strip capacitance cannot keep it
+half-alive.
+
+One catch: **SOT23-5**, and a search of Akizuki's 変換基板 range turns up only
+SOP8 / SOP16 / SSOP / TSSOP / MSOP boards — nothing at 0.95 mm, 5–6 pins. So
+either hand-solder fine wire to the part (0.95 mm pitch is coarse as SMD goes,
+and quite doable with flux and 30 AWG), or take the discrete route below.
+
+Note also its **1 A ceiling**: fine at working brightness (~190 mA), but 21
+LEDs at full white is ~1.26 A. That is already a fault condition, but it is
+where this part would object to it.
+
+#### All-through-hole alternative — nothing smaller than TO-92
+
+```
+       +5V ─────────┬───────────────┐
+                    │               │
+                   R1 100k        source
+                    │          ┌── gate      P-channel MOSFET
+        C1 100n ────┤          │      │
+                    │          │    drain ───► strip VDD
+                  drain ───────┘
+              Q1  2N7000        (C1 across gate-source = soft start)
+                  source
+                    │
+                   GND
+                    ▲
+        GPIO ──R2── gate           R2 = 1k
+              1k
+```
+
+- **GPIO HIGH** → Q1 conducts → P-gate pulled to GND → Vgs ≈ −5 V → **strip on**
+- **GPIO LOW** → Q1 off → R1 pulls P-gate to +5 V → Vgs = 0 → **strip off**
+
+`R1` is what makes the P-MOSFET *fully* off, which a 3.3 V GPIO cannot do on
+its own — that is the level-shifting problem in one resistor. `C1` with `R1`
+gives roughly a 10 ms turn-on ramp: a poor-man's slew control, and worth
+having given the inrush history.
+
+Ask for 「Pチャネル パワーMOSFET」 in TO-220 and 「2N7000」 in TO-92. At ~200 mA
+even a mediocre Rds(on) of 0.2 Ω costs 40 mV, so the part choice is
+uncritical — buildability matters more than specs here.
 
 ### Does this design need WS2812B at all?
 
@@ -616,3 +690,77 @@ sounds.**
 
 The driver-IC route is the one to reach for if the goal is purely battery
 life without giving anything up.
+
+### Filament array — the idea worth taking seriously
+
+**⚠ Step zero: measure the forward voltage.** A bare filament with two leads
+and no markings is one of three incompatible families, and you cannot tell by
+looking:
+
+| family | Vf | note |
+|---|---|---|
+| hobby / low-voltage | ~3 V | coin cell or 2×AA; what this design needs |
+| mid | ~12 V | workable with a small boost |
+| **Edison-bulb standard** | **60–100 V** | many dies in series, mains-derived. Needs a boost converter — inefficient on batteries, probably disqualifying |
+
+A ~10 cm filament is long, which *usually* means more dies in series and
+higher voltage — but some long ones use parallel strings at 3 V.
+
+Test cheaply, and **always current-limit — never put an LED straight across a
+voltage source**:
+
+1. **9 V battery + 1 kΩ in series.** Glows → Vf < 9 V, so it is a low-voltage
+   type and the battery plan survives.
+2. Nothing at 9 V → high-voltage family.
+3. Bench supply with a current limit, ramped from 0, if available.
+
+This one measurement decides whether filaments and batteries can coexist, so
+do it before designing anything around them.
+
+#### Circuit — five channels, low-side
+
+Low-side switching is fine here, unlike the WS2812B: there is no shared data
+line whose ground reference could float.
+
+```
+   V+ ─┬───────┬───────┬───────┬───────┐
+       R1      R2      R3      R4      R5     ← current limit, per filament
+       │       │       │       │       │
+      ▓F1     ▓F2     ▓F3     ▓F4     ▓F5
+       │       │       │       │       │
+       ├─┐     ├─┐     ├─┐     ├─┐     ├─┐
+        Q1      Q2      Q3      Q4      Q5    ← N-MOSFET, 2N7000 / AO3400
+       │       │       │       │       │
+      GND     GND     GND     GND     GND
+       ▲       ▲       ▲       ▲       ▲
+     GPIO    GPIO    GPIO    GPIO    GPIO     ← PWM
+```
+
+Physically, mapped onto `docs/contracts/approach-contract.md`:
+
+```
+      ╭─────────────╮
+      │    ▓ F5     │   30+ min away
+      │    ▓ F4     │   ~20 min
+      │    ▓ F3     │   ~10 min
+      │    ▓ F2     │   ~5 min
+      │    ▓ F1     │   ANCHOR — leave now
+      ╰─────────────╯
+```
+
+#### Why "you lose fine position" is weaker than it sounds
+
+With PWM on every channel you can **cross-fade between adjacent filaments** —
+a train at 7 minutes lights F2 at 60% and F3 at 40%. Because filaments
+diffuse broadly and their glows overlap, that reads as a **continuous**
+position rather than five steps. It is the trick a VU meter uses, and the
+diffusion that makes the object beautiful is precisely what makes the blend
+work.
+
+So five physical filaments plausibly give twenty-plus *perceived* positions.
+The channel actually spent is **colour** — and §12 found the most beautiful
+vessel takes most of that anyway. **If colour is already nearly exhausted,
+trading it for diffusion quality is a far cheaper trade than it appears.**
+
+Untested. The cheapest falsification is two filaments and a PWM sweep: does a
+cross-fade read as motion, or as two lamps taking turns?
