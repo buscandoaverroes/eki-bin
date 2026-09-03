@@ -337,10 +337,50 @@ the actual gift-jar config (`NUM_LEDS=21`, `ANCHOR_INDEX=10`,
 | Arm A (`DISPLAY_DIRECTION`) | 11–20 | **0–9 — the DIN end** |
 | Arm B (`DISPLAY_DIRECTION_B`) | 0–9 | **11–20 — the far end** |
 
+Recomputed from the shipped code 2026-09-03 and unchanged. As a picture,
+since this gets read while holding hardware:
+
+```
+  ARC_ORIGIN = "far"        (physical = 20 - logical)
+
+  physical:  0  1  2  3  4  5  6  7  8  9 [10] 11 12 13 14 15 16 17 18 19 20
+             └───────── arm A ────────┘ anchor └───────── arm B ─────────┘
+             ▲                            ▲                             ▲
+        DIN / pigtail              trains converge              far end of
+        (A's furthest train)          on the anchor          the strip (B's
+                                                             furthest train)
+
+  ARC_ORIGIN = "near"       (physical = logical) — the two arms simply swap
+```
+
+**A train approaching moves INWARD**, from its arm's far end toward the
+anchor. Both arms converge on the same point, which is the whole paradigm:
+distance from the anchor *is* the time.
+
 Flipping `ARC_ORIGIN` to `"near"` (`physical = logical`) swaps that
 assignment — arm A moves to the far end, arm B to the DIN end. The anchor
 never moves (its logical index is symmetric under the flip whenever
 `ANCHOR_INDEX` is the strip's exact centre).
+
+### ⚠ The strip has two faces, and you will view it from the wrong one
+
+The table above is in terms of **physical LED index**, which is unambiguous.
+Where it stops being unambiguous is your eye: a strip viewed from its **tape
+side** shows left and right reversed relative to the LED face. Fastened tape-
+out against the inside of a bottle, with the LEDs facing inward, the viewer is
+not looking at the LEDs at all — they are seeing light through glass, from
+the opposite side to the one you laid out on the bench.
+
+So there are really **three** things composing, and only two are yours:
+
+1. which timetable key you call `"a"` (`DISPLAY_DIRECTION`)
+2. `ARC_ORIGIN` — swaps which physical half each arm gets
+3. **the mounting** — which end you started winding from, and which way the
+   LEDs face
+
+(1) and (2) are two bits, so four combinations, exactly one of which looks
+right. (3) is decided by your hands at assembly and can invert the whole
+thing. **This is why the arithmetic above is necessary but not sufficient.**
 
 **Verify on the actual jar, don't just trust the arithmetic against your real
 soldering:** power up with only one direction showing a catchable train and
