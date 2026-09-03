@@ -27,30 +27,23 @@
 # necessary but proves nothing about the actual reason it was bought.
 #
 # ══ WORKFLOW ═════════════════════════════════════════════════════════════
-#   0. ⚠ CHECK YOUR HOST CLOCK FIRST. Seeding copies its error straight
-#      into the chip: host → `mpremote rtc --set` → board RTC → here →
-#      DS3231, with nothing checking against real time along the way. A Mac
-#      found +4.14s off true time on 2026-08-24 left the DS3231 ~2s behind
-#      permanently. `make rtc-drift` reports the host's NTP offset on its
-#      first line. Seconds rather than milliseconds = fix the Mac first.
-#   1. First-ever run: leave SYNC_DS3231_FROM_BOARD_RTC = True (below).
-#      `make set-time` first (sets the BOARD's own volatile RTC from this
-#      Mac's clock — the existing mechanism, docs/provisioning-runbook.md),
-#      THEN run this script — it copies that into the DS3231 and clears the
-#      oscillator-stop flag (see OSF below).
-#   2. Flip SYNC_DS3231_FROM_BOARD_RTC to False. This matters: the board's
-#      OWN RTC (machine.RTC on RP2350) does NOT survive power loss — there
-#      is no VBAT domain on the Pico — so leaving sync on and re-running
-#      after a power cycle would overwrite the DS3231 with garbage and
-#      destroy the exact thing being tested. A sanity check below guards
-#      against this (refuses to sync from an implausible year), but don't
-#      rely on it — flip the flag.
-#   3. Power-cycle the board (unplug/replug, or the physical reset — NOT
-#      Ctrl+D soft reset, which doesn't drop power and proves nothing).
-#   4. Re-run. If the time printed is correct (or has correctly advanced by
-#      roughly the time you were unplugged), the DS3231 + battery are
-#      doing their job. If OSF reports lost power, they aren't — check the
-#      CR1220 is actually seated and oriented + polarity right.
+# This script READS. It never writes — see below. The seed/verify/measure
+# split is by intent, and only the destructive one has to be named:
+#
+#     make rtc-seed     WRITES the chip     (micropython/rtc_seed.py)
+#     make rtc-test     reads it            (this file)
+#     make rtc-drift    measures it         (refuses an unseeded chip)
+#
+#   1. A factory-fresh or power-lost chip reports OSF SET and reads
+#      2000-01-01. That is expected once. `make rtc-seed` fixes it —
+#      but check the HOST clock first, because it is copied straight
+#      through (docs/provisioning-runbook.md §5b).
+#   2. PHYSICALLY power-cycle: unplug, wait, plug back in. NOT Ctrl+D —
+#      a soft reset doesn't drop power and proves nothing.
+#   3. Re-run this. **OSF still clear is the actual proof**, not the time
+#      readback: a chip that lost power at 3am and was re-powered would
+#      also show a plausible-looking time. OSF is the chip's own claim
+#      that its oscillator never stopped.
 #
 # ══ ⚠ A BATTERY CAN MASK A POWER FAULT — confirmed on hardware ══════════
 # Found the hard way 2026-08-22. Symptom: completely empty I2C scan, on
@@ -139,11 +132,13 @@ def _explain_i2c_pins(sda, scl, i2c_id):
             out.append(f"      I2C_ID is set to {i2c_id}. Set I2C_ID = {sda_bus}.")
     return out
 
-SYNC_DS3231_FROM_BOARD_RTC = False  # READ-ONLY by default, deliberately:
-#                                     running this script should never be able
-#                                     to destroy a chip's time. Flip to True
-#                                     only for WORKFLOW step 1 (seeding a new
-#                                     or power-lost chip), then flip back.
+# ⚠ SYNC_DS3231_FROM_BOARD_RTC IS GONE. This script is now READ-ONLY, full
+# stop — the intent it always claimed ("running this script should never be
+# able to destroy a chip's time") but did not enforce, because the flag lived
+# one edit away and had to be manually set back.
+#
+# Seeding moved to its own script and its own target: `make rtc-seed`
+# (micropython/rtc_seed.py). Procedure: docs/provisioning-runbook.md §5b.
 READ_INTERVAL_SECS = 2  # how often to re-print time+temp in the watch loop
 
 # ── DS3231 register map ────────────────────────────────────────────
@@ -176,7 +171,7 @@ def _dec_to_bcd(d):
 def _read_datetime(i2c, addr):
     """Returns (year, month, day, hour, minute, second, weekday). Always
     reads back in 24-hour terms regardless of how the register is
-    configured, since _write_datetime always WRITES 24-hour mode — so this
+    configured, since anything that writes this chip uses 24-hour mode — so
     script never has to carry the 12-hour/AM-PM branch through main()."""
     data = i2c.readfrom_mem(addr, REG_SECONDS, 7)
     second = _bcd_to_dec(data[0] & 0x7F)
@@ -193,7 +188,8 @@ def _read_datetime(i2c, addr):
             hour = 0
     else:
         hour = _bcd_to_dec(hour_reg & 0x3F)
-    weekday = data[3] & 0x07  # 1-7. Chip-arbitrary — see _write_datetime.
+    weekday = data[3] & 0x07  # 1-7, chip-arbitrary. main.py ignores it and
+    #                           computes the weekday from the DATE instead.
     day = _bcd_to_dec(data[4] & 0x3F)
     month_reg = data[5]
     month = _bcd_to_dec(month_reg & 0x1F)
@@ -202,29 +198,6 @@ def _read_datetime(i2c, addr):
     return (year, month, day, hour, minute, second, weekday)
 
 
-def _write_datetime(i2c, addr, year, month, day, hour, minute, second, weekday):
-    """Always writes 24-hour mode (hour register bit6=0) — one mode in,
-    _read_datetime's branch on the way out is a read-time compatibility
-    concern, not something this script's own writes ever produce.
-
-    `weekday` (1-7): the DS3231 attaches no meaning to this beyond "a
-    number 1-7, be consistent" — it isn't Sunday=1 or Monday=1 by
-    hardware convention, and this project's own date math
-    (main.py's local_time()) derives weekday from time.localtime()
-    independently, never from this register. Correctness here is about
-    staying in 1-7, not about which day means what."""
-    century_bit = 0x80 if year >= 2100 else 0x00
-    yy = year % 100
-    data = bytes([
-        _dec_to_bcd(second) & 0x7F,
-        _dec_to_bcd(minute) & 0x7F,
-        _dec_to_bcd(hour) & 0x3F,
-        ((weekday - 1) % 7) + 1,  # clamp to a valid 1-7 regardless of caller
-        _dec_to_bcd(day) & 0x3F,
-        (_dec_to_bcd(month) & 0x1F) | century_bit,
-        _dec_to_bcd(yy),
-    ])
-    i2c.writeto_mem(addr, REG_SECONDS, data)
 
 
 # ── Oscillator Stop Flag — the actual "did it survive" answer ──────
@@ -240,9 +213,6 @@ def _osc_stopped(i2c, addr):
     return bool(i2c.readfrom_mem(addr, REG_STATUS, 1)[0] & OSF_BIT)
 
 
-def _clear_osc_stopped(i2c, addr):
-    status = i2c.readfrom_mem(addr, REG_STATUS, 1)[0]
-    i2c.writeto_mem(addr, REG_STATUS, bytes([status & ~OSF_BIT & 0xFF]))
 
 
 def _read_temp_c(i2c, addr):
@@ -259,15 +229,6 @@ def _read_temp_c(i2c, addr):
     return whole + frac
 
 
-def _board_rtc_datetime():
-    """The board's OWN volatile RTC (set via `make set-time`), reshaped
-    from machine.RTC's field order into this script's — these are NOT the
-    same order and swapping them silently writes a corrupt but
-    plausible-looking date, so this conversion is centralized here rather
-    than inlined at the call site. RP2 port: (year, month, day, weekday,
-    hours, minutes, seconds, subseconds)."""
-    year, month, day, weekday, hour, minute, second, _ = RTC().datetime()
-    return (year, month, day, hour, minute, second, weekday)
 
 
 def main():
@@ -312,36 +273,10 @@ def main():
         print("    since it was last cleared (see WORKFLOW step 1).")
     print()
 
-    if SYNC_DS3231_FROM_BOARD_RTC and not lost_power:
-        # The chip is holding time AND hasn't lost power since it was last
-        # set — i.e. it is currently PASSING the battery-backup test, and
-        # we are about to overwrite the evidence. Caught this happening for
-        # real on 2026-08-22: the flag was left True across a
-        # disconnect-and-pocket test, so the readback showed a correct time
-        # that had just been written rather than one that had survived.
-        # The OSF above was the only thing that actually proved anything.
-        print("  ⚠ ABOUT TO OVERWRITE A CHIP THAT IS KEEPING GOOD TIME.")
-        print("    OSF is clear, so this chip has held time since it was last")
-        print("    set. If you are mid-power-cycle-test, the readback below")
-        print("    will show a time this script just WROTE — which proves")
-        print("    nothing about battery backup. Set")
-        print("    SYNC_DS3231_FROM_BOARD_RTC = False and re-run to actually")
-        print("    test it. (Syncing anyway — this is only a warning.)\n")
-
-    if SYNC_DS3231_FROM_BOARD_RTC:
-        year, month, day, hour, minute, second, weekday = _board_rtc_datetime()
-        if year < 2024 or year > 2099:
-            print(f"  ⚠ Board RTC reads an implausible year ({year}) — refusing to")
-            print("    sync. Run `make set-time` first, or you're mid-WORKFLOW-step-3")
-            print("    and SYNC_DS3231_FROM_BOARD_RTC should be False right now.")
-            print("    Falling through to read-only — showing the DS3231's EXISTING time:\n")
-        else:
-            _write_datetime(i2c, DS3231_ADDR, year, month, day, hour, minute, second, weekday)
-            _clear_osc_stopped(i2c, DS3231_ADDR)
-            print(f"  ✓ DS3231 set from board RTC: {year:04d}-{month:02d}-{day:02d} "
-                  f"{hour:02d}:{minute:02d}:{second:02d}, OSF cleared")
-            print("    Flip SYNC_DS3231_FROM_BOARD_RTC = False before the power-cycle")
-            print("    test — see this file's header.\n")
+    if lost_power:
+        print("  → This chip needs seeding before it means anything:")
+        print("      make rtc-seed        (procedure: runbook §5b)")
+        print()
 
     print(f"  Reading back every {READ_INTERVAL_SECS}s — confirms it's actually")
     print("  ticking, not stuck. Ctrl+C to stop.\n")

@@ -106,6 +106,7 @@ DEFAULT_SDA, DEFAULT_SCL, DEFAULT_ID = 6, 7, 1
 DEVICE_SNIPPET = """
 from machine import I2C, Pin
 i2c = I2C({i2c_id}, scl=Pin({scl}), sda=Pin({sda}), freq=400000)
+print("OSF", 1 if (i2c.readfrom_mem(0x68, 0x0F, 1)[0] & 0x80) else 0)
 b = bytearray(7)
 i2c.readfrom_mem_into(0x68, 0, b)
 prev = b[0]
@@ -310,11 +311,15 @@ def collect(sda, scl, i2c_id, samples, mpremote=None, clock_offset=0.0):
         text=True, bufsize=1,
     )
     out = []
+    osf = None
     for line in proc.stdout:
         # Timestamp FIRST, parse after -- parsing before stamping would fold
         # this process's own work into the measurement.
         arrived = time.time() + clock_offset  # true time, not the host's guess
         line = line.strip()
+        if line.startswith("OSF "):
+            osf = line.split()[1] == "1"
+            continue
         if not line.startswith("EDGE "):
             continue
         raw = bytes.fromhex(line.split(None, 1)[1])
@@ -322,7 +327,7 @@ def collect(sda, scl, i2c_id, samples, mpremote=None, clock_offset=0.0):
     proc.wait()
     if proc.returncode != 0 and not out:
         sys.exit("mpremote failed:\n" + (proc.stderr.read() or "(no output)"))
-    return out
+    return out, osf
 
 
 def load_log(path):
@@ -534,10 +539,33 @@ def main(argv=None):
 
     print("Catching %d seconds-edges on I2C%d (SDA=GP%d SCL=GP%d)..."
           % (args.samples, args.i2c_id, args.sda, args.scl))
-    edges = collect(args.sda, args.scl, args.i2c_id, args.samples,
-                    clock_offset=clock_offset)
+    edges, osf = collect(args.sda, args.scl, args.i2c_id, args.samples,
+                         clock_offset=clock_offset)
     if not edges:
         sys.exit("No edges seen. Is the DS3231 wired and powered? Try: make rtc-test")
+
+    # ── REFUSE TO SAMPLE AN UNSEEDED CHIP ────────────────────────────
+    # Added after a run on 2026-09-03 logged an offset of -841,778,662 s
+    # (26.7 years) from a factory-state chip reading 2000-01-01, then fitted
+    # a drift of -1.03e9 ppm across it. main.py has had a plausibility gate
+    # since the DS3231 integration; this script never got one, and a
+    # measurement tool that will happily record nonsense is worse than one
+    # that refuses — the nonsense lands in the log and poisons every later
+    # fit.
+    rtc_dt = edges[-1][0]
+    if osf:
+        sys.exit(
+            "\n✗ REFUSING TO SAMPLE: the oscillator-stop flag is SET.\n"
+            "  The chip is reporting that it lost power, so whatever it now\n"
+            "  reads is not a continuation of anything — drift is undefined.\n"
+            "  Seed it first:  docs/provisioning-runbook.md §5b  (make rtc-seed)\n"
+            "  Then start a fresh epoch:  make rtc-drift ARGS=\"--mark-seed\"")
+    if not 2024 <= rtc_dt.year <= 2099:
+        sys.exit(
+            "\n✗ REFUSING TO SAMPLE: the chip reads %s.\n"
+            "  A DS3231 that lost power with no working backup resets to\n"
+            "  2000-01-01. Seed it: docs/provisioning-runbook.md §5b\n"
+            "  Then:  make rtc-drift ARGS=\"--mark-seed\"" % rtc_dt.isoformat())
 
     # datetime.timestamp() interprets the naive value in the HOST's local
     # zone. If the chip holds UTC that makes the offset a constant ~-9h,

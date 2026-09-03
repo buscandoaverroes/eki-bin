@@ -16,7 +16,8 @@
 #   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
 #   make i2c-scan          — find I2C devices without knowing pins/bus first
 #   make doctor            — is the board healthy? flash/fs/transport probe
-#   make rtc-drift         — measure DS3231 drift vs this Mac (edge-timed)
+#   make rtc-seed          — ⚠ WRITE the DS3231 (the only writer; runbook §5b)
+#   make rtc-drift         — measure DS3231 drift vs true time (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
 #   make dev               — run from the HOST filesystem; zero flash writes
@@ -191,6 +192,18 @@ rtc-test: _check-mpremote
 .PHONY: rtc-drift
 rtc-drift: _check-mpremote
 	$(PYTHON) scripts/rtc_drift.py $(ARGS)
+
+# ⚠ WRITES the DS3231 — the only target that does. Seeding, verifying and
+# measuring are three different intents, and they used to share two scripts
+# plus a hand-edited flag (rtc_test.py's SYNC_DS3231_FROM_BOARD_RTC), which
+# you had to remember to set back. Forgetting meant every later run silently
+# overwrote the chip's kept time — destroying the one thing a DS3231 is for.
+# Now the destructive one has to be asked for by name.
+#   make rtc-seed     WRITES        make rtc-test  reads    make rtc-drift  measures
+# Full procedure, including checking the HOST clock first: runbook §5b.
+.PHONY: rtc-seed
+rtc-seed: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/rtc_seed.py
 
 # Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
 # (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,
