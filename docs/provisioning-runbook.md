@@ -176,6 +176,62 @@ make rtc-test            # DS3231: scan → time read/write → battery-backup p
 Expected `imu-test` output: scan shows `0x6a` or `0x6b`, `WHO_AM_I = 0x70`,
 one axis near ±1000mg (gravity) at rest.
 
+## 5b. Seed the DS3231 — the one step with an order that matters
+
+A factory-fresh chip reports **OSF set** and reads `2000-01-01`. That is
+expected the first time. It is *not* expected after a power-cycle test — that
+means the CR1220 is not doing its job.
+
+**Do this in order. Step 0 is not optional if you care about the unit.**
+
+```bash
+# 0. Is the HOST clock actually right? It gets copied straight into the chip.
+make rtc-drift          # first line reports the host's NTP offset
+```
+
+Seconds rather than milliseconds → fix the Mac first (System Settings →
+General → Date & Time → Set automatically). That error becomes **permanent**
+in the unit; nothing downstream can recover it.
+
+```bash
+# 1. Host clock → the board's own volatile RTC
+make set-time
+```
+
+```
+# 2. Enable the copy, ONCE:
+#    micropython/rtc_test.py →  SYNC_DS3231_FROM_BOARD_RTC = True
+```
+
+```bash
+# 3. Board RTC → DS3231, and clears OSF
+make rtc-test
+```
+
+```
+# 4. ⚠ SET IT BACK:  SYNC_DS3231_FROM_BOARD_RTC = False
+#    Leaving it True overwrites the chip's kept time on every later run —
+#    destroying exactly the thing the DS3231 exists to provide. The script
+#    guards against syncing from an implausible year, but do not lean on it.
+```
+
+```bash
+# 5. Physically unplug. Wait. Plug back in. (NOT Ctrl-D — a soft reset does
+#    not drop power and proves nothing.)
+make rtc-test           # OSF clear + correct time = battery works
+```
+
+```bash
+# 6. Re-seeding destroyed any drift baseline, so start a new epoch:
+make rtc-drift ARGS="--mark-seed"
+make rtc-drift          # lays down the first sample of the new epoch
+```
+
+> **Why step 5 is the real test.** OSF staying clear across a *physical*
+> power cut is the chip's own claim that its oscillator never stopped — much
+> stronger than reading back a plausible-looking time, which a chip that lost
+> power at 3am and was re-powered would also do.
+
 ## 6. Run the real loop
 
 Run it from flash (`make dev` in §4b is the no-write alternative):
