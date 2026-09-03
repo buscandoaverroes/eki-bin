@@ -51,6 +51,42 @@ def _bcd_to_dec(b):
     return (b >> 4) * 10 + (b & 0x0F)
 
 
+def _board_rtc():
+    """The board's own volatile RTC, reshaped into this file's field order.
+
+    ⚠ machine.RTC's order is NOT the obvious one — it puts WEEKDAY fourth,
+    between the date and the time:
+
+        (year, month, day, WEEKDAY, hours, minutes, seconds, subseconds)
+
+    Unpacking it as y/mo/d/h/mi/s/wd silently shifts every time field by one
+    position and writes a date that is wrong but entirely plausible-looking.
+    That is not hypothetical: it happened on 2026-09-03 while this
+    conversion was being inlined at the call site, writing 03:19 for 19:45.
+    An earlier version of rtc_test.py centralized it here *with a comment
+    saying exactly this*, and the mistake was made while deleting that
+    comment. It is centralized again, for the same reason.
+    """
+    year, month, day, weekday, hour, minute, second, _sub = RTC().datetime()
+    return (year, month, day, hour, minute, second, weekday)
+
+
+def _implausible(y, mo, d, h, mi, s, wd):
+    """A field-range check, whose real job is catching a MIS-ORDERED tuple.
+
+    Any single shift of machine.RTC's fields puts a value somewhere it
+    cannot belong — the 2026-09-03 bug put second=50 into weekday, and
+    weekday only goes to 6. Ranges are cheap; a corrupt date that reads
+    plausibly is not."""
+    for name, val, lo, hi in (("month", mo, 1, 12), ("day", d, 1, 31),
+                              ("hour", h, 0, 23), ("minute", mi, 0, 59),
+                              ("second", s, 0, 59), ("weekday", wd, 0, 6)):
+        if not lo <= val <= hi:
+            return ("%s = %d is outside %d..%d — the machine.RTC tuple is "
+                    "probably being unpacked in the wrong order" % (name, val, lo, hi))
+    return None
+
+
 def _read_back(i2c):
     d = i2c.readfrom_mem(DS3231_ADDR, REG_SECONDS, 7)
     return (2000 + _bcd_to_dec(d[6]), _bcd_to_dec(d[5] & 0x1F),
@@ -80,8 +116,15 @@ def main():
         print("      chip. If pulling the cell makes it appear, VIN is low.")
         return
 
-    y, mo, d, h, mi, s, wd, _ = RTC().datetime()
+    y, mo, d, h, mi, s, wd = _board_rtc()
     print("  board RTC reads: %04d-%02d-%02d %02d:%02d:%02d" % (y, mo, d, h, mi, s))
+
+    bad = _implausible(y, mo, d, h, mi, s, wd)
+    if bad:
+        print("\n  ✗ REFUSING TO SEED — %s" % bad)
+        print("    Writing this would produce a corrupt but plausible-LOOKING")
+        print("    date on the chip, which is the hardest kind to notice.")
+        return
 
     if y < MIN_PLAUSIBLE_YEAR:
         print("\n  ✗ REFUSING TO SEED — the board's own RTC was never set.")

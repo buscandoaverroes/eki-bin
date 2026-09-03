@@ -63,9 +63,9 @@ from machine import Pin
 from neopixel import NeoPixel
 
 DATA_PIN = 1  # ⚠ SET PER BOARD — see wiring above and pinouts/<board>.md
-NUM_LEDS = 8  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21
+NUM_LEDS = 21  # AE-WS2812B-STICK8 = 8; gift-jar strip = 21
 
-MODE = "channels"  # "ramp" | "channels" | "balanced"
+MODE = "ramp"  # "ramp" | "channels" | "balanced"
 
 CHANNEL_TEST_VALUE = 2  # "channels" mode: the raw value to compare across R/G/B
 
