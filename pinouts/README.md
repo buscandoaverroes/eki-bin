@@ -32,6 +32,7 @@ this directory is where they're supposed to live instead.
 | [xiao_rp2350.md](xiao_rp2350.md) | Board — Seeed XIAO RP2350 | ✅ Verified — LED + IMU + DS3231 all confirmed 2026-08-22 |
 | [v1.4-gift-jar-system.md](v1.4-gift-jar-system.md) | System — XIAO + 21-LED strip + Qi/USB-C power | ⬜ Proposed — one pad position needs a physical confirm |
 | [v1.4-imu-dev-unit.md](v1.4-imu-dev-unit.md) | System — the above **+ LSM6DSV16X IMU**; the gesture-envelope dev/validation unit | ✅ Verified — full from-scratch provisioning 2026-08-16 |
+| [v1.6-rp2350-production-unit.md](v1.6-rp2350-production-unit.md) | System — **XIAO RP2350 + 21-LED + IMU + DS3231**, the intended production unit. Self-contained: full ASCII wiring, config values, traps, bring-up order | ⬜ Proposed — every fact bench-verified, assembly not yet soldered |
 
 ## Conventions
 
