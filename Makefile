@@ -168,6 +168,15 @@ low-pwm-test: _check-mpremote
 hue-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/hue_test.py
 
+# Which onboard indicators exist, and which can software actually turn off?
+# Walks every controllable LED through known states with pauses — anything
+# still lit during the ALL-OFF steps is hardwired to the rail and needs a
+# PHYSICAL fix, which matters before a unit is sealed in glass. Colour tells
+# you nothing here; only "does it change when driven" does (insights.md §13).
+.PHONY: onboard-led-test
+onboard-led-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/onboard_led_test.py
+
 # Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
 .PHONY: imu-test
 imu-test: _check-mpremote
