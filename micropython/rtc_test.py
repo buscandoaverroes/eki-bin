@@ -83,7 +83,7 @@
 
 import time
 
-from machine import I2C, Pin, RTC
+from machine import I2C, Pin
 
 # ── Configuration ────────────────────────────────────────────────
 SDA_PIN = 6  # I2C data  — SET PER BOARD, WITH I2C_ID below
@@ -164,8 +164,6 @@ def _bcd_to_dec(b):
     return (b >> 4) * 10 + (b & 0x0F)
 
 
-def _dec_to_bcd(d):
-    return ((d // 10) << 4) | (d % 10)
 
 
 def _read_datetime(i2c, addr):
