@@ -21,6 +21,17 @@
 # with a raw PWM value, and any scaling in between would hide the answer.
 # Numbers here are what reaches the chip.
 #
+# ══ ⚠ RUN THIS OUT OF THE BOTTLE ════════════════════════════════════════
+# The floor is a property of the LED. Through tinted glass EVERY step reads
+# warm — including values far above the floor — because amber glass absorbs
+# blue, so grey cannot survive it at any PWM value. Testing in the bottle
+# measures the glass, not the strip: the ramp looks uniformly warm and tells
+# you nothing. docs/insights.md §12.
+#
+# Set MARKER_BRIGHTNESS in the bottle afterwards, on a DIFFERENT question:
+# not "does it read neutral" (impossible there) but "does the tick recede
+# behind the train".
+#
 # ══ WIRING ══════════════════════════════════════════════════════════════
 #   XIAO RP2350: 5V→VCC  GND→GND  D7/GPIO1→DIN  → DATA_PIN = 1
 #   Pico 2W:     VBUS→VCC GND→GND  GP6→DIN       → DATA_PIN = 6

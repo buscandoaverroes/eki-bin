@@ -843,6 +843,35 @@ identical to each other. That rules out per-die manufacturing scatter — this
 is a systematic property of the WS2812B's channels, so one compensation
 applies strip-wide and no per-pixel calibration is needed.
 
+### ⚠ In a brown bottle, a NEUTRAL marker is impossible at any value
+
+Running `ramp` mode through the thick brown bottle made every step read warm
+— including values well above the floor. That is not a floor problem. Amber
+glass absorbs blue (see the vessel section above), so a neutral grey cannot
+survive it at *any* PWM value. The glass is subtracting the channel that
+makes grey grey.
+
+**This splits the marker question in two, and only the first is about the
+LED:**
+
+1. **The floor (a strip property, measure on the BENCH).** Below ~3 raw,
+   WS2812B channels stop matching and equal values produce an unpredictable
+   hue. Worth avoiding regardless of vessel, because "unpredictable" is
+   worse than "warm": a marker that lands on red reads like a dim train,
+   and `LINE_COLOR`/urgency colours are exactly what it must not be
+   confused with.
+
+2. **Whether the marker does its job (a vessel property, judge IN the
+   bottle).** In brown glass the criterion cannot be "reads neutral" — that
+   is unachievable. It becomes **"is it distinguishable from a train and
+   from the anchor?"**, which is answered by *brightness and position*, not
+   hue. A dim warm tick next to a bright warm train still reads as a tick.
+
+So: measure the floor bare, then set `MARKER_BRIGHTNESS` in the bottle by
+asking whether the ticks recede behind the trains — not by asking whether
+they look grey. They will not look grey, and that is the glass working as
+designed rather than a fault.
+
 ### Why marker ticks read warm — arithmetic, not mystery
 
 Markers take the STATIC path in `leds.py`, so what reaches the LED is:
