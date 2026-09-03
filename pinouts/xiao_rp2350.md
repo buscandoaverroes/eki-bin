@@ -91,9 +91,25 @@ that board too, just by chip design rather than by choice.
 
 ## BOOTSEL
 
-1. Press and hold the BOOT button
-2. Connect USB
-3. Release BOOT once connected
+This board has **two** buttons — **B** (BOOT) and **R** (RESET) — so the
+usual unplug dance is unnecessary:
+
+```
+   hold B  →  tap R  →  release B          ← no cable handling
+```
+
+The cable can stay connected throughout. The older method still works and is
+the only option on a board without a reset button:
+
+```
+   hold B  →  connect USB  →  release B
+```
+
+⚠ Worth knowing before a debugging session: an entire day of BOOTSEL entries
+on 2026-08-23/24 used the unplug method because only that one was written
+down here. Every power cycle it caused was also a chance for a flash write to
+be interrupted — the mechanism behind `docs/insights.md` §13's filesystem
+corruptions.
 
 Same mass-storage `.uf2` flashing flow as the Pico 2W
 (`make flash-micropython`'s picotool path) — RP2350 boards share a

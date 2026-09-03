@@ -36,6 +36,10 @@ make flash-micropython BOARD=esp32c3
 make flash-micropython BOARD=xiao-rp2350
 ```
 
+> **XIAO RP2350 BOOTSEL:** hold **B**, tap **R**, release **B** — the cable
+> stays connected. On a board with no reset button: hold BOOT while plugging
+> in.
+
 Add `WIPE=1` to erase the filesystem too. **A plain reflash does not touch
 it** — firmware and filesystem live in separate flash regions — so a board
 that is unreachable because its filesystem is damaged will survive any
