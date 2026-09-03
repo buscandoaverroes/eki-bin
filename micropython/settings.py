@@ -353,8 +353,18 @@ ACK_HOLD_MS = getattr(config, "ACK_HOLD_MS", 400)  # rise+dip duration. 150ms
 WAKE_SETTLE_MS = getattr(config, "WAKE_SETTLE_MS", 1500)  # post-jolt
 #   debounce, no input accepted — prevents the same physical contact that
 #   triggered WAKE from also registering as an immediate CYCLE
+# How long the display stays lit AFTER A TAP — a glance.
 AWAKE_MINUTES = getattr(config, "AWAKE_MINUTES", 15)  # bounded-window,
 #   same philosophy as WAKE_MINUTES — no EXTEND gesture, no runtime
+# How long it stays lit AT BOOT. Defaults to AWAKE_MINUTES, so nothing
+# changes unless you set it — but they are different jobs:
+#   boot  = a SELF-TEST window. You just plugged it in and want to see that
+#           it works; nobody is going to tap a unit they are still placing.
+#   tap   = a glance. Someone asked "when is the next train".
+# Separating them lets a Qi unit boot-verify briefly without burning a full
+# awake window, or lets a bench unit stay lit far longer than a gift would.
+BOOT_AWAKE_MINUTES = getattr(config, "BOOT_AWAKE_MINUTES", AWAKE_MINUTES)
+
 #   adjustment, deliberately simpler than the old wake-interaction design
 CYCLE_TRANSITION_MS = getattr(config, "CYCLE_TRANSITION_MS", 200)  # flash,
 #   then a hard cut to the next station — no crossfade, see §11

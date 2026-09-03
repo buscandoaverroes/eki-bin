@@ -231,7 +231,13 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # never wake. That stub is gone. The old name still works for
 # compatibility, but prefer GESTURE_ENABLED.
 # GESTURE_ENABLED = False
-# AWAKE_MINUTES = 15           # how long the display stays lit after a tap
+# AWAKE_MINUTES = 15           # how long it stays lit AFTER A TAP — a glance
+# BOOT_AWAKE_MINUTES = 15      # how long it stays lit AT BOOT. Defaults to
+#                                AWAKE_MINUTES. Different jobs: boot is a
+#                                SELF-TEST window (you just plugged it in and
+#                                want to see it work; nobody taps a unit they
+#                                are still placing), a tap is someone asking
+#                                when the next train is.
 # ACK_HOLD_MS = 400            # ACK rise+dip before it settles to the shelf
 # WAKE_JOLT_MS = 500           # CONFIRM jolt duration on WAKE
 # WAKE_SETTLE_MS = 1500        # post-jolt debounce; stops the same physical

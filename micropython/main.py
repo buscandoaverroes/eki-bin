@@ -34,7 +34,7 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
     _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
-from settings import (AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
+from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     CONFIG_ERROR_COLOR, DISPLAY_DIRECTION, DISPLAY_DIRECTION_B,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
     HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
@@ -329,7 +329,9 @@ def _run_interactive_loop(schedule_data, led):
     was_awake = True  # for announcing the AWAKE->ASLEEP edge, see below
     tap_state.awake = True  # boot = the first wake trigger, same rule
     tap_state.phase = "awake"  # _WakeState's constructor used to do this
-    tap_state.awake_until = time.ticks_ms() + AWAKE_MINUTES * 60_000
+    # BOOT window, not the tap window — see settings.py. Defaults to the
+    # same value, so this is a seam rather than a behaviour change.
+    tap_state.awake_until = time.ticks_ms() + BOOT_AWAKE_MINUTES * 60_000
     status_message = _StatusMessage()
 
     # Gestures degrade gracefully: no IMU found = the display still runs,
@@ -482,7 +484,7 @@ def _run_interactive_loop(schedule_data, led):
                 print("  (awake — tap registered)")
             else:
                 print("  (asleep after %d min — tap to wake; not a fault)"
-                      % AWAKE_MINUTES)
+                      % (BOOT_AWAKE_MINUTES if loop_count <= 1 else AWAKE_MINUTES))
             was_awake = tap_state.awake
 
         if status_message.active(tick_now):
