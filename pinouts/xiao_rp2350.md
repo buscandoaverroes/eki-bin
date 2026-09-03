@@ -149,6 +149,60 @@ actually needs once flashing is attempted; not yet tested.
   - `BAT_ADC` / `BAT_ADC_EN` suggest onboard battery-voltage sensing —
     unverified, worth a look when the Qi power path is revisited.
 
+## Onboard indicators — THREE of them, only two controllable
+
+Walked through `make onboard-led-test` twice, 2026-09-03. Holding the board
+with USB-C at the top:
+
+| # | where | what | software-controllable? |
+|---|---|---|---|
+| 1 | **left** | user LED, `Pin("LED")`, **ACTIVE-LOW** | ✅ yes |
+| 2 | **right** | `NEOPIXEL` (+ `NEOPIXEL_POWER` gate, active-high) | ✅ yes |
+| 3 | co-located with #1 | **a very faint RED**, visible only out of the bottle at close range | ❌ **no** |
+
+**#3 is the one that matters for a sealed unit.** It appears roughly **one
+minute after power-up**, is unaffected by taps, by `Pin("LED")`, by gating the
+NeoPixel, and by anything else firmware has tried. It is the "the LED goes
+faint after a few minutes" observation from 2026-08-23 — which was read at the
+time as a sagging rail and cost hours of misdiagnosis (`docs/insights.md`
+§13). It was never a rail problem; it is simply a third LED.
+
+**Hypothesis: it is the battery-charge indicator, in its no-battery state.**
+This board exposes `BAT_ADC` / `BAT_ADC_EN`, so it has charging hardware. A
+charger IC with no cell attached typically attempts to charge, times out after
+30–60 s, and settles into a fault or standby state — which matches the ~1 min
+delay and the complete indifference to firmware exactly. **Not confirmed.**
+Cheapest falsification: attach a cell to the battery pads and see whether the
+indicator changes behaviour.
+
+**No firmware fix exists either way.** For a unit going into glass the options
+are physical, in increasing permanence: opaque tape, a dab of paint, orienting
+the board so it faces away from the viewing surface, or desoldering the LED or
+its series resistor.
+
+### ⚠ Unresolved: the NeoPixel's RED did not light
+
+In both runs, steps 4–6 drove the NeoPixel red → green → blue. **Green and
+blue showed; red showed nothing.** Green and blue working rules out the gate,
+the pin and the data path, so this is specific to that channel.
+
+It matters beyond curiosity: `ERROR_COLOR` is red, and
+`docs/contracts/led-status-messages.md` earmarks this pixel as the
+status channel for a unit with no external strip. **A status indicator that
+cannot show the error colour is not a status indicator.**
+
+Worth one targeted re-check before trusting it — at full scale and out of the
+bottle, since brown glass passes red well but the faint red of #3 sits right
+next to it and could mask a dim result:
+
+```python
+from machine import Pin
+from neopixel import NeoPixel
+Pin("NEOPIXEL_POWER", Pin.OUT).on()
+np = NeoPixel(Pin("NEOPIXEL"), 1)
+np[0] = (255, 0, 0); np.write()
+```
+
 ⚠ **The onboard LEDs are NOT a reliable power indicator, despite appearances.**
 On 2026-08-23 an apparent "bright red = healthy / faint yellow = sagging rail"
 correlation drove a long misdiagnosis. It does not hold: faint yellow was
