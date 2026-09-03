@@ -839,6 +839,25 @@ Rust rewrite needs finished before it starts.
 
 ---
 
+## Gift registry (proposed) — a record per unit
+
+`docs/gift-registry.md`. Most of this project's measured numbers are facts
+about **one physical object**, not about the design: gesture thresholds
+(cross-bottle accuracy 0%), the strip's low-PWM floor, the vessel's usable
+line count, that crystal's drift, and the clock error inherited at seeding.
+They live in `config.py` and commit messages today, which survives one unit
+and fails silently at two — you would tune the second bottle with the first
+bottle's thresholds and conclude the recognizer regressed.
+
+**Forcing function: `data/rtc-drift-summary.json` is unit-agnostic**, which
+stops being correct the moment a second DS3231 exists.
+
+Not built. Cheapest useful version is one gitignored JSON per unit plus a
+`make units` target that says which need attention (schedule stale, cell
+aging, drift out of spec).
+
+---
+
 ## Open decisions
 
 | Decision | Status | Notes |
