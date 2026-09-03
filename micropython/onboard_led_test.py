@@ -28,6 +28,12 @@ from machine import Pin
 import time
 
 PAUSE_S = 4  # long enough to look up from the screen and actually look
+# Level for the NeoPixel steps. Raised from 40 to 160 on 2026-09-03: at 40 the
+# RED step read as "nothing happened" in two consecutive runs, because this
+# board has a faint always-on red LED right beside the pixel that masked it.
+# A full-scale (255,0,0) check proved the channel fine. A diagnostic that can
+# report a working channel as dead is worse than no diagnostic.
+NP_LEVEL = 160
 
 
 def _try(label, fn):
@@ -88,9 +94,9 @@ def main():
                   _try("NeoPixel off + power gated", _np_off)))
     step(2, "user LED ON", lambda: _try("→ did a light appear?", lambda: _led(True)))
     step(3, "user LED OFF", lambda: _try("→ did it go?", lambda: _led(False)))
-    step(4, "NeoPixel RED", lambda: _try("→ red?", lambda: _np((40, 0, 0))))
-    step(5, "NeoPixel GREEN", lambda: _try("→ green?", lambda: _np((0, 40, 0))))
-    step(6, "NeoPixel BLUE", lambda: _try("→ blue?", lambda: _np((0, 0, 40))))
+    step(4, "NeoPixel RED", lambda: _try("→ red?", lambda: _np((160, 0, 0))))
+    step(5, "NeoPixel GREEN", lambda: _try("→ green?", lambda: _np((0, 160, 0))))
+    step(6, "NeoPixel BLUE", lambda: _try("→ blue?", lambda: _np((0, 0, 160))))
     step(7, "ALL OFF again — anything still lit is NOT software-controllable",
          lambda: (_try("user LED off", lambda: _led(False)),
                   _try("NeoPixel off + power gated", _np_off)))

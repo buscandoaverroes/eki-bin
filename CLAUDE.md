@@ -69,6 +69,13 @@ When writing Rust code in this repo, take a teaching role:
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| **Wiring the current unit** — self-contained ASCII, config values, traps, bring-up order | `pinouts/v1.6-rp2350-production-unit.md` |
+| Low-PWM floor (strip property — test OUT of the bottle) | `micropython/low_pwm_test.py` (`make low-pwm-test`) |
+| Hue separation / how many lines a vessel supports (glass property — test IN it) | `micropython/hue_test.py` (`make hue-test`) |
+| Which onboard LEDs software can actually turn off | `micropython/onboard_led_test.py` (`make onboard-led-test`) |
+| Is this board healthy? flash/filesystem/transport probe | `make doctor` → `scripts/board_check.py` |
+| Run firmware from the host, zero flash writes | `make dev` → `scripts/dev.sh` |
+| DS3231 drift: the maths, and why offset ≠ drift | `docs/rtc-drift-theory.md` |
 | Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
 | IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
@@ -91,31 +98,42 @@ schedules (`lines[]`, optional, backward-compatible) and per-line colour
 rendering shipped with it. Full state: `docs/contracts/gesture-envelope.md`
 §11; provisioning a unit end-to-end: `docs/provisioning-runbook.md`.
 
-**Two active parallel branches (worktrees), both cut from `dev`:**
+**The production unit runs.** XIAO RP2350 (no radio) + DS3231 + IMU +
+21-LED strip: correct time from the RTC, surviving a power cycle, tap-to-cycle
+working, rendering `ApproachContract`. Wiring is **self-contained** in
+`pinouts/v1.6-rp2350-production-unit.md` — that file is authoritative for this
+build; the `v1.4-*` system files are the record of earlier ones.
 
-- **`feature/color-consistency`** — the live problem. Through the brown
-  bottle only near-opposite hues are distinguishable, which caps how many
-  lines the palette can support (`docs/insights.md` §12). Also owes a real
-  fix for marker ticks: they currently render at `(1,1,1)`, where WS2812B
-  channel matching collapses and neutral gray reads yellow, and the present
-  `MARKER_BRIGHTNESS = 0` is a **workaround that removes the affordance**,
-  not a fix. Raising overall brightness in-bottle likely solves both at
-  once. Iterate with `micropython/led_sandbox.py` — no WiFi or schedule
-  needed. **The MCU is irrelevant here; the strip and the bottle are not.**
-- **`feature/ds3231-time`** — bring up the DS3231 RTC on the Pico 2W
-  breadboard (I²C 0x68, no conflict with the IMU at 0x6A/0x6B). Evaluation
-  and wiring: `docs/hardware.md` § DS3231.
+**Merged since:** DS3231 integration (`TIME_SOURCE = "ds3231"`), the **V1.6
+single-target split** (`main.py` 3,127 → ~620 lines across eleven modules; the
+radio-less board carries no radio code — `docs/v1.6-refactor.md`), provisioning
+docs, and the colour measurements below.
 
-Both converge on the intended production unit: **XIAO RP2350 (no radio) +
-DS3231 + IMU + LED strip**, wired or Qi powered. Note `TIME_SOURCE="rtc"`
-already exists and is what makes a WiFi-free unit run today.
+**Colour is measured, not guessed** (`docs/insights.md` §12):
 
-In parallel, separately: **v1.1** (Qi power-path + soldering into the
-bottle) — see `docs/roadmap.md`. When touching board-specific pins,
-check/update `pinouts/<board>.md` alongside `config.py` — don't let pin
-facts drift out of that directory. `make test` runs before every
-`make upload`, keep it green. Architecture: `docs/contracts/
-display-contract.md`; progress + open decisions: `dev-status.md`.
+- **Low-PWM floor is 3** on the bench strip. Below it WS2812B channels stop
+  matching and equal values give an *unpredictable* hue. `MARKER_BRIGHTNESS`
+  default is now `0.25` (= raw 3); the old `0.15` produced raw 1, which is
+  exactly why ticks read red and why `= 0` had been set to hide them.
+- **The glass sets the line count.** Amber glass is a blue-cut filter, so it
+  collapses the hue wheel onto the red-green axis: thick opaque brown supports
+  **2-3** hues, mid brown 4-5, clear brown 5+. **Brightness does not help** —
+  scaling preserves channel ratios and cannot restore one the glass removes.
+- A **neutral marker is impossible in brown glass at any value.** In there the
+  criterion is "does the tick recede behind the train", answered by brightness
+  and position, not hue.
+
+**Two bench tools, and they need different rigs:** `make low-pwm-test` (strip
+property — run it **out** of the bottle) and `make hue-test` (glass property —
+run it **in**, and try several vessels).
+
+**Open:** the vessel decision — thick brown is the best-looking and the most
+limiting. `docs/roadmap.md` v1.1 (Qi + soldering) is the next hardware step.
+When touching board-specific pins, update `pinouts/<board>.md` alongside
+`config.py`. `make test` runs lint + 309 host tests before every `make upload`;
+keep it green. `make doctor` before trusting a board — and **a XIAO RP2350
+needs firmware newer than 2026-04-06**, or its filesystem is sized past the
+physical flash (`docs/insights.md` §13).
 
 ---
 

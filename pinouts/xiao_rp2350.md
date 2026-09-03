@@ -180,7 +180,7 @@ are physical, in increasing permanence: opaque tape, a dab of paint, orienting
 the board so it faces away from the viewing surface, or desoldering the LED or
 its series resistor.
 
-### ⚠ Unresolved: the NeoPixel's RED did not light
+### ✅ Resolved: the NeoPixel's red is fine — the test level was too low
 
 In both runs, steps 4–6 drove the NeoPixel red → green → blue. **Green and
 blue showed; red showed nothing.** Green and blue working rules out the gate,
@@ -191,9 +191,15 @@ It matters beyond curiosity: `ERROR_COLOR` is red, and
 status channel for a unit with no external strip. **A status indicator that
 cannot show the error colour is not a status indicator.**
 
-Worth one targeted re-check before trusting it — at full scale and out of the
-bottle, since brown glass passes red well but the faint red of #3 sits right
-next to it and could mask a dim result:
+**Re-checked at full scale 2026-09-03: bright red, no fault.** The step-4
+level of 40 was simply too dim to distinguish from indicator #3, the faint
+always-on red sitting right beside it. `onboard_led_test.py` now drives the
+NeoPixel steps at 160 — a diagnostic that can report a working channel as
+dead is worse than no diagnostic.
+
+So the NeoPixel **is** viable as the status channel
+`docs/contracts/led-status-messages.md` earmarks it for, `ERROR_COLOR`
+included. The check, for reference:
 
 ```python
 from machine import Pin

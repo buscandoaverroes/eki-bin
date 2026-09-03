@@ -35,10 +35,22 @@
 
 ---
 
-## Multiple lines at one station (⬜ proposed — `feature/gesture-integration`)
+## Multiple lines at one station (✅ SHIPPED)
 
-**Not yet implemented.** Design recorded here before the code so the shape
-is agreed first; strike this notice when it ships.
+Implemented and running: `schedule.schedule_lines()` normalizes both shapes,
+`ApproachContract.set_line_color()` applies the per-line colour, and a tap
+cycles between them (`docs/contracts/gesture-envelope.md` §11).
+
+**A file WITHOUT `lines` is not deprecated.** It is a single-line station, and
+the document itself is that line — `schedule_lines()` returns a one-element
+list for it, so every pre-existing schedule keeps working untouched. Add
+`lines` only when a station actually has more than one.
+
+⚠ **How many lines you can usefully show is set by the GLASS, not by this
+format.** Measured 2026-08-24: a thick opaque brown bottle supports **2-3**
+distinguishable hues, mid brown 4-5, clear brown 5+ — amber glass absorbs
+blue, so it collapses the hue wheel onto the red-green axis. Choose the
+palette for the vessel. `docs/insights.md` §12.
 
 The device sits in one room, so the **station is fixed** — what varies is
 which **line** at that station. Lines and directions are orthogonal axes:
