@@ -719,3 +719,21 @@ hadn't needed it until something needed to import it.
 more data; confirming whether confirm_jolt's rise has the same gamma-dip
 issue; and wiring any of this into `main.py`'s actual production loop —
 `gesture_sandbox.py` is still a sandbox, not the real thing.
+
+
+## Sleep behaviour on a real unit (2026-09-03)
+
+Confirmed in the code and worth stating where someone will look for it: the
+display is **not always on.**
+
+`_run_interactive_loop` boots the unit AWAKE — boot counts as the first wake
+trigger — and arms `awake_until = now + AWAKE_MINUTES` (default **15 min**).
+After that `_TapCycleState.resolve()` transitions AWAKE → ASLEEP and the loop
+takes the `clear()` branch. A tap wakes it for another window.
+
+⚠ **A sleeping unit is indistinguishable from a dead one**, which is the same
+hazard quiet hours already carries. The loop now prints
+`(asleep after 15 min — tap to wake; not a fault)` on the transition — once,
+not per tick — so a console can tell the two apart. There is no such signal
+without a console, which is an argument for the onboard NeoPixel carrying it
+in a future debug mode (`ONBOARD_LED_MODE`).

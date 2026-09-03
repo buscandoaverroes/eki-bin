@@ -42,7 +42,8 @@ from settings import (AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
     WAKE_INTERACTION_ENABLED)
 from signals import (LeaveSignal, leave_signal, next_departures)
-from status import (_play_startup_burst, _run_startup_failure_forever)
+from status import (quiet_onboard_leds,
+    _play_startup_burst, _run_startup_failure_forever)
 
 # ─────────────────────────────────────────────────────────────
 # Signals, LED output, display contracts — extracted (V1.6)
@@ -325,6 +326,7 @@ def _run_interactive_loop(schedule_data, led):
     loop_count = 0
 
     tap_state = _TapCycleState()
+    was_awake = True  # for announcing the AWAKE->ASLEEP edge, see below
     tap_state.awake = True  # boot = the first wake trigger, same rule
     tap_state.phase = "awake"  # _WakeState's constructor used to do this
     tap_state.awake_until = time.ticks_ms() + AWAKE_MINUTES * 60_000
@@ -471,6 +473,18 @@ def _run_interactive_loop(schedule_data, led):
             continue
         last_render = tick_now
 
+        # A dark strip is indistinguishable from a fault — the same hazard
+        # quiet hours already prints for. Sleeping after AWAKE_MINUTES is
+        # correct behaviour and looks exactly like the unit having died, so
+        # say so once on the transition rather than every tick.
+        if tap_state.awake != was_awake:
+            if tap_state.awake:
+                print("  (awake — tap registered)")
+            else:
+                print("  (asleep after %d min — tap to wake; not a fault)"
+                      % AWAKE_MINUTES)
+            was_awake = tap_state.awake
+
         if status_message.active(tick_now):
             frame = [None] * NUM_LEDS
             frame[STATUS_LED_INDEX] = (status_message.color, 1.0, "static")
@@ -525,6 +539,9 @@ def main():
     # Only ApproachContract consumes the anchor/arm geometry, so only it can
     # be broken by a mismatch — failing on it for an arc contract that never
     # reads those values would be a false alarm.
+    quiet_onboard_leds()   # the MCU's own LEDs — invisible on a bench,
+    #                        very visible inside a glass jar. status.py.
+
     if isinstance(ACTIVE_CONTRACT, ApproachContract):
         _geo = geometry_problems()
         if _geo:

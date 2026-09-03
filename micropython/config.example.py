@@ -330,6 +330,16 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # spike. Off by default; costs one boolean test when off.
 # MEM_DEBUG_ENABLED = False
 
+# ── Onboard indicators (the MCU's own LEDs, NOT the strip) ────────
+# Driven dark at boot by default. A jar with a stray LED glowing inside it
+# is not ambient, it's a gadget — and these are invisible on a bench, so
+# they're easy to forget until the thing is in glass.
+# ONBOARD_LED_MODE = "off"        # "off" | "keep" (keep = for bring-up)
+# ⚠ POLARITY IS PER-BOARD. XIAO RP2350's "LED" alias is ACTIVE-LOW —
+# driving it HIGH extinguishes it. The Pico 2W's is active-high (and is
+# its HEARTBEAT_PIN, so it's skipped there automatically).
+# ONBOARD_LED_ACTIVE_LOW = True
+
 # ── Quiet hours (strip dark; wraps past midnight) ─────────────────
 # ⚠ A dark strip during quiet hours is INDISTINGUISHABLE from a fault. Set
 # 24 / 0 to disable while testing; the loop prints "(quiet hours — display

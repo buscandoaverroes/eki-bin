@@ -19,9 +19,13 @@
 import time
 from leds import (_write_frame, clear)
 from primitives import (breathe, phase_sawtooth)
-from settings import (ERROR_BREATHE_PERIOD_MS, ERROR_COLOR, FRAME_MS,
-    NUM_LEDS, STARTUP_BURST_MS, STARTUP_COLOR, STARTUP_FADE_MS,
-    STARTUP_SPIN_HZ)
+from machine import Pin
+from neopixel import NeoPixel
+
+from settings import (
+    ERROR_BREATHE_PERIOD_MS, ERROR_COLOR, FRAME_MS, HEARTBEAT_PIN, NUM_LEDS,
+    ONBOARD_LED_ACTIVE_LOW, ONBOARD_LED_MODE, STARTUP_BURST_MS,
+    STARTUP_COLOR, STARTUP_FADE_MS, STARTUP_SPIN_HZ)
 
 
 
@@ -112,3 +116,42 @@ def _run_startup_failure_forever(color=None):
         time.sleep_ms(FRAME_MS)
 
 
+
+
+def quiet_onboard_leds():
+    """Drive the MCU's own indicators dark. Called once at boot.
+
+    Not the strip — these are the LEDs on the board itself, which are
+    invisible on a bench and very visible inside a glass jar.
+
+    Everything here is wrapped, because none of it exists on every board:
+    the "LED" alias is absent on the XIAO ESP32-C3, and NEOPIXEL only
+    exists on some. A missing indicator is not an error.
+
+    ⚠ Two traps, both verified on hardware:
+      • The NeoPixel is written BLACK BEFORE its power gate is closed. A
+        WS2812-class device latches its last value, so gating power on a
+        lit pixel leaves it primed to light again the moment power returns.
+      • "LED" polarity is per-board (ONBOARD_LED_ACTIVE_LOW). On the XIAO
+        RP2350 it is ACTIVE-LOW, so driving it HIGH is what turns it OFF.
+        Guessing wrong lights the LED while trying to extinguish it.
+
+    Skipped when HEARTBEAT_PIN is "LED" — on the Pico 2W that same alias IS
+    the heartbeat, and quieting it here would fight the feature.
+    """
+    if ONBOARD_LED_MODE != "off":
+        return
+    try:
+        gate = Pin("NEOPIXEL_POWER", Pin.OUT)
+        gate.on()                       # gate is active-high
+        onboard = NeoPixel(Pin("NEOPIXEL"), 1)
+        onboard[0] = (0, 0, 0)
+        onboard.write()                 # black FIRST, then cut power
+        gate.off()
+    except (AttributeError, ImportError, TypeError, ValueError):
+        pass                            # no onboard NeoPixel on this board
+    if HEARTBEAT_PIN != "LED":
+        try:
+            Pin("LED", Pin.OUT).value(1 if ONBOARD_LED_ACTIVE_LOW else 0)
+        except (TypeError, ValueError):
+            pass                        # no "LED" alias on this board

@@ -370,6 +370,20 @@ HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
 QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
 QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 
+# ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
+# "off"  — driven dark at boot. Right for a finished object: a jar with a
+#          stray LED glowing inside it is not ambient, it is a gadget.
+# "keep" — don't touch them. For bring-up, or a future "debug" mode where
+#          they carry state (the XIAO RP2350's NEOPIXEL is a full-colour
+#          indicator that needs no external strip — pinouts/xiao_rp2350.md,
+#          and led-status-messages.md describes what it could say).
+ONBOARD_LED_MODE = getattr(config, "ONBOARD_LED_MODE", "off")
+# ⚠ POLARITY IS PER-BOARD. The XIAO RP2350's "LED" alias is ACTIVE-LOW
+# (verified at the REPL 2026-08-23): driving it HIGH extinguishes it. The
+# Pico 2W's is active-high and routed through the CYW43. Getting this
+# backwards turns the LED ON while trying to turn it off.
+ONBOARD_LED_ACTIVE_LOW = getattr(config, "ONBOARD_LED_ACTIVE_LOW", True)
+
 # Relocated here by the V1.6 split: it is a config read, and this
 # module owns those. diag.py imports it.
 MEM_DEBUG_ENABLED = getattr(config, "MEM_DEBUG_ENABLED", False)
