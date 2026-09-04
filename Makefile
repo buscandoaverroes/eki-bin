@@ -22,6 +22,8 @@
 #   make run               — run main.py without saving (good for iteration)
 #   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
+#   make motion-sandbox    — the five motion words, on real glass
+#   make tilt-sandbox      — tilt-to-adjust; run it IN THE DARK
 #   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
 #                             handling_test.py data files on the device's flash
 #
@@ -167,6 +169,25 @@ low-pwm-test: _check-mpremote
 .PHONY: hue-test
 hue-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/hue_test.py
+
+# The five words of the light language, on real glass — the motion
+# vocabulary gets DECIDED here before any of it is wired into main.py
+# (docs/contracts/light-language.md). Runs the demo: all five in order,
+# labelled. `ab("around")` is the one that matters most — eased vs linear,
+# i.e. "physical rotation" vs "loading spinner". Edit ACTIVE at the bottom
+# of the file, or call run/ab/force_demo from the REPL.
+.PHONY: motion-sandbox
+motion-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/motion_sandbox.py
+
+# Tilt as a continuous input — the bottle-native alternative to sliding a
+# finger up and down it (light-language.md §6). ⚠ RUN IT IN THE DARK: the
+# open question is whether "you must brighten before you can dim" is a
+# glare flash you can live with, and at noon it will feel fine and tell
+# you nothing. Every session prints its overshoot.
+.PHONY: tilt-sandbox
+tilt-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/tilt_sandbox.py
 
 # Which onboard indicators exist, and which can software actually turn off?
 # Walks every controllable LED through known states with pauses — anything

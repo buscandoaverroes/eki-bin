@@ -879,10 +879,18 @@ in parallel because it is gated on a shop trip, not on code.
    remaining step. **Seasonal drift still open** — needs day-of-year,
    which `local_time()` discards (§14).
 2. **The struck-glass gesture refactor** — `docs/contracts/light-language.md`.
-   Sandbox before committing: the motion sandbox (five words, linear vs.
-   eased) and the tilt sandbox, both extending `led_sandbox.py`. Includes
-   the no-op-tap defect: `_handle_tap` plays CONFIRM before `main.py` knows
-   whether there is another line to cycle to.
+   **Sandboxes drafted 2026-09-04** (`feature/light-language-sandbox`, 10
+   host tests): `make motion-sandbox` (the five words; `ab("around")` is
+   the eased-vs-linear deceleration test, `force_demo()` is `outward` ∝
+   strike force) and `make tilt-sandbox` (**run in the dark** — every
+   session prints its go-up-first overshoot). Both are NEW files, not
+   `led_sandbox.py` scenes: that file's unit is a fixed span whose
+   brightness varies, and four of the five words vary POSITION instead.
+   **Nothing is wired into `main.py` and nothing should be until the
+   bottle has answered.** Still open behind it: the ACK → gap → motion
+   sequence needs the chosen motion to exist first (`gesture_sandbox.py`),
+   and the no-op-tap defect — `_handle_tap` plays CONFIRM before `main.py`
+   knows whether there is another line to cycle to.
 
 **Hardware, in parallel:**
 

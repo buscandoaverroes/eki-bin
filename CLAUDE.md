@@ -71,6 +71,8 @@ When writing Rust code in this repo, take a teaching role:
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
+| Tilt-to-adjust, and the go-up-first overshoot (**run it in the dark**) | `micropython/tilt_sandbox.py` (`make tilt-sandbox`) |
 | **Wiring the current unit** — self-contained ASCII, config values, traps, bring-up order | `pinouts/v1.6-rp2350-production-unit.md` |
 | Low-PWM floor (strip property — test OUT of the bottle) | `micropython/low_pwm_test.py` (`make low-pwm-test`) |
 | Hue separation / how many lines a vessel supports (glass property — test IN it) | `micropython/hue_test.py` (`make hue-test`) |
