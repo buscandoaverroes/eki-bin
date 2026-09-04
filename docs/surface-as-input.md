@@ -204,3 +204,38 @@ validated feature better rather than depending on anything new.
 4. Does contact state make tap-vs-swipe tractable where accelerometer features
    alone were not? (Pairs with the unused **gyro** axes —
    `glass-stone-concept.md` §5.)
+
+---
+
+## 8. The bottle is not the stone — the geometry ruling was geometry-specific (2026-09-04)
+
+Everything above evaluates the **glass stone** (`glass-stone-concept.md`): a
+solid puck on a stand, where the only free surface is the base and the hand
+covers the top. Proposed since, for the **bottle**: slide a finger up and
+down the side for brightness, and distinguish shoulder taps from base taps.
+
+The bottle changes two of the assumptions the ruling rested on:
+
+- **§4's click-wheel was tabled partly on ergonomics** — the base is where the
+  object sits, so the electrode is under the contact patch and the finger has
+  to reach beneath. A bottle's side is the *most* accessible surface it has.
+  That objection does not carry over.
+- **§2's "no X-Y position" still holds, but a slide doesn't need X-Y.** It
+  needs *one* axis, coarsely. Three or four electrodes stacked vertically
+  give an ordered sequence of contact events — which is direction, without
+  ever resolving position. This is closer to §5's surviving contact-state
+  idea (repeated N times) than to the trackpad that was structurally ruled
+  out.
+
+So the bottle version is **not** a re-litigation of §6's verdict; it's a
+different problem that the verdict didn't cover. It is still gated on §7
+question 1 — *does one electrode read a finger through this glass at all* —
+which is the same cheap bench test, and answering it for bottle glass
+(thinner, curved) is a prerequisite either way.
+
+**Shoulder vs. base taps are already partly answered, and not by capacitance.**
+`docs/insights.md` §8 measured tap *position* on the muji bottle with the IMU
+alone: neck vs. body separated at **98.3% with a plain threshold**, beating a
+trained classifier. What did not survive was cross-session stability — the
+thresholds drifted between mountings. That is the actual open problem for
+position-by-tap, and a contact electrode does not obviously fix it.

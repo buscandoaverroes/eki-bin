@@ -315,6 +315,31 @@ fully-encapsulated build, distinct from the ST25DV dynamic tag used now.
 | E-ink (existing plan) | ~0 W | 3–5 mA for 0.3–1.5 s/refresh | ~10-min partial-refresh cadence is fine on a coin cell (~2 yr) *if* true partial refresh (not full-flash) |
 | **Sharp Memory LCD (LS013B7DH03)** | 5–60 µW static | 15 µW at 1 Hz | 1.28", 128×128, 3 V, FPC. No flash on update (unlike e-ink), updates frequently. Specific serial protocol + COM toggle — more setup than e-ink |
 | Lavet stepper + dial | ~0 between steps | µJ/step | Most literally "analog metaphor"; most fun to build |
+| **Filament LED array** | n/a (lit) | continuous PWM | Not a drop-in — a filament is *one* light. Full design, cross-fade maths and the step-zero forward-voltage measurement already written up: `docs/hardware.md` § "Filament array" |
+
+### Hiding a display behind the label (2026-09-04)
+
+A rigid rectangular display is the hardest thing to reconcile with design
+principle #2 ("the reveal only works when the technology is hidden by the
+material") — glass shows it for exactly what it is. **Except where a label
+already is.** The label is a pre-existing opaque rectangle on an otherwise
+organic vessel, socially invisible because every bottle has one, and it is
+the one place a screen can sit without reading as a gadget bolted to a jar.
+
+Two ways to use it, and they are very different products:
+
+- **Behind, shining through** — a bright segment/matrix display whose *light*
+  penetrates the label while the display body stays hidden. Needs a
+  translucent-enough label stock and enough brightness to survive it; the
+  payoff is that it still reads as glowing glass.
+- **As the label** — an e-ink or Memory LCD sized and framed to *be* the
+  label. Sharper, far lower power, but it stops being "light in glass" and
+  becomes a small screen on a bottle. Whether that's a different product or
+  the same one is a real fork, not a detail.
+
+Untested. Cheapest falsification is the label stock, not the display: hold
+any bright LED behind the actual label and see whether legible structure
+survives it.
 
 ---
 

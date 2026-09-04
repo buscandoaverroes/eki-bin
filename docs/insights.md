@@ -1366,3 +1366,114 @@ Brownouts don't only interrupt the write in progress — they can leave
 persistent state that outlives the power event, the reflash, and every
 cable you try next. When a board goes unreachable during a write, suspect
 the filesystem before the silicon.
+
+---
+
+## 14. Living with v1.6 for 24 h — the light *is* the UX (2026-09-04)
+
+First full day of the production unit (XIAO RP2350 + DS3231 + 21 LEDs, thick
+brown opaque bottle) sitting on the dev bench. Same genre as §5, and it
+**reverses one of §5's findings**, which is the most useful thing in here.
+
+### Brightness reversed sign, and that's the enclosure talking
+
+§5 (2026-06-29): *"Too bright **even in the brown bottle**."*
+Today: **not bright enough in daylight; fine at night.**
+
+Both observations are true; they were made through different glass and at
+different ambient light. This is the evidence design-principle #13
+("brightness baseline is per-enclosure") was stubbed waiting for — and it
+needs a second clause: **per-enclosure *and* per-ambient.** A single
+`BRIGHTNESS` scalar cannot satisfy a room that changes by 2–3 orders of
+magnitude between noon and midnight, and no amount of tuning finds a value
+that is right twice.
+
+Note the trap: raising `BRIGHTNESS` to fix daylight makes night *worse*,
+and the failure at night isn't "too bright" — it's glare that destroys the
+diffusion the whole aesthetic depends on (§3). The two ends want different
+values, so the setting has to be a function of time, not a constant.
+
+### Quiet hours is a fossil
+
+`QUIET_START_HOUR` / `QUIET_END_HOUR` were designed when the display was
+*always on* and needed an off-switch overnight. Since the gesture envelope
+shipped, the display is **already dark by default** — `AWAKE_MINUTES`
+expires and it sleeps until tapped. Quiet hours now suppresses a thing that
+mostly isn't happening.
+
+What it still does, precisely: (1) refuses to wake on a tap, answering with
+`QUIET_TAP_COLOR` instead, and (2) blacks out the boot-time awake window.
+Those are real but small. What the setting is being *asked* for now is
+something it was never built to do — pick a **brightness profile** by time
+of day, the way light/dark mode does.
+
+**These are two different concepts wearing one name.** Splitting them:
+
+| Concept | Question it answers | Status |
+|---|---|---|
+| Quiet hours | may the display light up at all? | keep, shrink to a genuine deep-night gate |
+| Day/night profile | *how bright* when it does? | new |
+
+### `local_time()` throws the date away
+
+Discovered while scoping the seasonal part of day/night: `local_time()`
+returns `(minutes_since_midnight, weekday)` and nothing else.
+`ds3231_decode()` reads year/month/day off the chip and
+`_ds3231_local_time()` discards them. So:
+
+- **Fixed day/night (e.g. 07:00–17:00) is free** — it needs only `minutes`,
+  which every path already has.
+- **Seasonal drift is not free** — it needs day-of-year, which means
+  widening `local_time()`'s return, and all three sources
+  (`ds3231` / `rtc` / `ntp`) have to agree on it.
+
+Ship them as two steps, in that order.
+
+Sizing note if seasonal does get built: Tokyo's real sunrise swing is about
+**±75 min** across the year (~4:25 in June to ~6:50 in January), not the
+±15–30 min a damped version would apply. Damped is a defensible choice —
+this is a brightness profile, not an almanac — but the amplitude should be
+a config value, not a hardcoded guess, so the two can be compared on real
+glass.
+
+### A tap that resolves to nothing is the worst failure mode
+
+With one line in `schedule.json`, tap-to-cycle has nothing to cycle to.
+Today the CONFIRM jolt fires (`_handle_tap` plays it before `main.py`
+checks `len(lines) > 1`), so the unit says *"yes, done"* and then changes
+nothing. **A confident acknowledgment of a no-op is worse than no
+acknowledgment** — it makes a working device look broken, the exact inverse
+of `led-status-messages.md`'s "a broken device should look broken."
+
+The fix belongs in `_handle_tap`, not after it: one gesture should get one
+response, chosen with knowledge of whether the action is available.
+
+### Motion is the only unspent expressive channel
+
+Four channels are available and three are already load-bearing:
+
+| Channel | Currently carries | Free? |
+|---|---|---|
+| Position | time-to-leave (the whole paradigm) | no |
+| Hue | line identity + urgency — and **§12 says the brown glass allows only 2–3 hues at all** | no |
+| Brightness | urgency, anchor, marker — and now day/night | no |
+| **Motion** | boot burst, CHASE, breathe — used, never systematised | **yes** |
+
+Motion also survives the enclosure best: thick glass blurs *position* and
+filters *hue*, but change-over-time passes through diffusion intact. That
+is the argument for building the light vocabulary's next layer out of
+movement rather than more colours — a conclusion §12's colour measurements
+force rather than merely suggest.
+
+### Clock mode is two features sharing a name
+
+1. **A readable clock** — the ambient, analog-feeling one. Wants a
+   position→angle mapping, i.e. a full or known circle. Blocked on geometry
+   (LEDs at a bottle's base rarely close a circle).
+2. **A verifiable clock** — "is the RTC still right?", read off the strip
+   with no laptop. Wants precision and works at any LED count: blink out
+   the digits in sequence. Directly serves the drift work
+   (`docs/rtc-drift-theory.md`) and has **no geometry prerequisite.**
+
+Different goals, different designs, different blockers. Build (2) first;
+(1) waits on the vessel/mount decision that's open anyway.
