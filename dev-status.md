@@ -866,10 +866,18 @@ in parallel because it is gated on a shop trip, not on code.
 
 **Firmware, in order:**
 
-1. **Day/night split.** Retire quiet hours' brightness role; keep it as a
-   deep-night gate. Fixed 07:00–17:00 first (free — needs only
-   `minutes_since_midnight`), seasonal drift second (needs day-of-year,
-   which means widening `local_time()`; see §14).
+1. ~~**Day/night split**, fixed hours~~ — ✅ **implemented 2026-09-04**,
+   `feature/day-night-brightness`, 12 host tests. `daylight_period()` in
+   `clock.py` (pure, sibling of `current_period`), `_apply_daylight()` in
+   `main.py` wired into **both** loops. **Edge-triggered on purpose:**
+   `settings.BRIGHTNESS` is written only when the period changes, so a
+   manual adjustment survives until the next boundary — an OS's automatic
+   dark-mode contract, and what keeps `_cycle_brightness` rebindable later
+   as a config change rather than a redesign. Defaults are neutral (both
+   values default to `BRIGHTNESS`), so the mechanism ships on and the
+   profile ships flat; raising `DAY_BRIGHTNESS` on real glass is the
+   remaining step. **Seasonal drift still open** — needs day-of-year,
+   which `local_time()` discards (§14).
 2. **The struck-glass gesture refactor** — `docs/contracts/light-language.md`.
    Sandbox before committing: the motion sandbox (five words, linear vs.
    eased) and the tilt sandbox, both extending `led_sandbox.py`. Includes

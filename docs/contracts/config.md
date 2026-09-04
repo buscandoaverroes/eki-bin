@@ -94,6 +94,11 @@ it with `getattr(config, "NAME", default)`, so
 | `SCHEDULE_ERROR_COLOR` | tuple | no | `(200, 0, 120)` | Persistent failure colour for a missing/corrupt `schedule.json` — distinct from `ERROR_COLOR` (WiFi/NTP failure) |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
 | `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight) |
+| `DAY_NIGHT_ENABLED` | bool | no | `True` | Apply a brightness profile by time of day. Distinct from quiet hours: that decides *whether* the strip lights, this decides *how bright* |
+| `DAY_START_HOUR` | int | no | `7` | Start of "day" (inclusive). Equal start/end = always night; `0`/`24` = always day |
+| `DAY_END_HOUR` | int | no | `17` | End of "day" (exclusive); window may wrap past midnight |
+| `DAY_BRIGHTNESS` | float | no | `BRIGHTNESS` | Brightness during the day window. **Defaults to `BRIGHTNESS`, so the feature is neutral until set** |
+| `NIGHT_BRIGHTNESS` | float | no | `BRIGHTNESS` | Brightness outside it |
 
 The display fields (`CONTRACT`, `COLOR_SCHEME`, `MINUTES_PER_LED`,
 `URGENCY_THRESHOLDS`, `BRIGHTNESS`, …) drive the rendering pipeline documented in

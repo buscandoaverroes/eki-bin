@@ -352,3 +352,27 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 # off)" so the console can tell you apart from a real problem.
 QUIET_START_HOUR = 24
 QUIET_END_HOUR = 5
+
+# ── Day/night brightness (a different question from quiet hours) ───
+#   quiet hours  → MAY the display light up at all?
+#   day/night    → HOW BRIGHT when it does?
+#
+# Measured, not guessed: 24 h with the v1.6 unit found daylight too dim and
+# night fine (insights.md §14) — the exact reverse of the finding ten weeks
+# earlier through different glass (§5). One BRIGHTNESS cannot be right at
+# both ends of a day, and raising it to fix noon produces glare at night
+# that destroys the diffusion the whole look depends on.
+#
+# Both default to BRIGHTNESS, so leaving this block alone changes NOTHING.
+# Raising DAY_BRIGHTNESS is the point. Tune it on the actual glass at the
+# actual time of day — ~2x BRIGHTNESS is a starting guess, not a value.
+DAY_NIGHT_ENABLED = True
+DAY_START_HOUR = 7      # inclusive
+DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
+                        #   0/24 = always day.
+# DAY_BRIGHTNESS = 0.30
+# NIGHT_BRIGHTNESS = 0.15
+#
+# Seasonal drift (a window that breathes with the calendar) is NOT here:
+# it needs day-of-year, which local_time() currently discards. Separate,
+# larger step — insights.md §14.

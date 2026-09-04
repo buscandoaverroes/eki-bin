@@ -380,6 +380,33 @@ HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
 QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
 QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 
+# ── Day/night brightness profile ─────────────────────────────────────
+# NOT quiet hours, and the distinction is the point (insights.md §14):
+#
+#   quiet hours          → MAY the display light up at all?
+#   day/night (here)     → HOW BRIGHT when it does?
+#
+# One BRIGHTNESS cannot serve a room that swings two to three orders of
+# magnitude between noon and midnight. Raising it to fix daylight makes
+# night worse, and night's failure isn't "too bright" — it's glare
+# destroying the diffusion the whole aesthetic depends on (insights.md §3).
+# The two ends want different values, so it has to be a function of time.
+#
+# ⚠ DEFAULTS ARE DELIBERATELY NEUTRAL. Both values default to BRIGHTNESS,
+# so an existing device upgrading to this firmware behaves EXACTLY as
+# before until DAY_BRIGHTNESS is actually raised (design-principle #9).
+# The mechanism ships on; the profile ships flat. Raising DAY_BRIGHTNESS is
+# the whole point, and it is tuned on the real glass, not guessed here —
+# same rule the colour work established (insights.md §12).
+DAY_NIGHT_ENABLED = getattr(config, "DAY_NIGHT_ENABLED", True)
+DAY_START = getattr(config, "DAY_START_HOUR", 7) * 60
+DAY_END = getattr(config, "DAY_END_HOUR", 17) * 60
+DAY_BRIGHTNESS = getattr(config, "DAY_BRIGHTNESS", BRIGHTNESS)
+NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
+# Fixed hours only, on purpose. Seasonal drift needs day-of-year, which
+# local_time() currently discards — see insights.md §14 for why that makes
+# it a separate, larger step rather than a bigger number here.
+
 # ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
 # "off"  — driven dark at boot. Right for a finished object: a jar with a
 #          stray LED glowing inside it is not ambient, it is a gadget.

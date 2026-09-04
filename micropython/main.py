@@ -10,6 +10,13 @@
 
 import time
 
+# Imported as a MODULE as well as by name below, for the same reason
+# leds.py does it: BRIGHTNESS is the one setting that is MUTATED at
+# runtime (_apply_daylight here, _cycle_brightness in gestures.py), and a
+# star/named import binds a COPY. `settings.BRIGHTNESS` is the single home;
+# a bare `BRIGHTNESS` in this file would be a stale snapshot.
+import settings
+
 # No radio imports here, deliberately. `network`/`ntptime` DO NOT EXIST on
 # a radio-less board, and they used to sit unconditionally at line 17 — so
 # main.py died with ImportError BEFORE config was read, and TIME_SOURCE
@@ -25,7 +32,7 @@ import time
 # proceeds. That is what makes a green suite evidence the move was
 # faithful. Replaced with explicit imports in V1.6's final step.
 from clock import (ClockUnavailable, _check_ds3231_at_boot, current_period,
-    fmt_time, local_time)
+    daylight_period, fmt_time, local_time)
 from contracts import (ACTIVE_CONTRACT, ApproachContract,
     geometry_problems)
 from diag import (_mem_checkpoint, _mem_report)
@@ -35,7 +42,8 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
-    CONFIG_ERROR_COLOR, DISPLAY_DIRECTION, DISPLAY_DIRECTION_B,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED,
+    DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
     HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
     QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS, SCHEDULE_ERROR_COLOR,
@@ -178,6 +186,40 @@ def _apply_line_color(contract, line):
         contract.set_line_color(tuple(color))
 
 
+def _apply_daylight(minutes, last_period):
+    """Set the global brightness for the time of day. EDGE-TRIGGERED.
+
+    Returns the current period, which the caller holds and hands back next
+    tick; `last_period=None` means "first call" and always applies, which
+    is what gives boot its opening brightness for free.
+
+    **Writing settings.BRIGHTNESS only on a CHANGE is the design, not an
+    optimisation.** Stamping it every tick would make a manual brightness
+    adjustment impossible — it would be overwritten within the second. On
+    a transition only, the contract is the one every OS's automatic dark
+    mode already teaches: it switches you, you may override, and the next
+    switch wins. (_cycle_brightness is unbound in v1 — the single tap is
+    CYCLE — so nothing overrides it *today*; this is what makes rebinding
+    it later a config change rather than a redesign.)
+
+    Disabled → returns None forever, and never touches BRIGHTNESS at all,
+    so a config that doesn't want this keeps whatever it set.
+    """
+    if not DAY_NIGHT_ENABLED:
+        return None
+    period = daylight_period(minutes)
+    if period != last_period:
+        settings.BRIGHTNESS = (
+            DAY_BRIGHTNESS if period == "day" else NIGHT_BRIGHTNESS
+        )
+        # Announced because a brightness change with no cause looks like a
+        # fault — the same reason the sleep transition prints (below) and
+        # the same reason quiet hours does.
+        print("  [%s] brightness → %.2f"
+              % (period.upper(), settings.BRIGHTNESS))
+    return period
+
+
 def _render_dispatch(contract, signal, signal_b):
     """Pick render() vs render_dual() based on whether signal_b is given AND
     the contract actually implements render_dual — phase-2 bidirectional
@@ -224,6 +266,7 @@ def _run_classic_loop(schedule_data, led):
     heartbeat = False
     DIVIDER = "─" * 50
     loop_count = 0
+    daylight = None  # last applied day/night period; None = not yet applied
 
     while True:
         heartbeat = not heartbeat
@@ -233,6 +276,10 @@ def _run_classic_loop(schedule_data, led):
         hb = "●" if heartbeat else "○"
 
         now, weekday = _local_time_or_die()
+        # Day/night applies here too. It is a property of the time, not of
+        # the interaction model, so an IMU-less deployment gets it as well
+        # — the omission would be silent and only visible at noon.
+        daylight = _apply_daylight(now, daylight)
         period = current_period(weekday)
         # Line 0 always: this loop has no gestures, so there is nothing to
         # cycle with. A multi-line schedule still works, it just shows the
@@ -356,6 +403,7 @@ def _run_interactive_loop(schedule_data, led):
 
     last_refresh = None
     now = 0
+    daylight = None  # last applied day/night period; None = not yet applied
     signal = LeaveSignal([])
     signal_b = None
 
@@ -372,6 +420,9 @@ def _run_interactive_loop(schedule_data, led):
             hb = "●" if heartbeat else "○"
 
             now, weekday = _local_time_or_die()
+            # Immediately after the clock read, and before anything renders:
+            # the very first pass is also what gives boot its brightness.
+            daylight = _apply_daylight(now, daylight)
             period = current_period(weekday)
             line = lines[line_index % len(lines)]
             directions = line.get(period, {})
