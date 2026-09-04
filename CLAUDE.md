@@ -66,6 +66,8 @@ When writing Rust code in this repo, take a teaching role:
 | Tap-gesture recognition + ACK/CONFIRM LED jolt + tap-to-cycle-line — **shipped and running on real hardware in the bottle** (XIAO C3 + IMU + 21-LED strip) | `docs/contracts/gesture-envelope.md` |
 | IMU tap wake/sleep interaction (original design — partially superseded by `gesture-envelope.md`, still correct for its state-machine/safety-gate patterns) | `docs/contracts/wake-interaction.md` |
 | LED status-message vocabulary (errors, acknowledgments — design only) | `docs/contracts/led-status-messages.md` |
+| **The light language** — struck-glass metaphor, the five motion words, the ACK-is-the-transition restructure, tilt input (design only, nothing implemented) | `docs/contracts/light-language.md` |
+| Shopping memo: strip load switch + battery pack (requirements, Japanese search terms, two traps) | `docs/shopping-battery-power.md` |
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |

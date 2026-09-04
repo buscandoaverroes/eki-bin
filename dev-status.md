@@ -858,6 +858,52 @@ aging, drift out of spec).
 
 ---
 
+## Next up — agreed order (2026-09-04)
+
+Set after the 24-hour field session on the production unit
+(`docs/insights.md` §14). Firmware work is serial; the hardware track runs
+in parallel because it is gated on a shop trip, not on code.
+
+**Firmware, in order:**
+
+1. **Day/night split.** Retire quiet hours' brightness role; keep it as a
+   deep-night gate. Fixed 07:00–17:00 first (free — needs only
+   `minutes_since_midnight`), seasonal drift second (needs day-of-year,
+   which means widening `local_time()`; see §14).
+2. **The struck-glass gesture refactor** — `docs/contracts/light-language.md`.
+   Sandbox before committing: the motion sandbox (five words, linear vs.
+   eased) and the tilt sandbox, both extending `led_sandbox.py`. Includes
+   the no-op-tap defect: `_handle_tap` plays CONFIRM before `main.py` knows
+   whether there is another line to cycle to.
+
+**Hardware, in parallel:**
+
+3. **Strip load switch + battery pack** — `docs/shopping-battery-power.md`.
+   Acquisition-gated. The load switch is the whole ball game: 4 days → 55
+   days, and it is a sub-dollar part. **Not** the Nordic/Rust migration —
+   the power budget puts MCU sleep current at ~19% across a 10×
+   improvement, so that migration is a destination, not the unlock.
+
+**Deferred with a reason, not dropped:**
+
+- **ESN (echo state network) gesture classification.** Converges with the
+  battery work rather than competing with it: run the reservoir *after* the
+  IMU's hardware wake, on the captured window, never continuously — which
+  is the `trigger → capture → classify` shape already built. Its real prize
+  is that only the readout is trained, so per-unit calibration (already the
+  documented expectation, `insights.md` §8) could become a ten-tap ritual
+  the recipient performs. That is a givability feature. Also the enabler
+  for **pick-up as an input**, which was never rejected — it currently sits
+  inside the pooled handling-noise class the 98.4% threshold rejects, so
+  promoting it makes this a three-class problem, exactly the case §8 found
+  a model earns its complexity on.
+- **Clock mode**, verification variant first (blink the digits; no geometry
+  prerequisite, serves the drift work). The ambient variant — **"the modern
+  solar dial"**, arc as minute hand plus one bright hour LED — waits on the
+  vessel/mount decision it depends on.
+
+---
+
 ## Open decisions
 
 | Decision | Status | Notes |
