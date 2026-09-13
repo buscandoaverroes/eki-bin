@@ -42,9 +42,9 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
-    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_COLOR,
-    GOODNIGHT_ENABLED, GOODNIGHT_MS, MORNING_COLOR, MORNING_LEAD_MINUTES,
-    MORNING_MS, MORNING_WAKE_ENABLED, MOTION_AROUND_MS,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
+    GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
+    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS,
     MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
@@ -497,7 +497,8 @@ def _run_interactive_loop(schedule_data, led):
                         tap_state.wake(tick_now)
                         morning_armed = False
                         if MOTION_ENABLED:
-                            motion.play("outward", MORNING_COLOR, MORNING_MS)
+                            motion.play_sequence(MORNING_WAVES,
+                                                 gap_ms=MORNING_GAP_MS)
                         last_render = None
 
         # ── fast task: gesture trigger, polled at GESTURE_POLL_MS ─────
@@ -569,8 +570,8 @@ def _run_interactive_loop(schedule_data, led):
                             print("  [GOODNIGHT] nothing within %d min — "
                                   "next in %d" % (horizon.horizon_minutes(),
                                                   min(signal.ttls or [0])))
-                            motion.play("outward", GOODNIGHT_COLOR,
-                                        GOODNIGHT_MS)
+                            motion.play_sequence(GOODNIGHT_WAVES,
+                                                 gap_ms=GOODNIGHT_GAP_MS)
                             tap_state.sleep(tick_now)
                             morning_armed = True
                             last_render = None

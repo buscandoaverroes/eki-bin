@@ -1771,3 +1771,26 @@ matters most, so it should be counted rather than assumed free.
 purely "is the next train beyond the horizon" ones. The second is simpler
 and needs no notion of "tomorrow"; the first is what a person would
 actually mean.
+
+### Built as a sunset and a sunrise (2026-09-14)
+
+Three waves each rather than one, and the reason is a distinction worth
+keeping: **one wave is a gesture, three are a ceremony.** A single
+`outward` is already the ACK — the same word at the same speed cannot also
+mean "goodbye". Duration and repetition are what separate them.
+
+So goodnight slows, dims and cools across its three; morning speeds up,
+brightens and warms. They are the same physics run in opposite directions,
+which is also the answer to "why three" — dusk has stages.
+
+**The colour drift is the part this vessel will not show, and that is
+fine.** §12 measured amber glass as a blue-cut filter, so goodnight's third
+wave arrives deep and dark rather than blue — which happens to be exactly
+what a final wave should look like. The meaning is carried by duration and
+decay, which §15 found pass through diffusion intact. The ceremony
+therefore **degrades gracefully rather than breaking**: a clear bottle gets
+a sunset, a brown one gets a fade, and neither depends on the other.
+
+That is a design property worth reusing. Anywhere hue carries meaning in
+this project, something else should carry it too — not as redundancy, but
+because the vessel is a variable and hue is the channel it takes away.

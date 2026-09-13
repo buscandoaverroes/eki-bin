@@ -917,6 +917,20 @@ in parallel because it is gated on a shop trip, not on code.
   seen opening from its edge as the first train crosses the horizon — a
   scheduling change, not an animation.
 
+**Re-open: can the XIAO RP2350's third indicator actually be turned off?**
+
+`insights.md` §13 closed this as "probably the charge LED with no cell
+attached, not software-controllable — tape or desolder it before sealing a
+unit in glass", after `onboard_led_test.py` walked every controllable LED
+through known states and the faint red stayed lit through all of them.
+**New information suggests that conclusion was wrong** (2026-09-14, to be
+written up). Worth re-testing, because the current answer is a physical
+modification on every unit before it goes in a bottle — and a jar with a
+stray LED glowing inside it is a gadget, not an ambient object.
+
+Start from `make onboard-led-test` and `pinouts/xiao_rp2350.md`; whatever
+the answer turns out to be, it belongs in both.
+
 **Deferred with a reason, not dropped:**
 
 - **ESN (echo state network) gesture classification.** Converges with the

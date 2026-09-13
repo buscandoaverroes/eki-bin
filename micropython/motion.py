@@ -162,6 +162,22 @@ WORDS = {"inward": inward, "outward": outward, "around": around,
          "shake": shake, "breathe": breathe}
 
 
+def play_sequence(waves, word="outward", gap_ms=0, frame_ms=20):
+    """Play several waves back to back. Each is (color, ms, peak).
+
+    Exists because one wave is a gesture and three are a CEREMONY — the
+    difference is not decoration. A single `outward` is an ACK; the same
+    word three times, each slower and dimmer, is a thing ending. Duration
+    and decay carry that on their own, which matters in a vessel that
+    filters hue (insights.md §12): the colour drift is the part a clear
+    bottle gets and an opaque brown one mostly does not, so it is never
+    the only thing saying it."""
+    for color, ms, peak in waves:
+        play(word, color, ms, frame_ms=frame_ms, peak=peak)
+        if gap_ms:
+            time.sleep_ms(gap_ms)
+
+
 def play(word, color, ms, frame_ms=20, **kwargs):
     """Run one word to completion, then clear. BLOCKING.
 

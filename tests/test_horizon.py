@@ -143,3 +143,54 @@ def test_a_scheduled_wake_takes_the_same_path_as_a_tap(load_main):
     tapped.resolve(0, True)
     scheduled.wake(0)
     assert (tapped.awake, tapped.phase) == (scheduled.awake, scheduled.phase)
+
+
+# ── the ceremonies as sequences ──────────────────────────────────
+
+
+def test_goodnight_is_a_sunset_and_morning_a_sunrise(load_main):
+    """Three waves each, and the shape is the meaning: goodnight slows,
+    dims and cools; morning speeds up, brightens and warms. Duration and
+    decay carry it on their own, because the colour drift is exactly the
+    part an amber vessel filters out (§12) — so neither ceremony may
+    depend on hue to be legible."""
+    main = load_main()
+    sys.modules.pop("settings", None)
+    st = importlib.import_module("settings")
+
+    night = st.GOODNIGHT_WAVES
+    assert len(night) == 3
+    assert [w[1] for w in night] == sorted(w[1] for w in night), "must slow"
+    assert [w[2] for w in night] == sorted((w[2] for w in night),
+                                           reverse=True), "must dim"
+
+    morning = st.MORNING_WAVES
+    assert len(morning) == 3
+    assert [w[1] for w in morning] == sorted((w[1] for w in morning),
+                                             reverse=True), "must speed up"
+    assert [w[2] for w in morning] == sorted(w[2] for w in morning), "must brighten"
+
+
+def test_the_ceremonies_are_mirror_images(load_main):
+    """Sunset and sunrise are the same physics run in opposite directions,
+    which is why three waves and not two or four — dusk has stages."""
+    main = load_main()
+    sys.modules.pop("settings", None)
+    st = importlib.import_module("settings")
+    night_peaks = [w[2] for w in st.GOODNIGHT_WAVES]
+    morning_peaks = [w[2] for w in st.MORNING_WAVES]
+    assert night_peaks[0] == morning_peaks[-1] == 1.0
+    assert night_peaks[-1] < night_peaks[0]
+    assert morning_peaks[0] < morning_peaks[-1]
+
+
+def test_play_sequence_plays_every_wave_in_order(load_main):
+    main = load_main(NUM_LEDS=21)
+    sys.modules.pop("motion", None)
+    m = importlib.import_module("motion")
+    seen = []
+    m.play = lambda word, color, ms, frame_ms=20, **kw: seen.append(
+        (word, color, ms, kw.get("peak")))
+    m.play_sequence((((1, 2, 3), 100, 0.5), ((4, 5, 6), 200, 1.0)))
+    assert seen == [("outward", (1, 2, 3), 100, 0.5),
+                    ("outward", (4, 5, 6), 200, 1.0)]
