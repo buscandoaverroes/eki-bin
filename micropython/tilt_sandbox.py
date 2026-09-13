@@ -71,6 +71,42 @@ RELEASE_MS = 3500           # this long inside the deadzone ends the session
 LIVE_PRINT_MS = 250         # throttled telemetry — without it you cannot
                             #   tell "not working" from "already at a rail"
 
+# ── Response curve ───────────────────────────────────────────────
+# Fine control near upright, fast at the extremes — a small tilt should
+# nudge, a big one should move. A LINEAR map does not give that: at half
+# tilt it already runs at half rate, which is far too fast to aim with.
+#
+# The standard fix is an expo curve, the same one RC transmitters use on
+# a stick: raise the normalised input to a power, keeping the sign. At
+# CURVE = 2.5, half tilt runs at 18% rate rather than 50%, while full
+# tilt still reaches full rate — so the useful range is spread across the
+# whole travel instead of being crammed into the first few degrees.
+CURVE = 2.5
+
+# ── Rejecting taps that look like tilt ───────────────────────────
+# Found by stress test (2026-09-13): tapping the bottle hard while it sat
+# FLAT on the table spoofed a tilt roughly one time in five — engaging a
+# session and reading 30-40° that never physically happened.
+#
+# The cause is that an accelerometer measures gravity PLUS whatever else
+# is accelerating it, and a tap is briefly much larger than gravity. Once
+# normalised, that sum points somewhere far from "down".
+#
+# The discriminator is exact and needs no tuning of time constants:
+# **tilting preserves the magnitude, accelerating does not.** A bottle
+# held at any angle, not moving, still reads |a| = 1 g. A tap reads well
+# above (and, on the rebound, below) it. So reject any sample that does
+# not have gravity's magnitude BEFORE using its direction.
+#
+# Worth noting for later: this is the tap recognizer's test run backwards.
+# Taps want |a| >> 1 g, tilt wants |a| ≈ 1 g — one sensor stream, split by
+# magnitude, so the two gestures can coexist without fighting.
+G_TOLERANCE = 0.25          # accept |a| within ±25% of 1 g
+SMOOTH_ALPHA = 0.15         # EMA on the gravity direction, ~150ms at 40Hz —
+                            #   catches what slips past the magnitude gate
+ENGAGE_SAMPLES = 4          # consecutive good samples past the deadzone
+                            #   before a session may start
+
 MIN_BRIGHT = 0.03           # never all the way off — a dark strip is
 MAX_BRIGHT = 0.90           #   indistinguishable from a fault
 POLL_MS = 25
@@ -196,6 +232,9 @@ def run():
     last_err = time.ticks_ms()
     last_ms = time.ticks_ms()
     last_live = time.ticks_ms()
+    g_filt = None       # smoothed gravity direction
+    rejected = 0        # samples the magnitude gate threw away
+    past_deadzone = 0   # consecutive good samples past it — engage debounce
 
     try:
         while True:
@@ -208,7 +247,30 @@ def run():
                 time.sleep_ms(POLL_MS)
                 continue
 
-            g_hat, _ = _norm(tuple(c * _G_LSB for c in raw))
+            sample_hat, mag_g = _norm(tuple(c * _G_LSB for c in raw))
+
+            # GATE 1 — magnitude. Not gravity, not orientation: drop it
+            # before its direction can be believed. See G_TOLERANCE.
+            if abs(mag_g - 1.0) > G_TOLERANCE:
+                rejected += 1
+                time.sleep_ms(POLL_MS)
+                continue
+
+            # GATE 2 — smoothing. A glancing knock can land inside the
+            # magnitude window; an EMA on the DIRECTION costs one line and
+            # makes a single bad sample a fraction of a degree instead of
+            # a whole engage. Tilt is slow (~1s), so this loses nothing
+            # real.
+            if g_filt is None:
+                g_filt = sample_hat
+            else:
+                g_filt = _norm((
+                    g_filt[0] + (sample_hat[0] - g_filt[0]) * SMOOTH_ALPHA,
+                    g_filt[1] + (sample_hat[1] - g_filt[1]) * SMOOTH_ALPHA,
+                    g_filt[2] + (sample_hat[2] - g_filt[2]) * SMOOTH_ALPHA,
+                ))[0]
+            g_hat = g_filt
+
             if rest_hat is None:
                 rest_hat = g_hat        # first good sample is "upright"
                 _render()
@@ -235,11 +297,23 @@ def run():
                         session = None
                         quiet_since = None
                         print("   (released — tilt again to start over)\n")
+                past_deadzone = 0
                 _render()
                 time.sleep_ms(POLL_MS)
                 continue
 
             quiet_since = None
+
+            # GATE 3 — debounce. One good sample past the deadzone is not
+            # a tilt; four in a row (~100ms) is. Cheap, and it is the last
+            # thing standing between a knock that survives both gates and
+            # a spuriously captured axis.
+            past_deadzone += 1
+            if session is None and past_deadzone < ENGAGE_SAMPLES:
+                _render()
+                time.sleep_ms(POLL_MS)
+                continue
+
             if session is None:
                 session = _Session(settings.BRIGHTNESS)
                 base = settings.BRIGHTNESS
@@ -255,8 +329,8 @@ def run():
             # makes one axis carry both directions.
             along = _dot(perp_hat, session.axis)
             span = max(1.0, FULL_TILT_DEG - DEADZONE_DEG)
-            amount = (deg - DEADZONE_DEG) / span
-            amount = max(-1.0, min(1.0, amount)) * along * sign
+            amount = max(0.0, min(1.0, (deg - DEADZONE_DEG) / span))
+            amount = (amount ** CURVE) * along * sign   # expo — see CURVE
 
             if MODE == "rate":
                 settings.BRIGHTNESS += RATE_PER_SEC * amount * (dt_ms / 1000.0)
@@ -291,7 +365,9 @@ def run():
         if session is not None:
             session.report(settings.BRIGHTNESS)
         leds.clear()
-        print("\n  cleared — BRIGHTNESS left at %.2f (in RAM only; config.py"
+        print("\n  %d samples rejected by the magnitude gate (|a| outside"
+              " 1g ±%.0f%%)" % (rejected, G_TOLERANCE * 100))
+        print("  cleared — BRIGHTNESS left at %.2f (in RAM only; config.py"
               " is untouched)" % settings.BRIGHTNESS)
 
 

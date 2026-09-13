@@ -920,6 +920,42 @@ in parallel because it is gated on a shop trip, not on code.
 
 ---
 
+## Two outstanding discussions, flagged 2026-09-13
+
+Both surfaced while bringing up the second unit. Neither is scheduled.
+
+### A wiring harness
+
+Fixing the IMU to the bottle's base took ~20 minutes, almost all of it
+managing loose wires through the mouth with chopsticks. Taping the bundle
+helped and was still a delicate operation nobody wants to repeat.
+
+This gets worse, not better: the battery build adds a pack, a load switch
+and a gated strip rail, all through the same opening. **The bottle-mouth
+measurement the shopping memo already asks for constrains the harness as
+much as it constrains the battery holder** — same trip, same number.
+
+### A provisioning manifest
+
+There are now multiple DS3231s, and **nothing distinguishes them.** The
+chip has no unique ID register and no general-purpose SRAM, so identity
+cannot simply be read off it.
+
+The immediate hazard is narrow and concrete: `data/rtc-drift.jsonl` has
+`epoch` but **no unit field**, so one `make rtc-drift` run against the
+wrong chip silently pollutes bottle-01's fit — the drift measurement that
+has been accumulating since the epoch-1 re-seed. A `--unit` flag on
+`rtc_drift.py` is the natural first piece and would close that specific
+hole without settling the larger question.
+
+The larger question is a record per physical unit and per sub-assembly,
+which the gift-registry proposal below already half-describes. It now has
+company: `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, the IMU mount
+location, and `TAP_ENERGY_THRESHOLD` are all per-unit facts established by
+hand and impossible to re-derive from code.
+
+---
+
 ## Open decisions
 
 | Decision | Status | Notes |
