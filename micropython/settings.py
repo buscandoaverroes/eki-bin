@@ -465,6 +465,46 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 
+# ── Horizon ceremonies: goodnight, and the morning flower ────────────
+# insights.md §17. A lit anchor is a PROMISE — "here is the station, here
+# is what's coming". Rendering it with nothing on the arms is a promise
+# with nothing behind it, and reads as a broken jar.
+#
+# ⚠ NOT `breathe`, and the reason is structural. light-language.md §3 is
+# explicit that breathe is the one word whose energy never decays, which
+# is exactly why it means UNRESOLVED. "The next train is at 05:37" is
+# completely resolved — spending the error verb on the most ordinary state
+# a timetable has would cost the vocabulary its only word for something
+# being genuinely wrong.
+#
+# Goodnight is `outward`, slowed: energy leaving the station and
+# dissipating. No sixth word needed.
+GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
+GOODNIGHT_MS = getattr(config, "GOODNIGHT_MS", 2600)  # slow on purpose —
+#   the same gesture at speed is an ACK; at this length it is a farewell
+GOODNIGHT_COLOR = getattr(config, "GOODNIGHT_COLOR", (200, 90, 0))  # deep amber.
+#   ⚠ NOT blue or purple, however much "goodnight" suggests them: §12
+#   measured amber glass as a BLUE-CUT FILTER, so a cool colour arrives
+#   dark or not at all. The winding-down is carried by SLOWNESS and FADE,
+#   which diffusion passes through intact (§15). A clear vessel can afford
+#   (0, 60, 200) and should probably use it.
+
+# The morning flower. ⚠ A SCHEDULING feature, not an animation one: the
+# flower already happens — a train crossing the horizon lights an arm's
+# outermost LED and works inward, which is the ordinary renderer doing its
+# job. It has never been seen because the display is asleep by then.
+#
+# ⚠ COSTS ONE EXTRA AWAKE WINDOW PER DAY. The power budget puts taps/day
+# at the largest single lever (roadmap.md), so this is not free on a
+# battery build — it is one more wake against the six that model assumes.
+MORNING_WAKE_ENABLED = getattr(config, "MORNING_WAKE_ENABLED", False)
+MORNING_LEAD_MINUTES = getattr(config, "MORNING_LEAD_MINUTES", 1)  # wake this
+#   long BEFORE the first train crosses the horizon, so the anchor is
+#   already lit when the first pixel arrives rather than appearing with it
+MORNING_COLOR = getattr(config, "MORNING_COLOR", (255, 200, 0))  # bright yellow
+#   — survives amber glass, being on the red-green axis the vessel keeps
+MORNING_MS = getattr(config, "MORNING_MS", 1400)
+
 # ── The light language: motion words ─────────────────────────────────
 # light-language.md §3. Motion is the one expressive channel not already
 # carrying meaning — position is time-to-leave, hue is line identity (and

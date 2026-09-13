@@ -465,11 +465,30 @@ class _TapCycleState:
         if not valid or not self.accepts_input():
             return None
         if not self.awake:
-            self.awake = True
-            self.phase = "waking"
-            self.phase_started_at = now_ms
+            self.wake(now_ms)
             return "wake"
         return "cycle"
+
+    def wake(self, now_ms):
+        """Enter the waking phase without a tap.
+
+        Split out of resolve() so a SCHEDULED wake (horizon.py's morning
+        flower) takes exactly the same path a tap does, rather than a
+        parallel one that would drift. The caller decides why; this only
+        knows how."""
+        self.awake = True
+        self.phase = "waking"
+        self.phase_started_at = now_ms
+
+    def sleep(self, now_ms):
+        """Go dark immediately, skipping the rest of AWAKE_MINUTES.
+
+        For a wake that resolves to "nothing to show tonight": the
+        ceremony is the answer, and staying lit afterwards would be the
+        empty-promise render the ceremony exists to replace."""
+        self.awake = False
+        self.phase = "asleep"
+        self.awake_until = None
 
     def advance(self, now_ms):
         """Call every tick — advances WAKING->SETTLING->AWAKE on their own

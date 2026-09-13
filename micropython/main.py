@@ -42,7 +42,9 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
-    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, MOTION_AROUND_MS,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_COLOR,
+    GOODNIGHT_ENABLED, GOODNIGHT_MS, MORNING_COLOR, MORNING_LEAD_MINUTES,
+    MORNING_MS, MORNING_WAKE_ENABLED, MOTION_AROUND_MS,
     MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
@@ -51,6 +53,7 @@ from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLO
     SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
     WAKE_INTERACTION_ENABLED)
 from signals import (LeaveSignal, leave_signal, next_departures)
+import horizon
 import motion
 import palette
 from tilt import TiltController
@@ -408,6 +411,10 @@ def _run_interactive_loop(schedule_data, led):
     last_refresh = None
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
+    morning_armed = False  # self-arming: set when we SEE everything out of
+    #   reach, cleared when we act on it. No calendar, no "has it fired
+    #   today" bookkeeping — the condition that arms it cannot recur until
+    #   the trains have gone out of reach again, which is once a night.
     tilt_ctl = TiltController() if TILT_ENABLED else None
     tilt_ms = time.ticks_ms()
     signal = LeaveSignal([])
@@ -474,6 +481,25 @@ def _run_interactive_loop(schedule_data, led):
                 else:
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
+            # ── the morning flower ────────────────────────────────
+            # Arms itself whenever everything is out of reach, and fires
+            # when the soonest train is about to cross in. The flower is
+            # NOT drawn here: waking is the whole feature, and the
+            # ordinary renderer opens the arc from its outer edge inward
+            # over the following minutes (insights.md §17).
+            if MORNING_WAKE_ENABLED and not tap_state.awake:
+                if horizon.beyond_horizon(signal, signal_b):
+                    morning_armed = True
+                elif morning_armed:
+                    _mins = horizon.minutes_until_visible(signal, signal_b)
+                    if _mins is None or _mins <= MORNING_LEAD_MINUTES:
+                        print("  [MORNING] first train crossing into view")
+                        tap_state.wake(tick_now)
+                        morning_armed = False
+                        if MOTION_ENABLED:
+                            motion.play("outward", MORNING_COLOR, MORNING_MS)
+                        last_render = None
+
         # ── fast task: gesture trigger, polled at GESTURE_POLL_MS ─────
         # This is why the loop ticks faster than it renders: the
         # recognizer's validated accuracy was measured at 4ms/240Hz, and
@@ -535,6 +561,19 @@ def _run_interactive_loop(schedule_data, led):
                         # response is now correct BY CONSTRUCTION, because
                         # _handle_tap was told whether the action exists
                         # before it chose how to answer.
+                        if (response == "wake" and GOODNIGHT_ENABLED
+                                and horizon.beyond_horizon(signal, signal_b)):
+                            # Trains exist, none within reach. Say so, then
+                            # go dark — staying lit would render the empty
+                            # promise this exists to replace.
+                            print("  [GOODNIGHT] nothing within %d min — "
+                                  "next in %d" % (horizon.horizon_minutes(),
+                                                  min(signal.ttls or [0])))
+                            motion.play("outward", GOODNIGHT_COLOR,
+                                        GOODNIGHT_MS)
+                            tap_state.sleep(tick_now)
+                            morning_armed = True
+                            last_render = None
                         if response == "cycle":
                             line_index = (line_index + 1) % len(lines)
                             # Recompute NOW rather than waiting up to

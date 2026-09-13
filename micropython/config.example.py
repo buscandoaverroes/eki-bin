@@ -381,6 +381,34 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # DAY_BRIGHTNESS = 0.30
 # NIGHT_BRIGHTNESS = 0.15
 #
+# ── Goodnight, and the morning flower ──────────────────────────────
+# For the hours when trains exist but none is near enough to display. A
+# lit anchor is a promise — rendering it with nothing on the arms reads as
+# a broken jar. insights.md §17.
+#
+# GOODNIGHT: a tap that resolves to "nothing within reach" gets a slow
+# `outward` — energy leaving the station — and then the strip goes dark
+# instead of sitting lit. Distinct from the no-data acknowledgment,
+# because "come back tomorrow" and "you missed the last train" are
+# different facts.
+GOODNIGHT_ENABLED = True
+# GOODNIGHT_COLOR = (200, 90, 0)   # deep amber. ⚠ NOT blue/purple however
+#                                  #   much the word suggests them: §12
+#                                  #   measured amber glass as a BLUE-CUT
+#                                  #   filter. A clear vessel can use
+#                                  #   (0, 60, 200) and probably should.
+#
+# MORNING: wake just before the first train crosses into view, so the arc
+# is seen opening from its outer edge inward. ⚠ The flower is not an
+# animation — it is the ordinary renderer, watched at a moment the display
+# is normally asleep for. Costs one extra awake window per day, which is
+# not free on a battery build (taps/day is the power budget's largest
+# lever).
+MORNING_WAKE_ENABLED = True
+# MORNING_LEAD_MINUTES = 1         # wake this long before the crossing
+# MORNING_COLOR = (255, 200, 0)    # bright yellow — on the red-green axis
+#                                  #   amber glass keeps
+
 # ── The light language: motion instead of flashes ──────────────────
 # With this on, a tap's CONFIRM stops being a flash and becomes a word:
 #   wake from asleep        → `outward` from the anchor, ∝ strike force
