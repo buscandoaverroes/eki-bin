@@ -22,6 +22,8 @@
 #   make run               — run main.py without saving (good for iteration)
 #   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
+#   make motion-sandbox    — the five motion words, on real glass
+#   make tilt-sandbox      — tilt-to-adjust; run it IN THE DARK
 #   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
 #                             handling_test.py data files on the device's flash
 #
@@ -168,6 +170,32 @@ low-pwm-test: _check-mpremote
 hue-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/hue_test.py
 
+# The five words of the light language, on real glass — the motion
+# vocabulary gets DECIDED here before any of it is wired into main.py
+# (docs/contracts/light-language.md). Runs the demo: all five in order,
+# labelled. `ab("around")` is the one that matters most — eased vs linear,
+# i.e. "physical rotation" vs "loading spinner". Edit ACTIVE at the bottom
+# of the file, or call run/ab/force_demo from the REPL.
+.PHONY: motion-sandbox
+motion-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/motion_sandbox.py
+
+# Tilt as a continuous input — the bottle-native alternative to sliding a
+# finger up and down it (light-language.md §6). ⚠ RUN IT IN THE DARK: the
+# open question is whether "you must brighten before you can dim" is a
+# glare flash you can live with, and at noon it will feel fine and tell
+# you nothing. Every session prints its overshoot.
+#
+# TWO MODES. Set ACTIVE at the bottom of the file:
+#   ACTIVE = run          the overshoot test (default, whole ring)
+#   ACTIVE = curve_test   the CURVE tuning test — land a bar on a marker,
+#                         timed, across several curve values. Turns a feel
+#                         parameter into a measurement instead of an
+#                         edit-reflash-retry loop.
+.PHONY: tilt-sandbox
+tilt-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/tilt_sandbox.py
+
 # Which onboard indicators exist, and which can software actually turn off?
 # Walks every controllable LED through known states with pauses — anything
 # still lit during the ALL-OFF steps is hardwired to the rail and needs a
@@ -210,9 +238,18 @@ rtc-drift: _check-mpremote
 # Now the destructive one has to be asked for by name.
 #   make rtc-seed     WRITES        make rtc-test  reads    make rtc-drift  measures
 # Full procedure, including checking the HOST clock first: runbook §5b.
+#
+# ⚠ `rtc --set` IS CHAINED INTO THE SAME mpremote INVOCATION, not left to a
+# separate `make set-time`. The board's own RTC is VOLATILE — it has no
+# battery, and any reset returns it to 2021-01-01. Run as two commands there
+# is a window between them, and on 2026-09-13 a board really did reset inside
+# it: set-time confirmed 2026-09-13 21:10, and the very next command read
+# 2021-01-01 00:00:04 — four seconds of uptime. The seed guard caught it and
+# refused, which is the system working, but the window should not exist.
+# One invocation, no window. The guard stays as defence in depth.
 .PHONY: rtc-seed
 rtc-seed: _check-mpremote
-	$(MPREMOTE) run $(SRC_DIR)/rtc_seed.py
+	$(MPREMOTE) rtc --set run $(SRC_DIR)/rtc_seed.py
 
 # Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
 # (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,

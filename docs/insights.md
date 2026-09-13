@@ -1477,3 +1477,157 @@ force rather than merely suggest.
 
 Different goals, different designs, different blockers. Build (2) first;
 (1) waits on the vessel/mount decision that's open anyway.
+
+---
+
+## 15. The light language meets the glass (2026-09-13)
+
+First hardware session for `motion_sandbox.py` / `tilt_sandbox.py`. The
+vocabulary survived; two of the assumptions under it did not.
+
+### The words work, and the real question turned out to be brightness
+
+All five read clearly through the dark brown bottle — **distinguishable
+even at `BRIGHTNESS = 0.15`**, so §14's worry that diffusion might collapse
+them into one blur was unfounded. That reframes the open question: it is
+not *can you tell them apart*, it is *how present do you want the object to
+be*. A UX decision, not a legibility constraint.
+
+### Brightness: the opaque bottle compresses the whole scale
+
+| Value | Through thick dark brown |
+|---|---|
+| 0.35 | barely OK, even in low light |
+| 0.65 | totally fine |
+| 1.00 | brighter, but not unreasonable |
+| **0.50** | **settled on** |
+
+**The steps between those are perceptually smaller in an opaque bottle than
+in a clear one.** The glass compresses the top of the range — which is the
+same mechanism §12 measured for hue, arriving at the other end: thick amber
+removes information, so it takes a bigger change at the LED to make a
+visible change in the room.
+
+Practical consequence: **`BRIGHTNESS` tuning is coarse in a dark vessel and
+fine in a clear one.** Do not expect a value found in one to transfer, and
+do not expect three-decimal precision to be meaningful in brown glass.
+
+**What it costs on batteries**, from `scripts/power_budget.py` (gated strip,
+`AWAKE_MINUTES` 3, 6 taps/day, 3× AA alkaline):
+
+| `BRIGHTNESS` | per lit pixel | mAh/day | runtime |
+|---|---|---|---|
+| 0.15 | ~5 mA | 44.8 | **44.7 days** |
+| 0.50 | ~16.6 mA | 58.7 | **34.1 days** |
+
+**−24% for 3.3× the brightness** — affordable, and much cheaper than the
+linear intuition, because idle still dominates. Note the levers reorder as
+brightness rises: `taps/day 6→2` goes from +43% to +63%, while the MCU-sleep
+lever drops from +91% to +57%. **The brighter the display, the more the
+budget is about how often it wakes and the less it is about microamps** —
+which strengthens, rather than weakens, the roadmap's "chasing deep-sleep
+microamps is misallocated" finding.
+
+### Tilt: the response must be expo, not linear
+
+3.5 s to reverse through neutral felt right in the hand. The mapping did
+not. A linear map runs at half rate at half tilt, which is far too fast to
+aim with — and the useful control range collapses into the first few
+degrees off upright.
+
+What is wanted is what an RC transmitter does to a stick: **fine control
+near centre, full authority at the extremes.** Raise the normalised input
+to a power, keeping the sign. At `CURVE = 2.5`, half tilt gives 18% rate
+instead of 50%, and full tilt still reaches full rate.
+
+### Tilt: a hard tap spoofs a tilt, ~1 time in 5
+
+Stress test — bottle flat on the table, tapped hard on purpose — engaged
+sessions and read 30-40° of tilt that never physically happened.
+
+**The cause is definitional, not a bug in the filter:** an accelerometer
+measures gravity *plus* whatever else is accelerating it. A tap is briefly
+much larger than gravity, so the normalised sum points somewhere far from
+down.
+
+**The discriminator is exact and needs no tuned time constant: tilting
+preserves the magnitude, accelerating does not.** A bottle held at any
+angle, not moving, still reads |a| = 1 g. So test the magnitude *before*
+believing the direction, and drop anything outside 1 g ± 25%. Two cheaper
+gates behind it (an EMA on the direction; four consecutive samples past the
+deadzone before engaging) cover glancing knocks that land inside the window.
+
+> **Worth keeping: this is the tap recognizer's test run backwards.** Taps
+> want |a| ≫ 1 g, tilt wants |a| ≈ 1 g. One sensor stream, split by
+> magnitude — so the two gestures can coexist on one IMU without fighting,
+> and neither needs to know about the other.
+
+### Tilt neutral: the discriminator is duration, not depth
+
+Three rounds of getting this wrong, and the third one is the useful one.
+
+The reference for "upright" was first captured once at startup, which made
+neutral whatever orientation happened to be under the sensor at that
+instant — producing a bottle flat on a table reading 8.1° forever, and
+later sitting at a rock-steady 28.5°.
+
+The fix — release when the bottle stops moving, and re-learn neutral there
+— then **overshot into the same bug**: a hand holding a tilt to aim passed
+a 2° stillness test, so 25° became neutral.
+
+The proposed discriminator was *"a hand is never perfectly still; a bottle
+on a table is."* True in principle. **Measured, the instantaneous spread
+does not separate them:**
+
+| | jitter |
+|---|---|
+| table, set down | **0.11°** |
+| hand, held very steady | **0.12°** |
+| hand, typical aiming | 0.3-0.9° |
+
+Those overlap outright, so no threshold on spread alone can work — which
+is why tightening 2.0° → 0.4° moved *which* hand-steady moment slipped
+through rather than stopping it.
+
+**What separates them is how long the quiet lasts.** Across a full session
+the longest unbroken hand-held run was:
+
+| threshold | longest hand-held quiet run |
+|---|---|
+| 0.4° | 1.5 s |
+| 0.5° | 2.75 s |
+| 0.8° | 4.0 s |
+
+A bottle on a table is quiet for as long as you leave it. So the answer is
+a *longer* window, not a tighter one — 6 s at 0.5° clears every hand run
+measured.
+
+**And the cost of being wrong is asymmetric**, which is what justifies
+being conservative: releasing late is a mild annoyance, while re-baselining
+onto a hand-held angle poisons every reading afterwards. When two error
+directions cost different amounts, the threshold does not belong in the
+middle.
+
+### Telemetry that lies is worse than none
+
+`jitter 0.00°` was printed whenever the sample window was not yet full.
+It reads as *perfectly still* — the exact opposite of *no data yet* — and
+it appeared at the start of every session, which is precisely when the
+reference is most suspect. Now prints `--`.
+
+Same lesson as the rail indicator two days earlier: an instrument added to
+explain a behaviour has to be read as carefully as the behaviour.
+
+### MicroPython compiles docstrings away
+
+`demo()` labelled each word with `fn.__doc__` and died at the first one:
+`AttributeError: 'function' object has no attribute '__doc__'`. Unless the
+firmware was built with `MICROPY_ENABLE_DOC_STRING`, `__doc__` is not empty
+— **the attribute does not exist.**
+
+**The host suite structurally cannot catch this class**: pytest runs
+CPython, where `__doc__` always exists. Anything read off a function or
+class object at runtime — `__doc__`, `__name__`, `__module__` — needs
+checking on device, or replacing with an explicit table. The test that
+replaced it checks the table stays in step with what it describes, which is
+the part a host *can* verify.

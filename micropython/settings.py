@@ -380,6 +380,76 @@ HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
 QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
 QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 
+# ── Day/night brightness profile ─────────────────────────────────────
+# NOT quiet hours, and the distinction is the point (insights.md §14):
+#
+#   quiet hours          → MAY the display light up at all?
+#   day/night (here)     → HOW BRIGHT when it does?
+#
+# One BRIGHTNESS cannot serve a room that swings two to three orders of
+# magnitude between noon and midnight. Raising it to fix daylight makes
+# night worse, and night's failure isn't "too bright" — it's glare
+# destroying the diffusion the whole aesthetic depends on (insights.md §3).
+# The two ends want different values, so it has to be a function of time.
+#
+# ⚠ DEFAULTS ARE DELIBERATELY NEUTRAL. Both values default to BRIGHTNESS,
+# so an existing device upgrading to this firmware behaves EXACTLY as
+# before until DAY_BRIGHTNESS is actually raised (design-principle #9).
+# The mechanism ships on; the profile ships flat. Raising DAY_BRIGHTNESS is
+# the whole point, and it is tuned on the real glass, not guessed here —
+# same rule the colour work established (insights.md §12).
+DAY_NIGHT_ENABLED = getattr(config, "DAY_NIGHT_ENABLED", True)
+DAY_START = getattr(config, "DAY_START_HOUR", 7) * 60
+DAY_END = getattr(config, "DAY_END_HOUR", 17) * 60
+DAY_BRIGHTNESS = getattr(config, "DAY_BRIGHTNESS", BRIGHTNESS)
+NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
+# Fixed hours only, on purpose. Seasonal drift needs day-of-year, which
+# local_time() currently discards — see insights.md §14 for why that makes
+# it a separate, larger step rather than a bigger number here.
+
+# ── Tilt-to-adjust ───────────────────────────────────────────────────
+# light-language.md §6; every constant below is a hardware finding, not a
+# preference — insights.md §15 has the measurements. Sliding a finger up
+# and down a bottle is the smartphone paradigm wearing a bottle; tilting
+# one is what bottles are FOR, and the IMU already provides it.
+#
+# ⚠ DEFAULT OFF. Shipping this on would change how an existing unit
+# behaves on upgrade (design-principle #9), and brightness is the one
+# setting a surprise change is most visible in.
+TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
+TILT_EXPO = getattr(config, "TILT_EXPO", 0.6)  # 0 = linear, 1 = pure cubic.
+#   0.6 chosen on hardware: linear acquired targets faster but landed an
+#   order of magnitude less precisely, and precision is what this control
+#   is for. Blended form, NOT a power curve — insights.md §15.
+TILT_RATE_PER_SEC = getattr(config, "TILT_RATE_PER_SEC", 0.20)  # at full tilt
+TILT_DEADZONE_DEG = getattr(config, "TILT_DEADZONE_DEG", 8.0)
+TILT_FULL_DEG = getattr(config, "TILT_FULL_DEG", 35.0)  # real sessions live
+#   in the 8-30° band; a bottle on a table is awkward past 35°, so full
+#   authority has to be reachable below it or the top of the curve is decor.
+TILT_FIRST_MEANS = getattr(config, "TILT_FIRST_MEANS", "up")  # or "down" —
+#   the first lean defines the axis AND this direction. "down" is the escape
+#   hatch if go-up-first ever produces a glare flash in a dark room.
+TILT_MIN_BRIGHT = getattr(config, "TILT_MIN_BRIGHT", 0.05)
+TILT_MAX_BRIGHT = getattr(config, "TILT_MAX_BRIGHT", 0.90)  # never fully off:
+#   a dark strip is indistinguishable from a fault, the same hazard quiet
+#   hours already prints a line about.
+# ── the gates. Do not loosen these without re-reading insights.md §15 ──
+TILT_G_TOLERANCE = getattr(config, "TILT_G_TOLERANCE", 0.25)  # accept |a|
+#   within ±25% of 1g. A hard tap spoofed a 30-40° tilt 1 time in 5 before
+#   this existed. Tilting preserves magnitude; accelerating does not.
+TILT_SMOOTH_ALPHA = getattr(config, "TILT_SMOOTH_ALPHA", 0.15)
+TILT_ENGAGE_SAMPLES = getattr(config, "TILT_ENGAGE_SAMPLES", 4)
+TILT_STILL_DEG = getattr(config, "TILT_STILL_DEG", 0.5)
+TILT_STILL_WINDOW = getattr(config, "TILT_STILL_WINDOW", 24)
+TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
+#   A table reads 0.11° of jitter and a very steady hand reads 0.12° — they
+#   OVERLAP, so no threshold on spread alone separates them. What separates
+#   them is duration: the longest hand-held quiet run measured was ~2.75s at
+#   0.5°, and a table is quiet for as long as you leave it. Releasing late
+#   is an annoyance; re-baselining onto a hand-held angle poisons every
+#   reading afterwards, so this errs long.
+TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
+
 # ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
 # "off"  — driven dark at boot. Right for a finished object: a jar with a
 #          stray LED glowing inside it is not ambient, it is a gadget.

@@ -20,8 +20,8 @@ import time
 
 from machine import I2C, Pin
 
-from settings import (RTC_I2C_ID, RTC_SCL_PIN, RTC_SDA_PIN, TIME_SOURCE,
-    _UTC_OFFSET_APPLIED)
+from settings import (DAY_END, DAY_START, RTC_I2C_ID, RTC_SCL_PIN,
+    RTC_SDA_PIN, TIME_SOURCE, _UTC_OFFSET_APPLIED)
 
 # ─────────────────────────────────────────────────────────────
 # DS3231 RTC (TIME_SOURCE="ds3231") — docs/hardware.md § DS3231
@@ -272,6 +272,33 @@ def _check_ds3231_at_boot():
 def current_period(weekday):
     """Return 'weekday' or 'weekend' for the given weekday index."""
     return "weekend" if weekday >= 5 else "weekday"
+
+
+def daylight_period(minutes):
+    """PURE: 'day' or 'night' for a minutes-since-midnight value.
+
+    Sibling of current_period() above — both answer "which named span of
+    time is this?", which is why they live together rather than one of
+    them sitting next to is_quiet() over in schedule.py.
+
+    The window is [DAY_START, DAY_END) and MAY wrap past midnight, tested
+    the same way is_quiet() tests its own wrap. Two degenerate cases fall
+    out of the arithmetic rather than needing to be special-cased, which
+    is what makes the feature switchable from config alone:
+
+        DAY_START_HOUR == DAY_END_HOUR  → empty window → always 'night'
+        DAY_START_HOUR 0, DAY_END_HOUR 24 → always 'day'
+
+    (QUIET_START_HOUR = 24 is the same trick, already used as the
+    quiet-hours escape hatch during testing.)
+    """
+    if DAY_START == DAY_END:
+        return "night"
+    if DAY_START < DAY_END:
+        return "day" if DAY_START <= minutes < DAY_END else "night"
+    # Wrapped window (e.g. a 20:00-06:00 "day"): the gap is the complement,
+    # so test with OR, not a range — same shape as is_quiet().
+    return "day" if (minutes >= DAY_START or minutes < DAY_END) else "night"
 
 
 def fmt_time(minutes):

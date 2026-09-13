@@ -866,15 +866,31 @@ in parallel because it is gated on a shop trip, not on code.
 
 **Firmware, in order:**
 
-1. **Day/night split.** Retire quiet hours' brightness role; keep it as a
-   deep-night gate. Fixed 07:00–17:00 first (free — needs only
-   `minutes_since_midnight`), seasonal drift second (needs day-of-year,
-   which means widening `local_time()`; see §14).
+1. ~~**Day/night split**, fixed hours~~ — ✅ **implemented 2026-09-04**,
+   `feature/day-night-brightness`, 12 host tests. `daylight_period()` in
+   `clock.py` (pure, sibling of `current_period`), `_apply_daylight()` in
+   `main.py` wired into **both** loops. **Edge-triggered on purpose:**
+   `settings.BRIGHTNESS` is written only when the period changes, so a
+   manual adjustment survives until the next boundary — an OS's automatic
+   dark-mode contract, and what keeps `_cycle_brightness` rebindable later
+   as a config change rather than a redesign. Defaults are neutral (both
+   values default to `BRIGHTNESS`), so the mechanism ships on and the
+   profile ships flat; raising `DAY_BRIGHTNESS` on real glass is the
+   remaining step. **Seasonal drift still open** — needs day-of-year,
+   which `local_time()` discards (§14).
 2. **The struck-glass gesture refactor** — `docs/contracts/light-language.md`.
-   Sandbox before committing: the motion sandbox (five words, linear vs.
-   eased) and the tilt sandbox, both extending `led_sandbox.py`. Includes
-   the no-op-tap defect: `_handle_tap` plays CONFIRM before `main.py` knows
-   whether there is another line to cycle to.
+   **Sandboxes drafted 2026-09-04** (`feature/light-language-sandbox`, 10
+   host tests): `make motion-sandbox` (the five words; `ab("around")` is
+   the eased-vs-linear deceleration test, `force_demo()` is `outward` ∝
+   strike force) and `make tilt-sandbox` (**run in the dark** — every
+   session prints its go-up-first overshoot). Both are NEW files, not
+   `led_sandbox.py` scenes: that file's unit is a fixed span whose
+   brightness varies, and four of the five words vary POSITION instead.
+   **Nothing is wired into `main.py` and nothing should be until the
+   bottle has answered.** Still open behind it: the ACK → gap → motion
+   sequence needs the chosen motion to exist first (`gesture_sandbox.py`),
+   and the no-op-tap defect — `_handle_tap` plays CONFIRM before `main.py`
+   knows whether there is another line to cycle to.
 
 **Hardware, in parallel:**
 
@@ -901,6 +917,47 @@ in parallel because it is gated on a shop trip, not on code.
   prerequisite, serves the drift work). The ambient variant — **"the modern
   solar dial"**, arc as minute hand plus one bright hour LED — waits on the
   vessel/mount decision it depends on.
+
+---
+
+## ⚠ Two outstanding discussions — PRIORITY, before more features
+
+Both surfaced while bringing up the second unit — forced by the work
+rather than chosen, which is the reason they rank above the feature queue.
+Neither is scheduled, and neither should be started as code until it has
+been talked through. Also listed at the top of `docs/roadmap.md`'s
+priority-ordered open questions and in `CLAUDE.md`'s current focus, so
+they cannot quietly fall off.
+
+### A wiring harness
+
+Fixing the IMU to the bottle's base took ~20 minutes, almost all of it
+managing loose wires through the mouth with chopsticks. Taping the bundle
+helped and was still a delicate operation nobody wants to repeat.
+
+This gets worse, not better: the battery build adds a pack, a load switch
+and a gated strip rail, all through the same opening. **The bottle-mouth
+measurement the shopping memo already asks for constrains the harness as
+much as it constrains the battery holder** — same trip, same number.
+
+### A provisioning manifest
+
+There are now multiple DS3231s, and **nothing distinguishes them.** The
+chip has no unique ID register and no general-purpose SRAM, so identity
+cannot simply be read off it.
+
+The immediate hazard is narrow and concrete: `data/rtc-drift.jsonl` has
+`epoch` but **no unit field**, so one `make rtc-drift` run against the
+wrong chip silently pollutes bottle-01's fit — the drift measurement that
+has been accumulating since the epoch-1 re-seed. A `--unit` flag on
+`rtc_drift.py` is the natural first piece and would close that specific
+hole without settling the larger question.
+
+The larger question is a record per physical unit and per sub-assembly,
+which the gift-registry proposal below already half-describes. It now has
+company: `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, the IMU mount
+location, and `TAP_ENERGY_THRESHOLD` are all per-unit facts established by
+hand and impossible to re-derive from code.
 
 ---
 

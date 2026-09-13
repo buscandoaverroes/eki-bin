@@ -190,7 +190,7 @@ SRC_DIR="${SRC_DIR:-micropython}"
 # cannot catch this, since they import from the source tree.
 # Order is irrelevant at upload time (every file lands before main.py
 # runs) — this simply lists what the board needs.
-FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock status gestures"
+FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock status gestures tilt"
 
 # net.py is uploaded ONLY for a WiFi unit. main.py imports it lazily, inside
 # the TIME_SOURCE == "wifi" branch, so a radio-less board never reaches that

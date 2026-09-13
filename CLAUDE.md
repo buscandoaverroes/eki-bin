@@ -71,6 +71,10 @@ When writing Rust code in this repo, take a teaching role:
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
+| **Tilt-to-adjust, the shipped controller** — magnitude gate, neutral re-learning, expo curve. One implementation, used by both the firmware and the sandboxes | `micropython/tilt.py` |
+| Tilt bench tests: the go-up-first overshoot (**run in the dark**) and `curve_test`'s timed target acquisition | `micropython/tilt_sandbox.py` (`make tilt-sandbox`) |
+| Tilt **freeform** — no target, logs every sample to JSONL, asks how it felt. The one that produces usable data | `micropython/tilt_freeform.py` |
 | **Wiring the current unit** — self-contained ASCII, config values, traps, bring-up order | `pinouts/v1.6-rp2350-production-unit.md` |
 | Low-PWM floor (strip property — test OUT of the bottle) | `micropython/low_pwm_test.py` (`make low-pwm-test`) |
 | Hue separation / how many lines a vessel supports (glass property — test IN it) | `micropython/hue_test.py` (`make hue-test`) |
@@ -128,6 +132,16 @@ docs, and the colour measurements below.
 **Two bench tools, and they need different rigs:** `make low-pwm-test` (strip
 property — run it **out** of the bottle) and `make hue-test` (glass property —
 run it **in**, and try several vessels).
+
+**⚠ Two things need discussing before more features, both forced by the
+second unit, both written up in `dev-status.md` § "Two outstanding
+discussions" and at the top of `docs/roadmap.md`'s priority list:** a
+**wiring harness / casing** (mounting the IMU took 20 minutes of chopstick
+work through the bottle mouth, and the battery build sends a pack, a load
+switch and a gated rail through the same hole), and a **provisioning
+manifest** (multiple DS3231s now exist with nothing to tell them apart —
+and `data/rtc-drift.jsonl` has no unit field, so one `make rtc-drift`
+against the wrong chip silently pollutes bottle-01's fit).
 
 **Open:** the vessel decision — thick brown is the best-looking and the most
 limiting. `docs/roadmap.md` v1.1 (Qi + soldering) is the next hardware step.

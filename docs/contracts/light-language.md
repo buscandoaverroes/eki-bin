@@ -204,18 +204,36 @@ version doesn't need.
 ## 7. What has to be sandboxed before any of this is committed
 
 None of this is decidable on paper — the feel of light in a specific bottle
-is the whole question. `micropython/led_sandbox.py` already exists for
-exactly this (A/B animation comparison, jolt-shape prototyping on real
-hardware), so this extends it rather than starting something new.
+is the whole question.
 
-1. **`around`, linear vs. eased.** Tests §5's rule directly.
-2. **All five words, back to back,** in the actual bottle — are they
-   distinguishable through this glass, or does diffusion collapse them?
-3. **ACK force-proportionality** — is the difference between a light and a
-   hard tap legible, or does the glass flatten it?
-4. **The ACK → gap → motion sequence** as one continuous thing, against
-   today's ACK → shelf → CONFIRM.
-5. **Tilt, in the dark** — specifically the go-up-first overshoot.
+**Correction to an earlier plan in this doc: these are NOT led_sandbox.py
+scenes.** That file's unit is `(start, end, color, anim_fn)` — a *fixed*
+span whose *brightness* varies with time. Four of the five words vary their
+*position* with time, which that shape cannot express; extending it would
+have meant changing the tuple every existing scene uses to serve a
+primitive with no overlap. Different primitive, different file.
+`led_sandbox.py` keeps the brightness-over-time job it is good at.
+
+| # | Question | Where | Status |
+|---|---|---|---|
+| 1 | **`around`, linear vs. eased** — tests §5's rule directly | `make motion-sandbox`, then `ab("around")` | drafted |
+| 2 | **All five words back to back** — distinguishable through this glass, or does diffusion collapse them? | `make motion-sandbox` (the default `demo()`) | drafted |
+| 3 | **ACK force-proportionality** — legible, or does the glass flatten it? | `force_demo()` for the shape; the real answer needs real taps | partly |
+| 4 | **ACK → gap → motion as one continuous thing**, vs today's ACK → shelf → CONFIRM | `gesture_sandbox.py` — **blocked on 1–2** | not started |
+| 5 | **Tilt, in the dark** — the go-up-first overshoot | `make tilt-sandbox` | ✅ run 2026-09-13 — 3.5s reversal window feels right; overshoot negligible |
+| 6 | **The expo `CURVE`** — does fine-near-centre actually make a target easier to hit? | `tilt_sandbox.curve_test()` | drafted |
+
+**3 and 4 need a real tap, and 4 is genuinely blocked, not deferred.** The
+motion that CONFIRM becomes has to exist before "ACK → gap → that motion"
+can be felt as one thing. `motion_sandbox.py`'s `force_demo()` plays
+`outward` at three strengths so the *shape* can be judged without an IMU;
+whether real tap forces actually separate on real glass is the same kind of
+empirical question `gesture-envelope.md` §11 left open for tap clustering,
+and it belongs in `gesture_sandbox.py` once the vocabulary is chosen.
+
+**`SHAKE_BOUNDS` is a placeholder in the sandbox and is wrong for every
+real bottle.** Finding the right pair is one of the things the sandbox is
+for. It is a per-unit physical fact, like `ARC_ORIGIN` and arm A/B.
 
 ## 8. Open
 

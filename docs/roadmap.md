@@ -357,6 +357,30 @@ survives it.
 
 ## Open Questions / Next Experiments (priority order)
 
+> **⚠ TWO ITEMS AHEAD OF THIS LIST, AND BOTH NEED A CONVERSATION BEFORE
+> ANY CODE.** Neither is a feature; both are the kind of thing that gets
+> more expensive the longer it is left, and both were forced by bringing up
+> the second unit rather than chosen. Full write-ups in `dev-status.md`
+> § "Two outstanding discussions".
+>
+> **1. A wiring harness / casing.** Fixing the IMU to the bottle's base took
+> ~20 minutes, nearly all of it managing loose wires through the mouth with
+> chopsticks. The battery build adds a pack, a load switch and a gated strip
+> rail through that same opening, so this gets worse before it gets better.
+> **Blocks:** comfortable iteration on everything else, and the whole
+> battery track. The bottle-mouth measurement the shopping memo already asks
+> for constrains the harness as much as the battery holder.
+>
+> **2. A provisioning manifest.** There are now multiple DS3231s and nothing
+> distinguishes them — no unique ID register, no general-purpose SRAM.
+> **Concrete hazard today:** `data/rtc-drift.jsonl` has `epoch` but no unit
+> field, so one `make rtc-drift` against the wrong chip silently pollutes
+> bottle-01's accumulating fit. A `--unit` flag closes that hole without
+> settling the larger question, which is a record per physical unit: which
+> already has to hold `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, the
+> IMU mount location, `TAP_ENERGY_THRESHOLD`, and the drift epoch — every
+> one of them established by hand and impossible to re-derive from code.
+
 1. ~~**v1.2 board-portability checkpoint**~~ — ✅ **passed 2026-07-05.**
 2. ~~**v1.1 Qi power path**~~ — ✅ **confirmed 2026-07-13**: XIAO + 120-LED tape +
    Qi receiver ran self-contained in a glass pitcher off the pad. One caveat

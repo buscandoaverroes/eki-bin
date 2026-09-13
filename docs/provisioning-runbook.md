@@ -194,29 +194,44 @@ General → Date & Time → Set automatically). That error becomes **permanent**
 in the unit; nothing downstream can recover it.
 
 ```bash
-# 1. Host clock → the board's own volatile RTC
-make set-time
+# 1. Host clock → board RTC → DS3231, and clears OSF. ONE command.
+make rtc-seed
 ```
 
+**⚠ Steps 1-4 used to be four steps and a hand-edited flag
+(`SYNC_DS3231_FROM_BOARD_RTC` in `rtc_test.py`, set True, run, set back).
+That flag is GONE** — `rtc_test.py` is read-only now and `rtc_seed.py` is
+the only writer. If you are following an older copy of this runbook, stop:
+the flag does not exist and `make rtc-seed` replaces the whole sequence.
+
+**`make rtc-seed` chains `rtc --set` into the same `mpremote` invocation**
+rather than relying on a separate `make set-time` first. The board's own RTC
+is volatile — no battery — so any reset returns it to `2021-01-01`, and two
+commands leave a window where that matters. On 2026-09-13 a board really did
+reset inside it: `set-time` confirmed 2026-09-13 21:10, and the next command
+read `2021-01-01 00:00:04`. Four seconds of uptime.
+
+The guard refused rather than writing 2021 into the chip, which is the
+system working — but if you see
+
 ```
-# 2. Enable the copy, ONCE:
-#    micropython/rtc_test.py →  SYNC_DS3231_FROM_BOARD_RTC = True
+✗ REFUSING TO SEED — the board's own RTC was never set.
+  board RTC reads: 2021-01-01 ...
 ```
+
+the board reset between setting and seeding. With the chained command the
+usual cause is a physical one: a marginal USB cable, a breadboard
+connection, or a hand moving wires. Re-seat and run it again. `make
+set-time` still exists for `TIME_SOURCE = "rtc"` builds, which need it on
+every power cycle, but seeding no longer depends on it.
 
 ```bash
-# 3. Board RTC → DS3231, and clears OSF
+# 2. Confirm: OSF clear, plausible date.
 make rtc-test
 ```
 
-```
-# 4. ⚠ SET IT BACK:  SYNC_DS3231_FROM_BOARD_RTC = False
-#    Leaving it True overwrites the chip's kept time on every later run —
-#    destroying exactly the thing the DS3231 exists to provide. The script
-#    guards against syncing from an implausible year, but do not lean on it.
-```
-
 ```bash
-# 5. Physically unplug. Wait. Plug back in. (NOT Ctrl-D — a soft reset does
+# 3. Physically unplug. Wait. Plug back in. (NOT Ctrl-D — a soft reset does
 #    not drop power and proves nothing.)
 make rtc-test           # OSF clear + correct time = battery works
 ```
