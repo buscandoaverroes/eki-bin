@@ -220,7 +220,8 @@ primitive with no overlap. Different primitive, different file.
 | 2 | **All five words back to back** — distinguishable through this glass, or does diffusion collapse them? | `make motion-sandbox` (the default `demo()`) | drafted |
 | 3 | **ACK force-proportionality** — legible, or does the glass flatten it? | `force_demo()` for the shape; the real answer needs real taps | partly |
 | 4 | **ACK → gap → motion as one continuous thing**, vs today's ACK → shelf → CONFIRM | `gesture_sandbox.py` — **blocked on 1–2** | not started |
-| 5 | **Tilt, in the dark** — the go-up-first overshoot | `make tilt-sandbox` | drafted |
+| 5 | **Tilt, in the dark** — the go-up-first overshoot | `make tilt-sandbox` | ✅ run 2026-09-13 — 3.5s reversal window feels right; overshoot negligible |
+| 6 | **The expo `CURVE`** — does fine-near-centre actually make a target easier to hit? | `tilt_sandbox.curve_test()` | drafted |
 
 **3 and 4 need a real tap, and 4 is genuinely blocked, not deferred.** The
 motion that CONFIRM becomes has to exist before "ACK → gap → that motion"

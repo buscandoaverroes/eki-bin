@@ -185,6 +185,13 @@ motion-sandbox: _check-mpremote
 # open question is whether "you must brighten before you can dim" is a
 # glare flash you can live with, and at noon it will feel fine and tell
 # you nothing. Every session prints its overshoot.
+#
+# TWO MODES. Set ACTIVE at the bottom of the file:
+#   ACTIVE = run          the overshoot test (default, whole ring)
+#   ACTIVE = curve_test   the CURVE tuning test — land a bar on a marker,
+#                         timed, across several curve values. Turns a feel
+#                         parameter into a measurement instead of an
+#                         edit-reflash-retry loop.
 .PHONY: tilt-sandbox
 tilt-sandbox: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/tilt_sandbox.py

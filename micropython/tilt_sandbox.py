@@ -112,6 +112,22 @@ MAX_BRIGHT = 0.90           #   indistinguishable from a fault
 POLL_MS = 25
 
 FEEDBACK_COLOR = settings.STARTUP_COLOR
+# Green because §12 measured that thick amber glass is a blue-cut filter and
+# collapses the hue wheel onto the red-green axis — a blue or purple marker
+# would be the obvious choice in air and invisible in this bottle.
+TARGET_COLOR = (0, 255, 0)
+
+# ── Target-acquisition test (curve_test) ─────────────────────────
+# CURVE is a FEEL parameter, and the edit-reflash-retry loop is a terrible
+# way to tune feel. This turns it into a measurement: given a target
+# brightness, how long does it take to land on it, and how close do you get?
+# Fine control is exactly what expo is supposed to buy, so "time to acquire
+# a target" is the thing it should improve. If a higher CURVE does not make
+# targets faster to hit, it is not earning its complexity — the same bar
+# insights.md §8 held the tap classifier to.
+TARGET_TOLERANCE = 0.04     # ≈ one LED of the bar. "Land on the marker."
+TARGET_SETTLE_MS = 800      # hold within tolerance this long to count
+ROUND_LIMIT_MS = 45000      # give up on a round rather than hang forever
 
 _G_LSB = 0.061 / 1000.0     # raw → g, same ±2g scaling gestures.py assumes
 
@@ -197,34 +213,80 @@ class _Session:
             print("      (brightening — overshoot only matters when dimming)")
 
 
-def _render():
-    """Whole ring at the CURRENT settings.BRIGHTNESS.
-
-    Takes no argument on purpose: _write_frame multiplies by
-    settings.BRIGHTNESS itself, so passing a level would mean two sources
-    of truth for one number.
-
-    NOT a level bar, on purpose: the question is whether this is glare-y
-    in a dark room, and only lighting what a real display would light can
-    answer that. The numbers go to the console instead."""
-    leds._write_frame([(FEEDBACK_COLOR, 1.0)] * NUM_LEDS)
+def _bar_index(value):
+    """Brightness → how many LEDs of the bar are lit."""
+    frac = (value - MIN_BRIGHT) / max(1e-6, MAX_BRIGHT - MIN_BRIGHT)
+    return max(0, min(NUM_LEDS, int(round(frac * NUM_LEDS))))
 
 
-def run():
+def _render(target=None):
+    """Whole ring at the CURRENT settings.BRIGHTNESS — or, with a target,
+    a level bar plus a marker.
+
+    The plain form takes no argument on purpose: _write_frame multiplies
+    by settings.BRIGHTNESS itself, so passing a level would mean two
+    sources of truth for one number. It is NOT a level bar, also on
+    purpose — the overshoot question is whether this is glare-y in a dark
+    room, and only lighting what a real display would light can answer it.
+
+    **The target form is a different test and deliberately renders
+    differently.** curve_test asks how precisely you can AIM, not how the
+    result looks in a dark room, and aiming at a value you cannot see is
+    not a test of the control curve. Both the bar and the marker still go
+    through BRIGHTNESS, so they dim together and relative position stays
+    readable at any level."""
+    if target is None:
+        leds._write_frame([(FEEDBACK_COLOR, 1.0)] * NUM_LEDS)
+        return
+    lit = _bar_index(settings.BRIGHTNESS)
+    frame = [(FEEDBACK_COLOR, 1.0) if i < lit else None
+             for i in range(NUM_LEDS)]
+    mark = max(0, min(NUM_LEDS - 1, _bar_index(target) - 1))
+    frame[mark] = (TARGET_COLOR, 1.0)
+    leds._write_frame(frame)
+
+
+def run(curve=None, target=None, announce=True):
+    """Adjust brightness by tilting.
+
+    Two shapes, one loop:
+
+    * `target=None` — the OVERSHOOT test. Whole ring at BRIGHTNESS, runs
+      until Ctrl+C, reports each session's go-up-first overshoot.
+    * `target=<0..1>` — one round of the ACQUISITION test. Renders a bar
+      and a marker, returns `(elapsed_ms, final_value)` once the value has
+      held within TARGET_TOLERANCE for TARGET_SETTLE_MS, or `None` if
+      ROUND_LIMIT_MS expires first. This is what curve_test drives.
+
+    `curve` overrides the module-level CURVE for this call, which is the
+    whole point of the second shape — comparing feel parameters by editing
+    a constant and reflashing is how you end up trusting the last one you
+    tried rather than the best one.
+    """
+    if curve is None:
+        curve = CURVE
     i2c, addr = gestures._get_imu()
     if addr is None:
         print("  ✗ No IMU — nothing to tilt. Check wiring, `make i2c-scan`.")
-        return
+        return None
 
-    print("\n== tilt_sandbox ==")
-    print("   mode=%s  first tilt means %s  deadzone=%.0f°  full=%.0f°"
-          % (MODE, FIRST_TILT_MEANS.upper(), DEADZONE_DEG, FULL_TILT_DEG))
-    print("   ⚠ RUN THIS IN THE DARK. Try to DIM it, from a standing start.")
-    print("   Ctrl+C to stop.\n")
+    if announce:
+        print("\n== tilt_sandbox ==")
+        print("   mode=%s  first tilt means %s  deadzone=%.0f°  full=%.0f°"
+              "  curve=%.1f"
+              % (MODE, FIRST_TILT_MEANS.upper(), DEADZONE_DEG, FULL_TILT_DEG,
+                 curve))
+        print("   ⚠ RUN THIS IN THE DARK. Try to DIM it, from a standing start.")
+        print("   Ctrl+C to stop.\n")
 
     settings.BRIGHTNESS = max(MIN_BRIGHT, min(MAX_BRIGHT, settings.BRIGHTNESS))
     base = settings.BRIGHTNESS
     sign = 1.0 if FIRST_TILT_MEANS == "up" else -1.0
+
+    round_start = None      # starts at the FIRST ENGAGE, not at the call —
+    #   reading the prompt is not part of what the curve is being judged on
+    tol_since = [None]
+    outcome = [None]
 
     rest_hat = None
     session = None
@@ -236,9 +298,31 @@ def run():
     rejected = 0        # samples the magnitude gate threw away
     past_deadzone = 0   # consecutive good samples past it — engage debounce
 
+    def _settled(now):
+        """True once BRIGHTNESS has held within tolerance long enough.
+
+        Called on EVERY path, deadzone included — settling happens while
+        holding still, and holding still is the deadzone branch. Checking
+        it only where brightness changes would mean the round could never
+        end."""
+        if target is None:
+            return False
+        if abs(settings.BRIGHTNESS - target) <= TARGET_TOLERANCE:
+            if tol_since[0] is None:
+                tol_since[0] = now
+            elif time.ticks_diff(now, tol_since[0]) >= TARGET_SETTLE_MS:
+                return True
+        else:
+            tol_since[0] = None
+        return False
+
     try:
         while True:
             now = time.ticks_ms()
+            if round_start is not None and target is not None:
+                if time.ticks_diff(now, round_start) >= ROUND_LIMIT_MS:
+                    outcome[0] = "timeout"
+                    break
             dt_ms = time.ticks_diff(now, last_ms)
             last_ms = now
 
@@ -273,7 +357,7 @@ def run():
 
             if rest_hat is None:
                 rest_hat = g_hat        # first good sample is "upright"
-                _render()
+                _render(target)
                 time.sleep_ms(POLL_MS)
                 continue
 
@@ -298,7 +382,10 @@ def run():
                         quiet_since = None
                         print("   (released — tilt again to start over)\n")
                 past_deadzone = 0
-                _render()
+                _render(target)
+                if _settled(now):
+                    outcome[0] = "hit"
+                    break
                 time.sleep_ms(POLL_MS)
                 continue
 
@@ -310,11 +397,13 @@ def run():
             # a spuriously captured axis.
             past_deadzone += 1
             if session is None and past_deadzone < ENGAGE_SAMPLES:
-                _render()
+                _render(target)
                 time.sleep_ms(POLL_MS)
                 continue
 
             if session is None:
+                if round_start is None:
+                    round_start = now
                 session = _Session(settings.BRIGHTNESS)
                 base = settings.BRIGHTNESS
                 # THE AXIS IS DEFINED HERE, by whichever way it first
@@ -330,7 +419,7 @@ def run():
             along = _dot(perp_hat, session.axis)
             span = max(1.0, FULL_TILT_DEG - DEADZONE_DEG)
             amount = max(0.0, min(1.0, (deg - DEADZONE_DEG) / span))
-            amount = (amount ** CURVE) * along * sign   # expo — see CURVE
+            amount = (amount ** curve) * along * sign   # expo — see CURVE
 
             if MODE == "rate":
                 settings.BRIGHTNESS += RATE_PER_SEC * amount * (dt_ms / 1000.0)
@@ -340,7 +429,10 @@ def run():
                                       min(MAX_BRIGHT, settings.BRIGHTNESS))
 
             session.observe(settings.BRIGHTNESS, dt_ms)
-            _render()
+            _render(target)
+            if _settled(now):
+                outcome[0] = "hit"
+                break
 
             # Throttled telemetry. Not decoration: the whole ring renders at
             # BRIGHTNESS, so once the value pins at a rail the display stops
@@ -360,16 +452,91 @@ def run():
 
             time.sleep_ms(POLL_MS)
     except KeyboardInterrupt:
-        pass
+        outcome[0] = "interrupt"
     finally:
-        if session is not None:
-            session.report(settings.BRIGHTNESS)
-        leds.clear()
-        print("\n  %d samples rejected by the magnitude gate (|a| outside"
-              " 1g ±%.0f%%)" % (rejected, G_TOLERANCE * 100))
-        print("  cleared — BRIGHTNESS left at %.2f (in RAM only; config.py"
-              " is untouched)" % settings.BRIGHTNESS)
+        if target is None:
+            if session is not None:
+                session.report(settings.BRIGHTNESS)
+            leds.clear()
+            print("\n  %d samples rejected by the magnitude gate (|a| outside"
+                  " 1g ±%.0f%%)" % (rejected, G_TOLERANCE * 100))
+            print("  cleared — BRIGHTNESS left at %.2f (in RAM only;"
+                  " config.py is untouched)" % settings.BRIGHTNESS)
 
+    if target is None or outcome[0] != "hit":
+        return None
+    elapsed = time.ticks_diff(time.ticks_ms(), round_start or time.ticks_ms())
+    return elapsed, settings.BRIGHTNESS
+
+
+CURVES = (1.0, 2.5, 4.0)        # linear, the current default, aggressive
+TARGETS = (0.70, 0.20, 0.45)    # up, a long way down, then a middle value
+
+
+def curve_test(curves=CURVES, targets=TARGETS):
+    """Which CURVE lets you actually hit a number?
+
+    For each curve, for each target: land the bar on the green marker and
+    hold it. Time starts at your first tilt, not at the prompt. The
+    summary at the end is the finding — if a higher curve does not make
+    targets faster to acquire, expo is not earning its keep.
+
+    ⚠ Read insights.md §8's methodology lesson before believing a result
+    here: everything this project validated at small n came back smaller
+    at scale. One pass of three targets is a HYPOTHESIS. Run it a few
+    times, on different days, before changing CURVE on the strength of it.
+    """
+    i2c, addr = gestures._get_imu()
+    if addr is None:
+        print("  ✗ No IMU — nothing to tilt. Check wiring, `make i2c-scan`.")
+        return
+
+    print("\n== tilt_sandbox: curve test ==")
+    print("   Land the bar on the GREEN marker and hold it for %.1fs."
+          % (TARGET_SETTLE_MS / 1000.0))
+    print("   Tolerance ±%.2f (about one LED). Ctrl+C aborts.\n"
+          % TARGET_TOLERANCE)
+
+    results = []
+    try:
+        for curve in curves:
+            print("   ── curve %.1f ──" % curve)
+            for target in targets:
+                settings.BRIGHTNESS = MIN_BRIGHT if target > 0.5 else MAX_BRIGHT
+                print("      target %.2f   (starting from %.2f)"
+                      % (target, settings.BRIGHTNESS))
+                got = run(curve=curve, target=target, announce=False)
+                if got is None:
+                    print("      … gave up")
+                    results.append((curve, target, None, None))
+                else:
+                    ms, final = got
+                    print("      ✓ %.1fs   landed %.2f (off by %.3f)"
+                          % (ms / 1000.0, final, abs(final - target)))
+                    results.append((curve, target, ms, final))
+            print("")
+    except KeyboardInterrupt:
+        print("\n   (aborted)")
+    finally:
+        leds.clear()
+
+    print("   ── summary ──")
+    print("   curve   hit   mean time   mean error")
+    for curve in curves:
+        rows = [r for r in results if r[0] == curve and r[2] is not None]
+        total = len([r for r in results if r[0] == curve])
+        if not rows:
+            print("   %5.1f   0/%d        —           —" % (curve, total))
+            continue
+        mean_ms = sum(r[2] for r in rows) / len(rows)
+        mean_err = sum(abs(r[3] - r[1]) for r in rows) / len(rows)
+        print("   %5.1f   %d/%d     %6.1fs      %.3f"
+              % (curve, len(rows), total, mean_ms / 1000.0, mean_err))
+    print("\n   n=%d per curve — a hypothesis, not a result (insights §8)."
+          % len(targets))
+
+
+ACTIVE = run    # ← swap to curve_test, or call either from the REPL
 
 if __name__ == "__main__":
-    run()
+    ACTIVE()
