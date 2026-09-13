@@ -42,7 +42,7 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
-    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
     HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
@@ -50,6 +50,7 @@ from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLO
     SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
     WAKE_INTERACTION_ENABLED)
 from signals import (LeaveSignal, leave_signal, next_departures)
+from tilt import TiltController
 from status import (quiet_onboard_leds,
     _play_startup_burst, _run_startup_failure_forever)
 
@@ -404,6 +405,8 @@ def _run_interactive_loop(schedule_data, led):
     last_refresh = None
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
+    tilt_ctl = TiltController() if TILT_ENABLED else None
+    tilt_ms = time.ticks_ms()
     signal = LeaveSignal([])
     signal_b = None
 
@@ -484,6 +487,22 @@ def _run_interactive_loop(schedule_data, led):
                 i2c, imu_addr, tick_now, last_error_print
             )
             if raw is not None:
+                # Tilt and taps share one sample, split by magnitude: taps
+                # want |a| >> 1g, tilt wants |a| ≈ 1g, and tilt.py's gate
+                # enforces its half. Neither needs to know about the other,
+                # and a second I2C read would cost battery for nothing.
+                #
+                # Only while AWAKE — accepts_input() is already the gate for
+                # that — because adjusting a brightness you cannot see is
+                # not an interaction, and because a jar being carried to
+                # another room should not quietly re-tune itself.
+                if tilt_ctl is not None and not quiet_now:
+                    tilt_state = tilt_ctl.update(
+                        raw, tick_now, time.ticks_diff(tick_now, tilt_ms))
+                    tilt_ms = tick_now
+                    if tilt_state in ("up", "down"):
+                        last_render = None   # repaint at the new brightness
+
                 mag = _gesture_magnitude_mg((tick_now,) + raw)
                 baseline = None
                 if len(trigger_buffer) >= _GESTURE_TRIGGER_BUFFER_LEN:

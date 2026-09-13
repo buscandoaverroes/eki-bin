@@ -373,6 +373,25 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # DAY_BRIGHTNESS = 0.30
 # NIGHT_BRIGHTNESS = 0.15
 #
+# ── Tilt to adjust brightness ──────────────────────────────────────
+# Tilt the bottle: the first lean past the deadzone defines the axis AND
+# means "up"; leaning back the other way means "down". Return to upright
+# and it holds. Set the bottle down and wherever it rests becomes the new
+# neutral. No calibration, and it works however the IMU ended up mounted.
+#
+# ⚠ RAM ONLY. A tilt-set brightness does not survive a power cycle, and
+# the day/night profile above reclaims it at the next 07:00/17:00 boundary
+# — deliberately, that is the same contract an OS's automatic dark mode
+# has: it switches you, you may override, the next switch wins.
+#
+# Every other TILT_* constant in settings.py is a hardware finding rather
+# than a preference (insights.md §15) — read that before changing one.
+TILT_ENABLED = True
+# TILT_EXPO = 0.6            # 0 = linear, 1 = pure cubic. Fine control near
+#                            #   upright, full rate at full tilt.
+# TILT_RATE_PER_SEC = 0.20   # brightness units per second at full tilt
+# TILT_FIRST_MEANS = "up"    # "down" if go-up-first ever glares in the dark
+
 # Seasonal drift (a window that breathes with the calendar) is NOT here:
 # it needs day-of-year, which local_time() currently discards. Separate,
 # larger step — insights.md §14.
