@@ -900,6 +900,23 @@ in parallel because it is gated on a shop trip, not on code.
    the power budget puts MCU sleep current at ~19% across a 10×
    improvement, so that migration is a destination, not the unlock.
 
+**Found while living with it (2026-09-14), not yet scheduled — `insights.md` §17:**
+
+- **Tilt fires 1-3 spurious taps per session**, each answered with a
+  `shake`. Tilt rejects non-1g samples; the tap trigger has no equivalent
+  gate and is hunting exactly those transients. Fix is mutual exclusion by
+  STATE — suppress the tap trigger while `TiltController.engaged` — not by
+  tuning a threshold, which §8 already proved does not transfer.
+- **The display cannot say "there IS a train, just not near enough".**
+  Every piece is individually correct (`_arm_target` drops out-of-reach
+  trains, `LeaveSignal` is LEVEL_3 because trains really are catchable,
+  so the no-data ack never fires) and the result is indistinguishable from
+  a broken jar. The renderer's reach is `ARM_LEN × POSITION_MINUTES_PER_LED`
+  and stage 1 simply never asks. Proposed: a **goodnight** gesture that ends
+  and goes dark, and a **good-morning** wake timed so the existing arc is
+  seen opening from its edge as the first train crosses the horizon — a
+  scheduling change, not an animation.
+
 **Deferred with a reason, not dropped:**
 
 - **ESN (echo state network) gesture classification.** Converges with the

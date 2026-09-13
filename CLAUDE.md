@@ -54,6 +54,7 @@ When writing Rust code in this repo, take a teaching role:
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
+| **Palette/brightness config — three proposals** to stop clipping and floor bugs being invisible. *A proposal; nothing built* | `docs/palette-model.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
 | Design rationale + full V2 hardware list | `docs/concept.md` |
 | Parts in hand, voltage compatibility | `docs/hardware.md` |
@@ -72,6 +73,7 @@ When writing Rust code in this repo, take a teaching role:
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
 | The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
+| **The five motion words, as shipped** — `outward` on wake, `around` on a line change, `shake` for "nothing to change to" | `micropython/motion.py` |
 | **Tilt-to-adjust, the shipped controller** — magnitude gate, neutral re-learning, expo curve. One implementation, used by both the firmware and the sandboxes | `micropython/tilt.py` |
 | Tilt bench tests: the go-up-first overshoot (**run in the dark**) and `curve_test`'s timed target acquisition | `micropython/tilt_sandbox.py` (`make tilt-sandbox`) |
 | Tilt **freeform** — no target, logs every sample to JSONL, asks how it felt. The one that produces usable data | `micropython/tilt_freeform.py` |

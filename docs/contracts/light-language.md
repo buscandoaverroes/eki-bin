@@ -1,6 +1,11 @@
 # The light language — struck glass
 
-**Status: design, nothing implemented.** Written 2026-09-04 out of the 24-hour
+**Status: §3's five words and §4's restructure are IMPLEMENTED** as of
+2026-09-13 (`micropython/motion.py`, behind `MOTION_ENABLED`, default off);
+§6's tilt shipped in `micropython/tilt.py` behind `TILT_ENABLED`. §5's
+deceleration rule is enforced in code (no word runs at constant velocity)
+but has **not** been judged on real glass yet — that is `make
+motion-sandbox`'s `ab("around")`. Everything else below is still design. Written 2026-09-04 out of the 24-hour
 field session on the v1.6 production unit (`docs/insights.md` §14). This doc
 names the general pattern; `docs/contracts/led-status-messages.md`'s catalog
 of errors and acknowledgments is a **subset of it**, not a rival — the same
@@ -167,6 +172,23 @@ definite end.
 > **Rule: no unbounded constant-velocity motion.** Rotation is allowed;
 > spinners are not.
 
+**✅ DECIDED 2026-09-14, and the reason is not the one this section
+predicted.** Run on real glass, eased and linear, the verdict was that
+*neither* read as a machine thinking — the spinner association this rule
+was built to avoid did not survive the bottle at all. So the rule stands,
+but its justification changes:
+
+> Eased wins because it fits the object, not because linear looks digital.
+> A bottle is a thing that rolls, that has mass, that accelerates and
+> settles. Constant velocity is the one motion glass never makes on its
+> own.
+
+That is a stronger footing than the original argument, because it does not
+depend on the viewer having a mental model of loading spinners. It only
+depends on them having handled a bottle. Keep the rule; `ease_out` is the
+only curve in `motion.py`, and `linear` survives in the sandbox purely so
+this comparison can be re-run on a different vessel.
+
 This is directly testable and should be the sandbox's first A/B: the same
 `around` motion run linear, then eased-to-rest. If the rule is right, one
 reads as a machine thinking and the other as an object moving.
@@ -216,7 +238,7 @@ primitive with no overlap. Different primitive, different file.
 
 | # | Question | Where | Status |
 |---|---|---|---|
-| 1 | **`around`, linear vs. eased** — tests §5's rule directly | `make motion-sandbox`, then `ab("around")` | drafted |
+| 1 | **`around`, linear vs. eased** — tests §5's rule directly | `make motion-sandbox`, then `ab("around")` | ✅ **eased** (2026-09-14) — see §5 |
 | 2 | **All five words back to back** — distinguishable through this glass, or does diffusion collapse them? | `make motion-sandbox` (the default `demo()`) | drafted |
 | 3 | **ACK force-proportionality** — legible, or does the glass flatten it? | `force_demo()` for the shape; the real answer needs real taps | partly |
 | 4 | **ACK → gap → motion as one continuous thing**, vs today's ACK → shelf → CONFIRM | `gesture_sandbox.py` — **blocked on 1–2** | not started |

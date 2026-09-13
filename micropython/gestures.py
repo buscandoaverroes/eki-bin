@@ -26,6 +26,9 @@ import settings
 from machine import I2C, Pin
 
 from leds import (_write_frame, clear)
+import motion
+from settings import (MOTION_ENABLED, MOTION_OUTWARD_MS, MOTION_SHAKE_MS,
+    NO_CYCLE_COLOR, QUIET_TAP_DURATION_MS)
 from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     AWAKE_MINUTES, BRIGHTNESS_PRESETS, CYCLE_TRANSITION_MS,
     FLICK_MAGNITUDE_THRESHOLD_MG, FLICK_SPACING_STDEV_THRESHOLD_MS,
@@ -785,9 +788,26 @@ def _play_cycle_flash():
 
 
 def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
-                status_message):
+                status_message, can_cycle=True):
     """Trigger → capture (with live ACK) → classify → CONFIRM. Returns the
     dispatched response, or None if the contact was rejected as noise.
+
+    ⚠ `can_cycle` FIXES A REAL DEFECT, not a cosmetic one. This used to
+    play its CONFIRM before main.py checked `len(lines) > 1`, so a
+    single-line unit answered "yes, done" and then changed nothing. A
+    confident acknowledgment of a no-op is worse than silence — it makes a
+    working device look broken, the exact inverse of what
+    led-status-messages.md exists for. One gesture gets one response, and
+    the response has to be chosen KNOWING whether the action is available,
+    which is only possible here.
+
+    With MOTION_ENABLED, CONFIRM stops being a flash and becomes a word of
+    the light language (light-language.md §4). The ACK stays a flash: its
+    job is the tactile "click" of the button, it must fire before anything
+    is classified, and it must feel like a consequence of the strike.
+    A successful CYCLE renders NOTHING here — main.py plays `around` after
+    advancing the line, so the motion arrives in the NEW line's colour and
+    the acknowledgment IS the transition rather than a preface to it.
 
     Quiet hours is NOT checked here — the caller short-circuits before this
     is ever reached, so a quiet-hours tap never pays the ~1.2s capture.
@@ -813,11 +833,30 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     now_ms = time.ticks_ms()  # stale after a ~1.2s blocking capture
     resolved = tap_state.resolve(now_ms, valid)
     if resolved == "wake":
-        _play_confirm_jolt(shelf_mult)
+        if MOTION_ENABLED:
+            # outward, ∝ strike force: brighter AND faster for a harder
+            # tap, because that is what glass does.
+            motion.play("outward", STARTUP_COLOR,
+                        int(MOTION_OUTWARD_MS * (1.4 - 0.4 * strength)),
+                        peak=0.5 + 0.5 * strength)
+        else:
+            _play_confirm_jolt(shelf_mult)
         if _all_signals_hidden(signal, signal_b):
             status_message.show(time.ticks_ms(), NO_DATA_COLOR, NO_DATA_DURATION_MS)
+    elif resolved == "cycle" and not can_cycle:
+        # Nothing to cycle TO. Motion that fails to complete is a better
+        # "no" than a colour: nobody has to have learned it first.
+        if MOTION_ENABLED:
+            motion.play("shake", NO_CYCLE_COLOR, MOTION_SHAKE_MS)
+        else:
+            status_message.show(time.ticks_ms(), NO_CYCLE_COLOR,
+                                QUIET_TAP_DURATION_MS)
+            clear()
+        return None          # the caller must NOT advance the line
     elif resolved == "cycle":
-        _play_cycle_flash()
+        if not MOTION_ENABLED:
+            _play_cycle_flash()
+        # else: main.py plays `around` once the new line is applied
     else:
         clear()  # rejected — hard cut off the shelf, "decided: no"
     return resolved

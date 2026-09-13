@@ -175,11 +175,19 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                            BRIGHTNESS directly — no separate brightness knob.
 # LINE_SATURATION = 1.0    # 1.0=unchanged; lower = a genuinely MUTED
 #                            (desaturated) LINE_COLOR, not just a dimmer one
-# ⚠ Do NOT set MARKER_BRIGHTNESS at or below 0.15 with the default
-#   MARKER_COLOR. 80 × BRIGHTNESS 0.15 × 0.15 = raw 1 per channel, which is
-#   exactly where WS2812B channel matching collapses and "neutral" reads RED.
-#   Measured floor is 3 on the AE-WS2812B-STICK8; the 0.25 default clears it.
-#   Confirm per strip with `make low-pwm-test`. docs/insights.md §12.
+# ⚠ THE FLOOR IS A PRODUCT OF THREE NUMBERS, so a safe MARKER_BRIGHTNESS
+#   depends on BRIGHTNESS and stops being safe if you lower it:
+#       MARKER_COLOR 80 × BRIGHTNESS × MARKER_BRIGHTNESS = raw value
+#   At BRIGHTNESS 0.15, MARKER_BRIGHTNESS 0.15 gives raw 1 — exactly where
+#   WS2812B channel matching collapses and "neutral" reads RED. The 0.25
+#   default gives raw 3, the measured floor on the AE-WS2812B-STICK8.
+#   ⚠ Any "= raw N" note next to MARKER_BRIGHTNESS is only true at the
+#   BRIGHTNESS it was written for. At 0.50 the 0.25 default is raw 10; at
+#   0.85 it is raw 17. Raising BRIGHTNESS moves markers AWAY from the
+#   danger zone — it is the multipliers ABOVE 1.0 that get hurt (see the
+#   anchor note below). Confirm per strip with `make low-pwm-test`.
+#   docs/insights.md §12, and "How the brightness values compose" in
+#   docs/contracts/config.md.
 # MARKER_BRIGHTNESS = 0.25  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker) for the idle
 #                            "tick" LEDs — 0 = fully off. A train is never
@@ -373,6 +381,24 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # DAY_BRIGHTNESS = 0.30
 # NIGHT_BRIGHTNESS = 0.15
 #
+# ── The light language: motion instead of flashes ──────────────────
+# With this on, a tap's CONFIRM stops being a flash and becomes a word:
+#   wake from asleep        → `outward` from the anchor, ∝ strike force
+#   cycle to another line   → `around`, in the NEW line's colour
+#   cycle, but only 1 line  → `shake` — motion that fails to complete
+# The ACK stays a flash: it is the tactile "click" of the button and has
+# to fire before anything is classified. docs/contracts/light-language.md
+MOTION_ENABLED = True
+#
+# The shake's WIDTH is fixed by the vocabulary and you should not need to
+# touch it: ±5 LEDs reads as a short lap of `around` and the two words
+# stop being distinguishable; ±3 is a clean head-shake. Its CENTRE is the
+# per-unit part — put it at the LABEL EDGE so the "no" bounces against the
+# one boundary the vessel has. A bottle with no label needs neither.
+# SHAKE_CENTER = 10        # defaults to the middle of the strip
+# SHAKE_HALF_WIDTH = 3     # vocabulary constant — measured, not taste
+# SHAKE_BOUNDS = (7, 13)   # overrides both, for an asymmetric bounce
+
 # ── Tilt to adjust brightness ──────────────────────────────────────
 # Tilt the bottle: the first lean past the deadzone defines the axis AND
 # means "up"; leaning back the other way means "down". Return to upright
