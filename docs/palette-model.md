@@ -1,7 +1,7 @@
 # Palette & brightness — three ways to stop getting this wrong
 
-**Status: proposal. Nothing here is built, nothing is decided.** Written
-2026-09-14 after `DAY_BRIGHTNESS = 0.85` was found to clip the anchor and
+**Status: proposal B is BUILT** (`micropython/palette.py`, checked at
+boot, 2026-09-14). A and C remain proposals. Written after `DAY_BRIGHTNESS = 0.85` was found to clip the anchor and
 shift its hue — a bug that existed only as arithmetic, invisible in the
 config that caused it and invisible on the strip until you knew to look.
 
@@ -157,11 +157,34 @@ indirection point it would hang from.
 
 **B, then A, then C** — and the order is not just ascending cost.
 
-1. **`palette_problems()` first.** Cheapest, matches an idiom already in
-   the codebase, and it is the only one that pays off even if the other two
-   never happen. It also *generates the evidence* for whether A is needed:
-   if it fires constantly, the config model is wrong and A is justified. If
-   it never fires, A is over-engineering.
+1. ~~**`palette_problems()` first.**~~ ✅ **Built 2026-09-14**, and the
+   evidence arrived immediately. Run against bottle-01's live config — a
+   config that had *already* been corrected once, by hand, for exactly this
+   class of bug — it found **four problems**:
+
+   ```
+   usable BRIGHTNESS 0.25-0.62  (train #2 R sets the floor, anchor R clips first)
+   ```
+
+   | level | what breaks |
+   |---|---|
+   | `TILT_MAX_BRIGHT` 0.90 | anchor R/G clip → (255,200,120) renders (255,255,173) |
+   | `TILT_MIN_BRIGHT` 0.05 | marker at **raw 1** — the original §12 bug, back |
+
+   **Both are the tilt rails, and that is the finding.** `DAY_BRIGHTNESS`
+   had been carefully fixed to 0.62 two days earlier; `TILT_MIN_BRIGHT` and
+   `TILT_MAX_BRIGHT` were set in a different session, for different reasons
+   ("never fully off", "not blinding"), with no knowledge of the palette at
+   all — and they let tilt drive `BRIGHTNESS` straight back out of the
+   window the day/night fix had been chosen to stay inside.
+
+   No amount of care at the point of editing catches that. The window is
+   0.25–0.62 and nothing in the config says so.
+
+   **This is the argument for A, and it is stronger than the one written
+   above.** It is not that people set bad numbers; it is that the valid
+   range is a derived quantity, invisible, and changes whenever any of
+   ~six settings move.
 2. **A (ideally A′) once B has made the case.** The rescale-instead-of-clip
    property is the single biggest structural win available, and it makes
    the user's own list — day/night ratio, marker:train:station ratio — the
@@ -171,14 +194,18 @@ indirection point it would hang from.
 
 ### Two things any of them needs first
 
-- **The low-PWM floor must become a per-unit config value**, not a comment
-  saying 3. `make low-pwm-test` measures it, §12 says it is per-strip, and
-  every proposal here needs it as an input. It belongs in the unit's
-  registry entry alongside `ARC_ORIGIN` and `SHAKE_CENTER`.
-- **A boot-time palette report**, whichever way this goes. This codebase
-  already announces its state — the memory table, `[DAY] brightness →
-  0.62`, the geometry check. Palette is the one subsystem whose derived
-  values are currently invisible, which is precisely why its bugs were.
+- ~~**The low-PWM floor must become a per-unit config value**~~ ✅
+  `LOW_PWM_FLOOR`, default 3, measured per strip with `make low-pwm-test`.
+  Every check takes it as input, so a wrong value makes them confidently
+  wrong — it belongs in the unit's registry entry alongside `ARC_ORIGIN`
+  and `SHAKE_CENTER`.
+- ~~**A boot-time palette report**~~ ✅ `palette.describe()` prints the
+  usable window and every role at every reachable level. Palette was the
+  one subsystem whose derived values were invisible, which is precisely
+  why its bugs were.
+- **New, from building B: `safe_range()` is most of A already.** Once the
+  usable window is computable, "rescale the roles to fit it" is a small
+  step from "report that they don't" — and it is the same function.
 
 ### The rule to hold all three to
 
