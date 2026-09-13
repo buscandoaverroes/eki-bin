@@ -49,10 +49,27 @@ MODE = "rate"               # "rate": tilt sets RATE of change — hold to keep
 
 DEADZONE_DEG = 8.0          # below this, nothing happens and nothing engages
 FULL_TILT_DEG = 45.0        # tilt at which the control is at full authority
-RATE_PER_SEC = 0.45         # "rate" mode: brightness units per second at full
+
+# ⚠ WAS 0.45 — retuned on hardware 2026-09-13. At 0.45 units/sec, full tilt
+# crossed the whole 0.03..0.90 range in under two seconds: the first real
+# session went 0.15 → 0.90 in one movement, which reads as a broken control
+# rather than a fast one. 0.12 takes ~7s end to end, which is slow enough to
+# aim and still fast enough not to feel stuck.
+RATE_PER_SEC = 0.12         # "rate" mode: brightness units per second at full
 GAIN = 0.45                 # "absolute" mode: brightness units at full tilt
-RELEASE_MS = 1200           # this long inside the deadzone ends the session
+
+# ⚠ WAS 1200 — and 1200 made DIMMING STRUCTURALLY IMPOSSIBLE. Reversing
+# means tilting back through upright and out the other side, and upright is
+# inside the deadzone. At 1200 ms the session released mid-reversal, forgot
+# the axis, and the next tilt past the deadzone defined a NEW axis meaning
+# UP again — so every attempt to dim brightened instead. See §6-on-hardware
+# in light-language.md: "return to upright to stop" and "tilt back to
+# reverse" are the SAME movement, and the release timer cannot be shorter
+# than a deliberate reversal takes with glass in your hands.
+RELEASE_MS = 3500           # this long inside the deadzone ends the session
                             #   and forgets the axis
+LIVE_PRINT_MS = 250         # throttled telemetry — without it you cannot
+                            #   tell "not working" from "already at a rail"
 
 MIN_BRIGHT = 0.03           # never all the way off — a dark strip is
 MAX_BRIGHT = 0.90           #   indistinguishable from a fault
@@ -178,6 +195,7 @@ def run():
     quiet_since = None
     last_err = time.ticks_ms()
     last_ms = time.ticks_ms()
+    last_live = time.ticks_ms()
 
     try:
         while True:
@@ -200,12 +218,16 @@ def run():
             deg, perp_hat = _tilt(g_hat, rest_hat)
 
             if deg < DEADZONE_DEG:
-                # Inside the deadzone. Hold, and after RELEASE_MS end the
-                # session — which is what makes the NEXT tilt free to
-                # define a new axis, in whatever direction is convenient.
+                # Inside the deadzone — which is ALSO the corridor you must
+                # pass through to reverse direction. So this timer is not
+                # just "idle detection": it is the budget for a deliberate
+                # reversal, and if it expires mid-reversal the axis is lost
+                # and the next tilt means UP again. See RELEASE_MS.
                 if session is not None:
                     if quiet_since is None:
                         quiet_since = now
+                        print("   · through neutral — %.1fs to reverse"
+                              % (RELEASE_MS / 1000.0))
                     elif time.ticks_diff(now, quiet_since) >= RELEASE_MS:
                         session.report(settings.BRIGHTNESS)
                         base = settings.BRIGHTNESS
@@ -245,6 +267,23 @@ def run():
 
             session.observe(settings.BRIGHTNESS, dt_ms)
             _render()
+
+            # Throttled telemetry. Not decoration: the whole ring renders at
+            # BRIGHTNESS, so once the value pins at a rail the display stops
+            # changing and a WORKING control is indistinguishable from a
+            # dead one. The first hardware session read as "nothing happens"
+            # for exactly this reason — it was already at 0.90.
+            if time.ticks_diff(now, last_live) >= LIVE_PRINT_MS:
+                last_live = now
+                rail = ""
+                if settings.BRIGHTNESS >= MAX_BRIGHT - 1e-6:
+                    rail = "  ⟨at MAX — tilt the other way⟩"
+                elif settings.BRIGHTNESS <= MIN_BRIGHT + 1e-6:
+                    rail = "  ⟨at MIN — tilt the other way⟩"
+                print("   %5.1f°  %s  %.2f%s"
+                      % (deg, "UP  " if amount > 0 else "DOWN",
+                         settings.BRIGHTNESS, rail))
+
             time.sleep_ms(POLL_MS)
     except KeyboardInterrupt:
         pass

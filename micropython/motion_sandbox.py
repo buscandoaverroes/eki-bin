@@ -234,6 +234,23 @@ WORDS = {
     "breathe":       (breathe, {}, 4000),
 }
 
+# ⚠ These live here rather than being read off fn.__doc__, which is what
+# this file did until it hit hardware: **MicroPython compiles docstrings
+# away** unless the firmware was built with MICROPY_ENABLE_DOC_STRING, so
+# `fn.__doc__` is not an empty string, the attribute does not exist at all
+# — AttributeError at the first demo() label. The host suite cannot catch
+# this class: pytest runs CPython, where __doc__ always exists. Anything
+# read off a function object at runtime needs this treatment.
+BLURB = {
+    "inward":        "energy converging — what trains always do",
+    "outward":       "energy radiating from the strike point — the ACK",
+    "around":        "energy travelling the circumference — a transition",
+    "around_linear": "...at constant velocity — the spinner, included to lose",
+    "around_inout":  "...accelerating then decelerating — a body with mass",
+    "shake":         "energy reflecting off a boundary, going nowhere — 'no'",
+    "breathe":       "energy sustained, not decaying — unresolved",
+}
+
 DEMO_ORDER = ("outward", "inward", "around", "shake", "breathe")
 
 
@@ -343,7 +360,7 @@ def demo(repeats=None):
         while repeats is None or n < repeats:
             for name in DEMO_ORDER:
                 fn, kwargs, ms = WORDS[name]
-                print("   %-8s %s" % (name, fn.__doc__.split("\n")[0]))
+                print("   %-8s %s" % (name, BLURB.get(name, "")))
                 _play(fn, kwargs, ms)
             print("")
             n += 1

@@ -136,3 +136,16 @@ def test_blob_interpolates_across_neighbours(load_main):
     m._blob(mults, 10.5, width=1.4)
     assert mults[10] > 0.0 and mults[11] > 0.0
     assert abs(mults[10] - mults[11]) < 1e-9   # dead centre → equal split
+
+
+def test_every_word_has_a_blurb(load_main):
+    """MicroPython compiles docstrings away unless the firmware enables
+    MICROPY_ENABLE_DOC_STRING, so `fn.__doc__` raises AttributeError on
+    device — it is not an empty string, the attribute is absent. demo()
+    shipped reading it and died on the first label.
+
+    pytest runs CPython, where __doc__ always exists, so the host suite
+    structurally cannot catch that. What it CAN check is that the
+    replacement table stays in step with WORDS."""
+    m = _load(load_main)
+    assert set(m.BLURB) == set(m.WORDS)
