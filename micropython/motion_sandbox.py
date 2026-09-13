@@ -371,7 +371,7 @@ def demo(repeats=None):
         print("  cleared — bye")
 
 
-ACTIVE = demo   # ← swap for run/ab/force_demo, or call them from the REPL
+ACTIVE = ab   # ← swap for run/ab/force_demo, or call them from the REPL
 
 if __name__ == "__main__":
     ACTIVE()

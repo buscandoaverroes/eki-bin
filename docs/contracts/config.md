@@ -134,3 +134,92 @@ accepted tradeoff — gitignored is enough to keep creds out of version control.
 vault-based flow (e.g. KeePassXC) was considered and **tabled**; revisit only if
 the repo is ever shared or wired into CI. In V2 the creds disappear entirely
 (config is provisioned over NFC; no WiFi in normal operation).
+
+
+---
+
+## How the brightness values compose
+
+There are more than four, and asking "should there be this many" is the
+right question — but they are not peers, and the confusion comes from
+treating them as one list. There are exactly **two kinds**.
+
+### Kind 1 — values `BRIGHTNESS` itself takes
+
+`BRIGHTNESS` is a single mutable global that every render path reads fresh
+each frame. It is the *variable*; these are *values written into it*:
+
+| setting | writes `BRIGHTNESS` when |
+|---|---|
+| `BRIGHTNESS` (config) | at import, and that is all |
+| `DAY_BRIGHTNESS` / `NIGHT_BRIGHTNESS` | at each day/night boundary |
+| `TILT_MIN_BRIGHT` / `TILT_MAX_BRIGHT` | the rails tilt clamps it between |
+| `BRIGHTNESS_PRESETS` | `_cycle_brightness` — currently unbound |
+
+**So with day/night enabled and both values set, config `BRIGHTNESS` is
+nearly vestigial** — it survives only until the first `_apply_daylight`,
+about one loop interval into boot.
+
+Not *entirely* vestigial, and the reason is a genuine ordering constraint
+rather than an oversight: **the boot ceremony renders before the clock is
+readable.** `run_startup_sequence()` is what establishes the time source,
+so nothing before it can know whether it is day or night. Config
+`BRIGHTNESS` is therefore the boot-ceremony level, and the day/night value
+takes over once the loop starts.
+
+### Kind 2 — multipliers *of* whatever `BRIGHTNESS` currently is
+
+These never write it; they scale it per LED role:
+
+| setting | default | role |
+|---|---|---|
+| `MARKER_BRIGHTNESS` | 0.25 | idle tick LEDs |
+| `BACKGROUND_BRIGHTNESS` | 0.35 | geometric falloff for the 2nd, 3rd… train |
+| `ANCHOR_BRIGHTNESS` | **1.6** | the station — deliberately above 1.0 |
+| `WAKE_JOLT_BRIGHTNESS_MULT` | 2.0 | the CONFIRM jolt peak |
+
+### ⚠ Raising `BRIGHTNESS` helps one kind and hurts the other
+
+This is the interaction worth knowing, and it is not symmetric.
+
+**Multipliers below 1.0 get safer.** `MARKER_BRIGHTNESS` is a product of
+three numbers, and raising the global ceiling lifts markers away from the
+low-PWM floor where channel matching collapses:
+
+| `BRIGHTNESS` | marker raw value |
+|---|---|
+| 0.15 | **3** — right on the measured floor |
+| 0.50 | 10 |
+| 0.85 | 17 |
+
+**Multipliers above 1.0 run out of headroom and then distort.**
+`ANCHOR_BRIGHTNESS = 1.6` means "brighter than a train", which only works
+while there is room above `BRIGHTNESS` to be brighter *in*. With the
+default `ANCHOR_COLOR = (255, 200, 120)`:
+
+| channel | clips above `BRIGHTNESS` |
+|---|---|
+| R | **0.625** |
+| G | 0.797 |
+| B | 1.328 |
+
+Past those the channels clamp at different points, so the anchor does not
+merely stop getting brighter — **its hue shifts.** At `BRIGHTNESS = 0.85`
+the intended 255:200:120 renders as **(255, 255, 163)**: a pale yellow-white
+instead of warm amber, and much closer to `MARKER_COLOR`'s neutral than it
+is supposed to be.
+
+At 0.62 it renders (253, 198, 119) — the ratio intact.
+
+**So a bright daylight setting and a prominent anchor are in direct
+tension, and the global value is where they meet.** Three ways out:
+
+1. Cap `DAY_BRIGHTNESS` at ~0.62. Conveniently, `insights.md` §15 measured
+   0.65 as "totally fine" through thick brown glass, so this costs almost
+   nothing in practice.
+2. Keep the higher day value and lower `ANCHOR_BRIGHTNESS` to ≤ 1.17, which
+   is the largest multiplier that does not clip red at 0.85.
+3. Accept the shift, having decided the anchor reads better pale than dim.
+
+All three are defensible. What is not defensible is picking a day value
+without knowing which one you chose.

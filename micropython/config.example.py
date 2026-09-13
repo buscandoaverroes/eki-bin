@@ -175,11 +175,19 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #                            BRIGHTNESS directly — no separate brightness knob.
 # LINE_SATURATION = 1.0    # 1.0=unchanged; lower = a genuinely MUTED
 #                            (desaturated) LINE_COLOR, not just a dimmer one
-# ⚠ Do NOT set MARKER_BRIGHTNESS at or below 0.15 with the default
-#   MARKER_COLOR. 80 × BRIGHTNESS 0.15 × 0.15 = raw 1 per channel, which is
-#   exactly where WS2812B channel matching collapses and "neutral" reads RED.
-#   Measured floor is 3 on the AE-WS2812B-STICK8; the 0.25 default clears it.
-#   Confirm per strip with `make low-pwm-test`. docs/insights.md §12.
+# ⚠ THE FLOOR IS A PRODUCT OF THREE NUMBERS, so a safe MARKER_BRIGHTNESS
+#   depends on BRIGHTNESS and stops being safe if you lower it:
+#       MARKER_COLOR 80 × BRIGHTNESS × MARKER_BRIGHTNESS = raw value
+#   At BRIGHTNESS 0.15, MARKER_BRIGHTNESS 0.15 gives raw 1 — exactly where
+#   WS2812B channel matching collapses and "neutral" reads RED. The 0.25
+#   default gives raw 3, the measured floor on the AE-WS2812B-STICK8.
+#   ⚠ Any "= raw N" note next to MARKER_BRIGHTNESS is only true at the
+#   BRIGHTNESS it was written for. At 0.50 the 0.25 default is raw 10; at
+#   0.85 it is raw 17. Raising BRIGHTNESS moves markers AWAY from the
+#   danger zone — it is the multipliers ABOVE 1.0 that get hurt (see the
+#   anchor note below). Confirm per strip with `make low-pwm-test`.
+#   docs/insights.md §12, and "How the brightness values compose" in
+#   docs/contracts/config.md.
 # MARKER_BRIGHTNESS = 0.25  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker) for the idle
 #                            "tick" LEDs — 0 = fully off. A train is never
