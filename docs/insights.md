@@ -1670,3 +1670,104 @@ Worth re-checking the other pairs against it. `outward` and `inward` are
 the same path in opposite directions, which is exactly the kind of
 near-collision that just bit — they are currently distinguished by
 direction alone.
+
+---
+
+## 17. Two findings from living with motion + tilt (2026-09-14)
+
+### A tilt session fires 1-3 spurious taps
+
+Tilting produces 1-3 tap detections per session, each answered with a
+`shake` — an elegant "no" to a question nobody asked.
+
+The cause is the mirror of a problem already solved one layer down.
+`tilt.py` rejects any sample whose |a| is not ≈1 g, because a transient is
+not an orientation. **The tap trigger has no equivalent gate, and it is
+looking for exactly those transients** — the acceleration of moving the
+bottle is, to a threshold on deviation-from-baseline, indistinguishable
+from a deliberate strike.
+
+So the two halves of the "one sensor, split by magnitude" idea are not
+actually symmetric yet: tilt knows to ignore taps, taps do not know to
+ignore tilts.
+
+**The fix is mutual exclusion by STATE, not by threshold.** While
+`TiltController.engaged` is True the bottle is demonstrably being held and
+moved, so the tap trigger should be suppressed outright — no threshold
+tuning, no new features to measure. The converse already holds for free:
+`_handle_tap` blocks for its ~1.2 s capture, so tilt is not updated during
+a tap.
+
+Tuning a threshold instead would be the wrong move twice over: it is the
+approach §8 spent fifteen sessions proving does not transfer between
+bottles, and here there is a clean state signal available that costs
+nothing.
+
+### The display cannot say "there IS a train, just not near enough"
+
+At 00:29 with the next train 305 minutes out, the strip shows the anchor
+and its markers and nothing else. **Mathematically perfect, and exactly
+wrong as UX** — it is indistinguishable from a broken jar, and from a jar
+saying "no more trains ever".
+
+The mechanics are all correct in isolation, which is why nothing caught it:
+
+- `_arm_target()` returns `None` when the offset exceeds the arm, and
+  *should* — an approach contract genuinely cannot show a train further
+  out than the strip reaches.
+- `LeaveSignal.urgency` is `LEVEL_3`, not `HIDDEN`, and *should be* — there
+  are real catchable trains.
+- `_all_signals_hidden()` is therefore False, so the existing no-data
+  acknowledgment never fires.
+
+**The gap is at the stage-1/stage-2 seam: the signal doesn't know the
+renderer's reach.** And the reach is not hidden — it is
+`ARM_LEN × POSITION_MINUTES_PER_LED`, two settings already in config. On
+this unit, 10 × 2 = a 20-minute horizon.
+
+So there are **three** states being collapsed into two:
+
+| state | today | should be |
+|---|---|---|
+| trains in range | arc renders | ✓ |
+| trains exist, beyond the horizon | **looks identical to broken** | its own answer |
+| no more trains at all | anchor + markers, plus the no-data ack | ✓ |
+
+### What it should do — and one option to rule out
+
+**⚠ Not `breathe`, and not a glow.** `light-language.md` §3 is explicit
+that breathe is the one word whose energy never decays, which is precisely
+why it means *unresolved* — and "the next train is at 05:37" is completely
+resolved. Spending the error verb on the most ordinary state a timetable
+has would cost the vocabulary its only word for "something is actually
+wrong". A colour change is available but spends hue, which §12 measured
+this glass as barely having.
+
+**The principled answer is that a lit anchor is a promise.** It says "here
+is the station, and here is what's coming". Rendering it with nothing on
+the arms is a promise with nothing behind it. So the display should stop
+claiming — answer the tap, then go dark.
+
+Two ceremonies fall out of that, and the second is the better idea:
+
+1. **Goodnight.** A tap that resolves to "nothing within reach tonight"
+   gets a bounded gesture that *ends* — and then the strip goes dark
+   rather than sitting lit. Distinct from the no-data ack, because "come
+   back tomorrow" and "you missed the last train" are different facts.
+2. **Good morning, and the flower.** The insight that makes this cheap:
+   **the flower already happens.** A train crossing into the horizon lights
+   the outermost LED of an arm, then the next, with the anchor already
+   there — an arc opening from its edge inward. Nobody has ever seen it
+   because the display is asleep by then. So this is not an animation to
+   build; it is a **scheduling** question: wake shortly before
+   `first_departure − horizon − walk`, and let the existing renderer do it.
+
+That reframe matters for cost as well as elegance. A morning wake is one
+extra awake window per day, against the 6 taps/day the power budget
+already assumes — cheap, and `taps/day` is the lever that model says
+matters most, so it should be counted rather than assumed free.
+
+**Open:** whether goodnight/good-morning are time-of-day judgements or
+purely "is the next train beyond the horizon" ones. The second is simpler
+and needs no notion of "tomorrow"; the first is what a person would
+actually mean.
