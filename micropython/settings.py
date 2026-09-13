@@ -473,14 +473,31 @@ MOTION_INWARD_MS = getattr(config, "MOTION_INWARD_MS", 1600)
 MOTION_SHAKE_MS = getattr(config, "MOTION_SHAKE_MS", 650)       # the "no"
 MOTION_SHAKE_BOUNCES = getattr(config, "MOTION_SHAKE_BOUNCES", 3)
 
-# ⚠ PER-UNIT PHYSICAL FACT, like ARC_ORIGIN and the arm A/B orientation:
-# the two LEDs flanking the LABEL EDGE, so the "no" bounces against the one
-# boundary the vessel actually has. Established with the bottle in hand
-# (`make motion-sandbox`), recorded in that unit's registry entry, and NOT
-# derivable from code. The default below is a placeholder that is wrong for
-# every real bottle — it keeps the word working rather than being right.
-SHAKE_BOUNDS = getattr(config, "SHAKE_BOUNDS",
-                       (max(0, NUM_LEDS // 2 - 3), min(NUM_LEDS - 1, NUM_LEDS // 2 + 3)))
+# ⚠ THE SHAKE HAS TWO CONSTRAINTS, AND THEY ARE NOT THE SAME KIND OF THING.
+# Measured on hardware 2026-09-14, and the decomposition IS the finding:
+#
+#   WIDTH is a property of the VOCABULARY, and it is universal.
+#     ±5 LEDs reads like a short lap of `around` — the "no" and the
+#     "transition" stop being distinguishable, which breaks the one thing a
+#     vocabulary has to do. ±4 is borderline. **±3 is clean**: unmistakably
+#     a bounce, and it lands as a head-shake rather than a stunted spin.
+#     This has nothing to do with any particular bottle.
+#
+#   CENTRE is a per-unit PHYSICAL fact, like ARC_ORIGIN and arm A/B.
+#     The bounce should sit against the LABEL EDGE, the one boundary the
+#     vessel actually has. A bottle with no label (the bench unit) has no
+#     such constraint and the middle is fine.
+#
+# Split into two constants so the universal half stops being re-derived per
+# unit and the per-unit half stops being buried in a tuple. SHAKE_BOUNDS
+# still wins if set explicitly — an asymmetric bounce is a legitimate thing
+# to want and this should not take the option away.
+SHAKE_HALF_WIDTH = getattr(config, "SHAKE_HALF_WIDTH", 3)  # vocabulary, not taste
+SHAKE_CENTER = getattr(config, "SHAKE_CENTER", NUM_LEDS // 2)  # the label edge
+SHAKE_BOUNDS = getattr(config, "SHAKE_BOUNDS", (
+    max(0, SHAKE_CENTER - SHAKE_HALF_WIDTH),
+    min(NUM_LEDS - 1, SHAKE_CENTER + SHAKE_HALF_WIDTH),
+))
 
 # ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
 # "off"  — driven dark at boot. Right for a finished object: a jar with a

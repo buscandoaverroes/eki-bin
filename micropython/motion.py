@@ -132,7 +132,12 @@ def shake(phase_ms, ms=None, bounces=None, width=1.2):
     fails to complete is a better negative than a colour, because nobody
     has to have learned it first — it works the first time someone sees
     it. Amplitude decays over the bounces: energy dissipating without
-    having gone anywhere, which is exactly the message."""
+    having gone anywhere, which is exactly the message.
+
+    ⚠ WIDTH IS LOAD-BEARING, measured 2026-09-14: at ±5 LEDs this reads as
+    a short lap of `around` and the two words stop being distinguishable.
+    ±3 is a head-shake. See SHAKE_HALF_WIDTH — it is a property of the
+    vocabulary, not a per-bottle preference."""
     ms = ms or MOTION_SHAKE_MS
     bounces = bounces or MOTION_SHAKE_BOUNCES
     a, b = SHAKE_BOUNDS

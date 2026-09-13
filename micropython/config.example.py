@@ -382,13 +382,14 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # to fire before anything is classified. docs/contracts/light-language.md
 MOTION_ENABLED = True
 #
-# ⚠ SHAKE_BOUNDS IS PER-UNIT AND THE DEFAULT IS WRONG FOR YOUR BOTTLE.
-# The two LEDs flanking the LABEL EDGE, so the "no" bounces against the
-# one boundary the vessel actually has. Find it with `make motion-sandbox`
-# with the bottle in its final orientation, then record it here AND in
-# that unit's registry entry — like ARC_ORIGIN and the arm A/B direction,
-# it is established by hand and cannot be re-derived from code.
-# SHAKE_BOUNDS = (7, 13)
+# The shake's WIDTH is fixed by the vocabulary and you should not need to
+# touch it: ±5 LEDs reads as a short lap of `around` and the two words
+# stop being distinguishable; ±3 is a clean head-shake. Its CENTRE is the
+# per-unit part — put it at the LABEL EDGE so the "no" bounces against the
+# one boundary the vessel has. A bottle with no label needs neither.
+# SHAKE_CENTER = 10        # defaults to the middle of the strip
+# SHAKE_HALF_WIDTH = 3     # vocabulary constant — measured, not taste
+# SHAKE_BOUNDS = (7, 13)   # overrides both, for an asymmetric bounce
 
 # ── Tilt to adjust brightness ──────────────────────────────────────
 # Tilt the bottle: the first lean past the deadzone defines the axis AND

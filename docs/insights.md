@@ -1631,3 +1631,42 @@ class object at runtime — `__doc__`, `__name__`, `__module__` — needs
 checking on device, or replacing with an explicit table. The test that
 replaced it checks the table stays in step with what it describes, which is
 the part a host *can* verify.
+
+
+---
+
+## 16. A vocabulary's words have to be distinguishable from each other (2026-09-14)
+
+Finding `SHAKE_BOUNDS` on the bench unit turned out not to be the
+per-unit measurement it was filed as. The bottle has no label, so the
+"bounce against the label edge" rationale did not apply at all — and the
+width still mattered, for a different reason:
+
+| half-width | reads as |
+|---|---|
+| ±5 | **a short lap of `around`** — the two words blur together |
+| ±4 | borderline |
+| **±3** | **a head-shake.** Unmistakable, and it has a nice bounce |
+
+**So the constraint is not "where is the label", it is "do not look like
+another word".** That is a property of the vocabulary and it is universal;
+the label only ever decides *where* the bounce sits, never how wide it is.
+
+The two halves were tangled in one config tuple and are now split:
+
+| | kind | scope |
+|---|---|---|
+| `SHAKE_HALF_WIDTH` | measured vocabulary constant | universal — don't touch |
+| `SHAKE_CENTER` | physical fact about the vessel | per-unit, like `ARC_ORIGIN` |
+
+**The general lesson is bigger than the shake.** `light-language.md` §7
+asks whether the five words are distinguishable *through the glass* —
+diffusion was the expected threat. This is the other axis: two words can
+be perfectly legible and still collapse into each other because their
+*shapes* are too close. A vocabulary fails either way, and only one of
+those failures has anything to do with the enclosure.
+
+Worth re-checking the other pairs against it. `outward` and `inward` are
+the same path in opposite directions, which is exactly the kind of
+near-collision that just bit — they are currently distinguished by
+direction alone.

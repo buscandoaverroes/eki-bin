@@ -153,3 +153,30 @@ def test_a_cycle_with_somewhere_to_go_renders_nothing_here(load_main):
                         None, main._StatusMessage(), can_cycle=True)
     assert out == "cycle"
     assert played == []
+
+
+def test_shake_stays_narrow_enough_to_not_be_a_lap(load_main):
+    """Measured 2026-09-14: at ±5 LEDs the shake reads as a short lap of
+    `around` and the two words stop being distinguishable — which breaks
+    the one thing a vocabulary has to do. ±3 is a head-shake.
+
+    The width is therefore a VOCABULARY constant, not a per-bottle
+    preference, and this pins the default against drifting wider."""
+    m = _load(load_main, NUM_LEDS=21)
+    st = importlib.import_module("settings")
+    assert st.SHAKE_HALF_WIDTH <= 3
+    a, b = m.SHAKE_BOUNDS
+    assert b - a <= 6
+
+
+def test_shake_centre_is_the_per_unit_half(load_main):
+    """Centre moves to the label edge; width does not move with it."""
+    m = _load(load_main, NUM_LEDS=21, SHAKE_CENTER=4)
+    assert m.SHAKE_BOUNDS == (1, 7)
+
+
+def test_explicit_bounds_still_win(load_main):
+    """An asymmetric bounce is a legitimate thing to want, and splitting
+    the constant should not take the option away."""
+    m = _load(load_main, NUM_LEDS=21, SHAKE_BOUNDS=(2, 5))
+    assert m.SHAKE_BOUNDS == (2, 5)
