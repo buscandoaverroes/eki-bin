@@ -160,7 +160,37 @@ ENGAGE_SAMPLES = 4          # consecutive good samples past the deadzone
 #
 # The leak runs ONLY when no session is active AND we are inside the
 # deadzone, so it can never eat a deliberate slow tilt.
-STILL_DEG = 2.0             # movement below this counts as "not moving"
+# ⚠ STILL_DEG WAS 2.0, AND THAT WAS TOO LOOSE. A hand holding a tilt to
+# aim sits inside 2° easily, so the release fired MID-TILT and made 25°
+# the new neutral — the exact false reference the stillness test was added
+# to escape. Overcorrected in the direction of the original bug.
+#
+# The discriminator that actually separates the two cases:
+#
+#     A HAND IS NEVER PERFECTLY STILL. A BOTTLE ON A TABLE IS.
+#
+# Not "has it stopped moving much" — that is a judgement call with a
+# threshold in the middle of the distribution. "Is it moving at all, above
+# the sensor's own noise" has the two populations on opposite sides of it:
+# human tremor is always present, and a resting object has none.
+#
+# Two changes follow from that:
+#
+#   * Measure the SPREAD over a short window, not drift from a reference.
+#     A slow hand drift passes a drift test while never being still.
+#   * Measure it on the RAW sample, not the EMA'd one. SMOOTH_ALPHA exists
+#     to remove exactly the high-frequency tremor that distinguishes a
+#     hand from a table, so testing the smoothed signal throws away the
+#     evidence.
+#
+# 0.4° is a STARTING GUESS, not a measured value. The telemetry prints the
+# live spread precisely so the real number can be read off a session: hold
+# it, then set it down, and look at where the two populations sit.
+STILL_DEG = 0.4             # spread, in degrees, over STILL_WINDOW samples
+STILL_WINDOW = 24           # ~0.6s at POLL_MS — long enough to catch tremor
+STILL_RELEASE_MS = 1500     # stillness this long releases. DIFFERENT JOB
+#   from RELEASE_MS, hence a different number: RELEASE_MS is the budget for
+#   a deliberate reversal through the deadzone, this is "you put it down".
 BASELINE_ALPHA = 0.02       # ~1.2s to re-learn neutral at 40Hz
 
 MIN_BRIGHT = 0.03           # never all the way off — a dark strip is
@@ -353,7 +383,7 @@ def run(curve=None, target=None, announce=True):
     g_filt = None       # smoothed gravity direction
     rejected = 0        # samples the magnitude gate threw away
     past_deadzone = 0   # consecutive good samples past it — engage debounce
-    still_ref = None    # tilt angle the stillness test is measured against
+    still_win = []      # recent RAW tilt angles — spread is the stillness test
     still_since = None
 
     def _settled(now):
@@ -421,13 +451,18 @@ def run(curve=None, target=None, announce=True):
 
             deg, perp_hat = _tilt(g_hat, rest_hat)
 
-            # Has it stopped moving? Tested on the ANGLE, not on the
-            # brightness — a control pinned at a rail stops changing
-            # brightness while the bottle is still being waved about.
-            if still_ref is None or abs(deg - still_ref) > STILL_DEG:
-                still_ref = deg
+            # Stillness, on the RAW angle and as a SPREAD — see STILL_DEG.
+            # Tested on the angle rather than on brightness because a
+            # control pinned at a rail stops changing brightness while the
+            # bottle is still being waved around.
+            raw_deg, _unused = _tilt(sample_hat, rest_hat)
+            still_win.append(raw_deg)
+            if len(still_win) > STILL_WINDOW:
+                still_win.pop(0)
+            spread = (max(still_win) - min(still_win)) if len(still_win) >= STILL_WINDOW else 999.0
+            if spread > STILL_DEG:
                 still_since = now
-            steady = time.ticks_diff(now, still_since) >= RELEASE_MS
+            steady = time.ticks_diff(now, still_since) >= STILL_RELEASE_MS
 
             # A session that has gone quiet ends here regardless of the
             # ANGLE it went quiet at — this is the escape from a false
@@ -439,8 +474,8 @@ def run(curve=None, target=None, announce=True):
                 session = None
                 quiet_since = None
                 past_deadzone = 0
-                print("   (released at %.1f° — that orientation is now"
-                      " neutral)\n" % deg)
+                print("   (set down at %.1f°, spread %.2f° — that"
+                      " orientation is now neutral)\n" % (deg, spread))
                 _render(target)
                 if _settled(now):
                     outcome[0] = "hit"
@@ -544,9 +579,10 @@ def run(curve=None, target=None, announce=True):
                 # inferred from how fast a number crept — which is why
                 # "even 10 made no difference" was a reasonable reading of
                 # a genuinely huge change.
-                print("   %5.1f°  %s  rate %+.3f/s  %.2f%s"
+                print("   %5.1f°  %s  rate %+.3f/s  %.2f  jitter %.2f°%s"
                       % (deg, "UP  " if amount > 0 else "DOWN",
-                         RATE_PER_SEC * amount, settings.BRIGHTNESS, rail))
+                         RATE_PER_SEC * amount, settings.BRIGHTNESS,
+                         spread if spread < 900 else 0.0, rail))
 
             time.sleep_ms(POLL_MS)
     except KeyboardInterrupt:
