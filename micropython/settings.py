@@ -465,6 +465,64 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 
+# ── Horizon ceremonies: goodnight, and the morning flower ────────────
+# insights.md §17. A lit anchor is a PROMISE — "here is the station, here
+# is what's coming". Rendering it with nothing on the arms is a promise
+# with nothing behind it, and reads as a broken jar.
+#
+# ⚠ NOT `breathe`, and the reason is structural. light-language.md §3 is
+# explicit that breathe is the one word whose energy never decays, which
+# is exactly why it means UNRESOLVED. "The next train is at 05:37" is
+# completely resolved — spending the error verb on the most ordinary state
+# a timetable has would cost the vocabulary its only word for something
+# being genuinely wrong.
+#
+# Goodnight is `outward`, slowed: energy leaving the station and
+# dissipating. No sixth word needed.
+GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
+
+# THREE waves, because one is a gesture and three are a ceremony. Each is
+# (color, duration_ms, peak), and the sequence is a SUNSET: slower, dimmer
+# and cooler each time.
+#
+# ⚠ THE COLOUR DRIFT IS THE PART THIS VESSEL WILL NOT SHOW. §12 measured
+# amber glass as a blue-cut filter, so the third wave's blue arrives deep
+# and dark rather than blue — which is, as it happens, exactly what a final
+# goodnight wave should look like. The winding-down is carried by DURATION
+# and DECAY, which diffusion passes through intact (§15), so the ceremony
+# degrades gracefully: a clear bottle gets a sunset, a brown one gets a
+# fade. Neither is wrong and neither depends on the other.
+GOODNIGHT_WAVES = getattr(config, "GOODNIGHT_WAVES", (
+    ((200, 90, 0), 1400, 1.00),    # amber, the ordinary evening
+    ((140, 60, 60), 2100, 0.70),   # dimmer, cooling
+    ((40, 40, 150), 3200, 0.45),   # deep blue, slow, nearly gone
+))
+GOODNIGHT_GAP_MS = getattr(config, "GOODNIGHT_GAP_MS", 260)  # breath between
+
+# The morning flower. ⚠ A SCHEDULING feature, not an animation one: the
+# flower already happens — a train crossing the horizon lights an arm's
+# outermost LED and works inward, which is the ordinary renderer doing its
+# job. It has never been seen because the display is asleep by then.
+#
+# ⚠ COSTS ONE EXTRA AWAKE WINDOW PER DAY. The power budget puts taps/day
+# at the largest single lever (roadmap.md), so this is not free on a
+# battery build — it is one more wake against the six that model assumes.
+MORNING_WAKE_ENABLED = getattr(config, "MORNING_WAKE_ENABLED", False)
+MORNING_LEAD_MINUTES = getattr(config, "MORNING_LEAD_MINUTES", 1)  # wake this
+#   long BEFORE the first train crosses the horizon, so the anchor is
+#   already lit when the first pixel arrives rather than appearing with it
+# The same ceremony run backwards: a SUNRISE. Faster, brighter and warmer
+# each time, ending on a yellow that amber glass keeps (it sits on the
+# red-green axis the vessel does not filter). The first wave is the one
+# that will barely show in brown glass, and that is the right one to lose —
+# pre-dawn is meant to be barely there.
+MORNING_WAVES = getattr(config, "MORNING_WAVES", (
+    ((60, 30, 90), 2400, 0.35),    # pre-dawn, cool and dim
+    ((220, 110, 10), 1700, 0.70),  # warming
+    ((255, 200, 0), 1200, 1.00),   # full daylight yellow
+))
+MORNING_GAP_MS = getattr(config, "MORNING_GAP_MS", 220)
+
 # ── The light language: motion words ─────────────────────────────────
 # light-language.md §3. Motion is the one expressive channel not already
 # carrying meaning — position is time-to-leave, hue is line identity (and

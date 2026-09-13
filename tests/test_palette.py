@@ -26,7 +26,7 @@ def test_the_original_marker_bug_is_caught(load_main):
     """MARKER_COLOR 80 × BRIGHTNESS 0.15 × MARKER_BRIGHTNESS 0.15 = raw 1,
     which is exactly where WS2812B channel matching collapses and neutral
     reads RED. It took weeks to diagnose on hardware (insights §12)."""
-    p = _load(load_main, BRIGHTNESS=0.15, MARKER_BRIGHTNESS=0.15,
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.15, MARKER_BRIGHTNESS=0.15,
               DAY_NIGHT_ENABLED=False, TILT_ENABLED=False)
     probs = p.palette_problems()
     assert any("marker" in x and "floor" in x for x in probs), _names(probs)
@@ -35,7 +35,7 @@ def test_the_original_marker_bug_is_caught(load_main):
 def test_the_shipping_default_is_clean(load_main):
     """0.25 was chosen to give raw 3 at BRIGHTNESS 0.15 — the measured
     floor. If this ever fails, either the default moved or the floor did."""
-    p = _load(load_main, BRIGHTNESS=0.15, MARKER_BRIGHTNESS=0.25,
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.15, MARKER_BRIGHTNESS=0.25,
               DAY_NIGHT_ENABLED=False, TILT_ENABLED=False)
     assert p.palette_problems() == []
 
@@ -45,7 +45,7 @@ def test_a_deliberately_dark_channel_is_not_a_problem(load_main):
     would — and a channel that is SUPPOSED to be off is not broken for
     being off. Without this the checker would cry wolf on every saturated
     colour anyone picks."""
-    p = _load(load_main, BRIGHTNESS=0.5, LINE_COLOR=(255, 0, 0),
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.5, LINE_COLOR=(255, 0, 0),
               MARKER_BRIGHTNESS=0.25, DAY_NIGHT_ENABLED=False,
               TILT_ENABLED=False, N_TRAINS=1)
     assert not any("train" in x and "floor" in x for x in p.palette_problems())
@@ -58,7 +58,7 @@ def test_the_anchor_clip_is_caught_and_named_as_a_hue_shift(load_main):
     """ANCHOR_BRIGHTNESS 1.6 × 0.85 clips R and G but not B, so the anchor
     does not merely stop getting brighter — it turns pale. Reporting it as
     "clipping" would understate what actually goes wrong."""
-    p = _load(load_main, BRIGHTNESS=0.85, DAY_NIGHT_ENABLED=False,
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.85, DAY_NIGHT_ENABLED=False,
               TILT_ENABLED=False)
     probs = p.palette_problems()
     assert any("anchor" in x and "HUE shifts" in x for x in probs), _names(probs)
@@ -68,7 +68,7 @@ def test_total_clipping_is_reported_differently(load_main):
     """All three channels clipping is a different failure from some of
     them: the role stops being distinguishable by colour at all, rather
     than shifting to a different one."""
-    p = _load(load_main, BRIGHTNESS=1.0, ANCHOR_COLOR=(255, 255, 255),
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=1.0, ANCHOR_COLOR=(255, 255, 255),
               ANCHOR_BRIGHTNESS=2.0, DAY_NIGHT_ENABLED=False,
               TILT_ENABLED=False)
     assert any("white" in x for x in p.palette_problems())
@@ -82,7 +82,7 @@ def test_every_reachable_brightness_is_swept(load_main):
     NIGHT_BRIGHTNESS and broken at DAY_BRIGHTNESS, and nobody reads a
     config at two brightnesses at once — which is how the anchor bug
     survived being looked at."""
-    p = _load(load_main, BRIGHTNESS=0.45, DAY_NIGHT_ENABLED=True,
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.45, DAY_NIGHT_ENABLED=True,
               DAY_BRIGHTNESS=0.90, NIGHT_BRIGHTNESS=0.45, TILT_ENABLED=False)
     probs = p.palette_problems()
     assert any("DAY_BRIGHTNESS" in x for x in probs), _names(probs)
@@ -94,8 +94,9 @@ def test_the_tilt_rails_are_swept_too(load_main):
     off" and "not blinding", with no reference to the palette — so tilt
     could drive BRIGHTNESS to 0.90 (anchor pale) or 0.05 (markers at raw
     1, the original bug) even after DAY_BRIGHTNESS had been fixed."""
-    p = _load(load_main, BRIGHTNESS=0.5, DAY_NIGHT_ENABLED=False,
-              TILT_ENABLED=True, TILT_MIN_BRIGHT=0.05, TILT_MAX_BRIGHT=0.90)
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.5,
+              DAY_NIGHT_ENABLED=False, TILT_ENABLED=True,
+              TILT_MIN_BRIGHT=0.05, TILT_MAX_BRIGHT=0.90)
     probs = p.palette_problems()
     assert any("TILT_MAX_BRIGHT" in x for x in probs), _names(probs)
     assert any("TILT_MIN_BRIGHT" in x for x in probs), _names(probs)
@@ -106,16 +107,34 @@ def test_the_tilt_rails_are_swept_too(load_main):
 
 def test_safe_range_names_what_binds_each_end(load_main):
     """A window alone is not actionable — you need to know which role to
-    change. bottle-01's is 0.25-0.62, floored by the dimmest background
-    train and capped by the anchor."""
-    p = _load(load_main, BRIGHTNESS=0.5, N_TRAINS=2, MARKER_BRIGHTNESS=0.25)
+    change. bottle-01's is 0.15-0.62, floored by the marker and capped by
+    the anchor."""
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.5, N_TRAINS=2,
+              MARKER_BRIGHTNESS=0.25)
     lo, lo_why, hi, hi_why = p.safe_range()
-    assert 0.24 < lo < 0.26 and "train #2" in lo_why
+    assert 0.14 < lo < 0.16 and "marker" in lo_why
     assert 0.62 < hi < 0.63 and "anchor" in hi_why
 
 
+def test_roles_are_per_contract(load_main):
+    """ApproachContract paints every train at 1.0 and owns the anchor and
+    markers; the arc contracts dim each layer by BACKGROUND_BRIGHTNESS and
+    have neither. Reporting arc roles under approach gave a usable-window
+    floor of 0.25 for a config whose real floor is 0.15 — a checker being
+    confidently wrong, which is worse than not having one."""
+    ap = _load(load_main, CONTRACT="approach", N_TRAINS=2)
+    names = [r[0] for r in ap.roles()]
+    assert "anchor" in names and "marker" in names
+    assert not any("#" in n for n in names), names
+
+    arc = _load(load_main, CONTRACT="sandtimer", N_TRAINS=2)
+    names = [r[0] for r in arc.roles()]
+    assert "anchor" not in names and "marker" not in names
+    assert any("#" in n for n in names), names
+
+
 def test_a_config_inside_its_own_safe_range_is_clean(load_main):
-    p = _load(load_main, BRIGHTNESS=0.45, DAY_NIGHT_ENABLED=True,
+    p = _load(load_main, CONTRACT="approach", BRIGHTNESS=0.45, DAY_NIGHT_ENABLED=True,
               DAY_BRIGHTNESS=0.60, NIGHT_BRIGHTNESS=0.30,
               TILT_ENABLED=True, TILT_MIN_BRIGHT=0.30, TILT_MAX_BRIGHT=0.60)
     assert p.palette_problems() == []
@@ -125,8 +144,8 @@ def test_an_impossible_palette_is_reported_as_impossible(load_main):
     """If the floor needs more brightness than the ceiling allows, no
     value works and saying "out of range" would send someone tuning
     forever."""
-    p = _load(load_main, N_TRAINS=4, BACKGROUND_BRIGHTNESS=0.1,
-              ANCHOR_BRIGHTNESS=4.0)
+    p = _load(load_main, CONTRACT="sandtimer", N_TRAINS=4,
+              BACKGROUND_BRIGHTNESS=0.001, LINE_COLOR=(34, 139, 34))
     lo, _lw, hi, _hw = p.safe_range()
     assert lo > hi
     assert any("NO usable BRIGHTNESS" in line for line in p.describe())

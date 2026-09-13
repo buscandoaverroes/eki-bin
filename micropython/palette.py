@@ -28,9 +28,9 @@
 # contracts.py paints train, marker and anchor all static.
 
 from settings import (ANCHOR_BRIGHTNESS, ANCHOR_COLOR, BACKGROUND_BRIGHTNESS,
-    BRIGHTNESS, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, LINE_COLOR, LOW_PWM_FLOOR,
-    MARKER_BRIGHTNESS, MARKER_COLOR, NIGHT_BRIGHTNESS, N_TRAINS,
-    TILT_ENABLED, TILT_MAX_BRIGHT, TILT_MIN_BRIGHT)
+    BRIGHTNESS, CONTRACT_NAME, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, LINE_COLOR,
+    LOW_PWM_FLOOR, MARKER_BRIGHTNESS, MARKER_COLOR, NIGHT_BRIGHTNESS,
+    N_TRAINS, TILT_ENABLED, TILT_MAX_BRIGHT, TILT_MIN_BRIGHT)
 
 _CH = ("R", "G", "B")
 
@@ -38,14 +38,29 @@ _CH = ("R", "G", "B")
 def roles():
     """(name, color, mult) for every role that composes multiplicatively.
 
-    Not the status messages: those render at mult 1.0 in a fixed colour, so
-    they cannot drift the way a product of three config values can."""
-    out = [("train", LINE_COLOR, 1.0),
-           ("anchor", ANCHOR_COLOR, ANCHOR_BRIGHTNESS)]
-    if MARKER_BRIGHTNESS > 0:
-        out.append(("marker", MARKER_COLOR, MARKER_BRIGHTNESS))
-    # The 2nd, 3rd... train fall off geometrically. Only the DIMMEST one can
-    # hit the floor, so checking that one covers the rest.
+    ⚠ ROLES ARE PER-CONTRACT, and getting this wrong makes the checker
+    confidently wrong rather than silent — which is worse than not having
+    it. The first version reported a `train #2` dimmed by
+    BACKGROUND_BRIGHTNESS for every contract, and under `approach` that
+    role does not exist: `_paint_layers`/`_layer_mult` back the ARC
+    contracts, while ApproachContract paints every train at mult 1.0
+    (contracts.py `_render_train`). The effect was a usable-window floor
+    of 0.25 for a config whose real floor is 0.15.
+
+    Not the status messages either: those render at mult 1.0 in a fixed
+    colour, so they cannot drift the way a product of three config values
+    can."""
+    if CONTRACT_NAME == "approach":
+        # Anchor and markers exist ONLY here; every train renders at 1.0.
+        out = [("train", LINE_COLOR, 1.0),
+               ("anchor", ANCHOR_COLOR, ANCHOR_BRIGHTNESS)]
+        if MARKER_BRIGHTNESS > 0:
+            out.append(("marker", MARKER_COLOR, MARKER_BRIGHTNESS))
+        return out
+    # Arc-based contracts: geometric falloff per layer, no anchor, no
+    # markers. Only the DIMMEST layer can hit the floor, so checking that
+    # one covers the rest.
+    out = [("train", LINE_COLOR, 1.0)]
     if N_TRAINS > 1:
         out.append(("train #%d" % N_TRAINS, LINE_COLOR,
                     BACKGROUND_BRIGHTNESS ** (N_TRAINS - 1)))
