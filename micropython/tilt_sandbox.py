@@ -48,7 +48,11 @@ MODE = "rate"               # "rate": tilt sets RATE of change — hold to keep
                             #   but you cannot set anything and let go.
 
 DEADZONE_DEG = 8.0          # below this, nothing happens and nothing engages
-FULL_TILT_DEG = 45.0        # tilt at which the control is at full authority
+# ⚠ WAS 45. Real sessions live in the 8-30° band — a bottle on a table is
+# awkward past 35° and needs lifting past 45°. Full authority has to be
+# reachable in the range actually used, or the top of the curve is
+# decorative.
+FULL_TILT_DEG = 35.0        # tilt at which the control is at full authority
 
 # ⚠ WAS 0.45 — retuned on hardware 2026-09-13. At 0.45 units/sec, full tilt
 # crossed the whole 0.03..0.90 range in under two seconds: the first real
@@ -76,12 +80,36 @@ LIVE_PRINT_MS = 250         # throttled telemetry — without it you cannot
 # nudge, a big one should move. A LINEAR map does not give that: at half
 # tilt it already runs at half rate, which is far too fast to aim with.
 #
-# The standard fix is an expo curve, the same one RC transmitters use on
-# a stick: raise the normalised input to a power, keeping the sign. At
-# CURVE = 2.5, half tilt runs at 18% rate rather than 50%, while full
-# tilt still reaches full rate — so the useful range is spread across the
-# whole travel instead of being crammed into the first few degrees.
-CURVE = 2.5
+# ⚠ WAS a power curve, `x ** CURVE`. Replaced 2026-09-13 after a real
+# session reported that changing it "even to 10" made no perceptible
+# difference. The arithmetic says it should: at 18° tilt x = 0.27, so
+# x**10 ≈ 0.000002 — a dead stick. Two things hid that:
+#
+#   1. **A power curve collapses the mid-range.** All the authority ends
+#      up in the last few degrees before FULL_TILT_DEG, and a bottle on a
+#      table rarely gets there — so across the band actually used, every
+#      high curve reads the same: "barely moving".
+#   2. **The operator closes the loop.** Given a slower response people
+#      just tilt further, which cancels the very change they were trying
+#      to judge. It feels identical while being numerically very different.
+#
+# The blended form below is what RC transmitters actually use, and it is
+# better behaved for exactly this complaint: EXPO is bounded 0..1, both
+# endpoints are pinned (0→0, 1→1), and the mid-range degrades gently
+# instead of falling off a cliff.
+#
+#   EXPO = 0.0  →  linear        EXPO = 1.0  →  pure cubic
+#
+# At EXPO 0.6, half tilt gives 0.6*0.125 + 0.4*0.5 = 0.275 — finer than
+# linear's 0.5, but not x**2.5's 0.18 or x**10's 0.001.
+EXPO = 0.6
+
+
+def expo(x, amount=None):
+    """PURE: blended linear/cubic expo. x in 0..1, returns 0..1."""
+    if amount is None:
+        amount = EXPO
+    return amount * (x * x * x) + (1.0 - amount) * x
 
 # ── Rejecting taps that look like tilt ───────────────────────────
 # Found by stress test (2026-09-13): tapping the bottle hard while it sat
@@ -107,6 +135,34 @@ SMOOTH_ALPHA = 0.15         # EMA on the gravity direction, ~150ms at 40Hz —
 ENGAGE_SAMPLES = 4          # consecutive good samples past the deadzone
                             #   before a session may start
 
+# ── Keeping "neutral" honest ─────────────────────────────────────
+# The first version captured `rest_hat` once, from the first good sample,
+# and never re-established it except on release. That produced the failure
+# the 2026-09-13 session hit repeatedly: a bottle sitting FLAT ON THE TABLE
+# reading 8.1° forever, never falling inside the deadzone, so the session
+# never released and brightness kept creeping. Later, the same bottle sat
+# at a rock-steady 28.5° — twelve identical prints, which no hand produces.
+#
+# Both are one bug. "Neutral" was whatever orientation happened to be
+# under the sensor at the instant the script started — often mid-handling,
+# and never the surface it ends up resting on.
+#
+# Two independent fixes, because each covers a case the other does not:
+#
+#   STILL_DEG   — release on "the tilt has STOPPED CHANGING", not only on
+#                 "the tilt is small". A bottle steady at 8.1° is plainly
+#                 at rest; only an absolute test could miss that.
+#   BASELINE_*  — while idle and inside the deadzone, leak `rest_hat`
+#                 toward where the bottle actually is. Whatever it has been
+#                 resting on becomes neutral within a few seconds. This is
+#                 the same auto-baselining every capacitive touch chip does
+#                 at power-on, for the same reason (surface-as-input.md §2).
+#
+# The leak runs ONLY when no session is active AND we are inside the
+# deadzone, so it can never eat a deliberate slow tilt.
+STILL_DEG = 2.0             # movement below this counts as "not moving"
+BASELINE_ALPHA = 0.02       # ~1.2s to re-learn neutral at 40Hz
+
 MIN_BRIGHT = 0.03           # never all the way off — a dark strip is
 MAX_BRIGHT = 0.90           #   indistinguishable from a fault
 POLL_MS = 25
@@ -118,11 +174,11 @@ FEEDBACK_COLOR = settings.STARTUP_COLOR
 TARGET_COLOR = (0, 255, 0)
 
 # ── Target-acquisition test (curve_test) ─────────────────────────
-# CURVE is a FEEL parameter, and the edit-reflash-retry loop is a terrible
+# EXPO is a FEEL parameter, and the edit-reflash-retry loop is a terrible
 # way to tune feel. This turns it into a measurement: given a target
 # brightness, how long does it take to land on it, and how close do you get?
 # Fine control is exactly what expo is supposed to buy, so "time to acquire
-# a target" is the thing it should improve. If a higher CURVE does not make
+# a target" is the thing it should improve. If a higher EXPO does not make
 # targets faster to hit, it is not earning its complexity — the same bar
 # insights.md §8 held the tap classifier to.
 TARGET_TOLERANCE = 0.04     # ≈ one LED of the bar. "Land on the marker."
@@ -258,13 +314,13 @@ def run(curve=None, target=None, announce=True):
       held within TARGET_TOLERANCE for TARGET_SETTLE_MS, or `None` if
       ROUND_LIMIT_MS expires first. This is what curve_test drives.
 
-    `curve` overrides the module-level CURVE for this call, which is the
+    `curve` overrides the module-level EXPO for this call, which is the
     whole point of the second shape — comparing feel parameters by editing
     a constant and reflashing is how you end up trusting the last one you
     tried rather than the best one.
     """
     if curve is None:
-        curve = CURVE
+        curve = EXPO
     i2c, addr = gestures._get_imu()
     if addr is None:
         print("  ✗ No IMU — nothing to tilt. Check wiring, `make i2c-scan`.")
@@ -297,6 +353,8 @@ def run(curve=None, target=None, announce=True):
     g_filt = None       # smoothed gravity direction
     rejected = 0        # samples the magnitude gate threw away
     past_deadzone = 0   # consecutive good samples past it — engage debounce
+    still_ref = None    # tilt angle the stillness test is measured against
+    still_since = None
 
     def _settled(now):
         """True once BRIGHTNESS has held within tolerance long enough.
@@ -363,7 +421,42 @@ def run(curve=None, target=None, announce=True):
 
             deg, perp_hat = _tilt(g_hat, rest_hat)
 
+            # Has it stopped moving? Tested on the ANGLE, not on the
+            # brightness — a control pinned at a rail stops changing
+            # brightness while the bottle is still being waved about.
+            if still_ref is None or abs(deg - still_ref) > STILL_DEG:
+                still_ref = deg
+                still_since = now
+            steady = time.ticks_diff(now, still_since) >= RELEASE_MS
+
+            # A session that has gone quiet ends here regardless of the
+            # ANGLE it went quiet at — this is the escape from a false
+            # neutral, and without it the 8.1°-forever case cannot recover.
+            if session is not None and steady:
+                session.report(settings.BRIGHTNESS)
+                base = settings.BRIGHTNESS
+                rest_hat = g_hat     # whatever it settled at IS neutral now
+                session = None
+                quiet_since = None
+                past_deadzone = 0
+                print("   (released at %.1f° — that orientation is now"
+                      " neutral)\n" % deg)
+                _render(target)
+                if _settled(now):
+                    outcome[0] = "hit"
+                    break
+                time.sleep_ms(POLL_MS)
+                continue
+
             if deg < DEADZONE_DEG:
+                # Idle and level: let neutral drift to wherever the bottle
+                # actually sits. See BASELINE_ALPHA.
+                if session is None:
+                    rest_hat = _norm((
+                        rest_hat[0] + (g_hat[0] - rest_hat[0]) * BASELINE_ALPHA,
+                        rest_hat[1] + (g_hat[1] - rest_hat[1]) * BASELINE_ALPHA,
+                        rest_hat[2] + (g_hat[2] - rest_hat[2]) * BASELINE_ALPHA,
+                    ))[0]
                 # Inside the deadzone — which is ALSO the corridor you must
                 # pass through to reverse direction. So this timer is not
                 # just "idle detection": it is the budget for a deliberate
@@ -419,7 +512,7 @@ def run(curve=None, target=None, announce=True):
             along = _dot(perp_hat, session.axis)
             span = max(1.0, FULL_TILT_DEG - DEADZONE_DEG)
             amount = max(0.0, min(1.0, (deg - DEADZONE_DEG) / span))
-            amount = (amount ** curve) * along * sign   # expo — see CURVE
+            amount = expo(amount, curve) * along * sign
 
             if MODE == "rate":
                 settings.BRIGHTNESS += RATE_PER_SEC * amount * (dt_ms / 1000.0)
@@ -446,9 +539,14 @@ def run(curve=None, target=None, announce=True):
                     rail = "  ⟨at MAX — tilt the other way⟩"
                 elif settings.BRIGHTNESS <= MIN_BRIGHT + 1e-6:
                     rail = "  ⟨at MIN — tilt the other way⟩"
-                print("   %5.1f°  %s  %.2f%s"
+                # `rate` is the thing EXPO actually changes. Printing only
+                # degrees and brightness meant the curve's effect had to be
+                # inferred from how fast a number crept — which is why
+                # "even 10 made no difference" was a reasonable reading of
+                # a genuinely huge change.
+                print("   %5.1f°  %s  rate %+.3f/s  %.2f%s"
                       % (deg, "UP  " if amount > 0 else "DOWN",
-                         settings.BRIGHTNESS, rail))
+                         RATE_PER_SEC * amount, settings.BRIGHTNESS, rail))
 
             time.sleep_ms(POLL_MS)
     except KeyboardInterrupt:
@@ -469,12 +567,12 @@ def run(curve=None, target=None, announce=True):
     return elapsed, settings.BRIGHTNESS
 
 
-CURVES = (1.0, 2.5, 4.0)        # linear, the current default, aggressive
+CURVES = (0.0, 0.6, 1.0)        # linear, the current default, pure cubic
 TARGETS = (0.70, 0.20, 0.45)    # up, a long way down, then a middle value
 
 
 def curve_test(curves=CURVES, targets=TARGETS):
-    """Which CURVE lets you actually hit a number?
+    """Which EXPO lets you actually hit a number?
 
     For each curve, for each target: land the bar on the green marker and
     hold it. Time starts at your first tilt, not at the prompt. The
@@ -484,7 +582,7 @@ def curve_test(curves=CURVES, targets=TARGETS):
     ⚠ Read insights.md §8's methodology lesson before believing a result
     here: everything this project validated at small n came back smaller
     at scale. One pass of three targets is a HYPOTHESIS. Run it a few
-    times, on different days, before changing CURVE on the strength of it.
+    times, on different days, before changing EXPO on the strength of it.
     """
     i2c, addr = gestures._get_imu()
     if addr is None:
@@ -536,7 +634,7 @@ def curve_test(curves=CURVES, targets=TARGETS):
           % len(targets))
 
 
-ACTIVE = run    # ← swap to curve_test, or call either from the REPL
+ACTIVE = curve_test    # ← swap to curve_test, or call either from the REPL
 
 if __name__ == "__main__":
     ACTIVE()

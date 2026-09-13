@@ -149,3 +149,47 @@ def test_every_word_has_a_blurb(load_main):
     replacement table stays in step with WORDS."""
     m = _load(load_main)
     assert set(m.BLURB) == set(m.WORDS)
+
+
+# ── tilt_sandbox: the expo curve ─────────────────────────────────
+# Lives here rather than in its own file because it is the same kind of
+# thing — a pure curve backing a sandbox, testable without hardware while
+# the feel it produces is not.
+
+
+def _load_tilt(load_main, **overrides):
+    load_main(**overrides)
+    sys.modules.pop("tilt_sandbox", None)
+    return importlib.import_module("tilt_sandbox")
+
+
+def test_expo_pins_both_endpoints(load_main):
+    """Whatever the blend, zero tilt must mean zero rate and full tilt
+    must mean full rate — otherwise changing EXPO silently changes the
+    control's range as well as its shape, and the two can't be compared."""
+    t = _load_tilt(load_main)
+    for amount in (0.0, 0.3, 0.6, 1.0):
+        assert abs(t.expo(0.0, amount) - 0.0) < 1e-9
+        assert abs(t.expo(1.0, amount) - 1.0) < 1e-9
+
+
+def test_expo_is_finer_than_linear_in_the_middle(load_main):
+    t = _load_tilt(load_main)
+    for x in (0.2, 0.4, 0.6, 0.8):
+        assert t.expo(x, 0.6) < x
+
+
+def test_expo_zero_is_exactly_linear(load_main):
+    t = _load_tilt(load_main)
+    for x in (0.0, 0.25, 0.5, 0.75, 1.0):
+        assert abs(t.expo(x, 0.0) - x) < 1e-9
+
+
+def test_expo_never_collapses_the_midrange(load_main):
+    """The reason the power curve was replaced: x**10 at a realistic 18°
+    tilt is 0.000002, a dead stick, and every high power looked identical
+    in the band actually used. The blend is bounded below by the cubic, so
+    even the most aggressive setting keeps usable authority."""
+    t = _load_tilt(load_main)
+    assert t.expo(0.5, 1.0) == 0.125          # worst case is the pure cubic
+    assert t.expo(0.27, 1.0) > 0.019          # vs 0.000002 for x**10
