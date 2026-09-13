@@ -920,9 +920,14 @@ in parallel because it is gated on a shop trip, not on code.
 
 ---
 
-## Two outstanding discussions, flagged 2026-09-13
+## ⚠ Two outstanding discussions — PRIORITY, before more features
 
-Both surfaced while bringing up the second unit. Neither is scheduled.
+Both surfaced while bringing up the second unit — forced by the work
+rather than chosen, which is the reason they rank above the feature queue.
+Neither is scheduled, and neither should be started as code until it has
+been talked through. Also listed at the top of `docs/roadmap.md`'s
+priority-ordered open questions and in `CLAUDE.md`'s current focus, so
+they cannot quietly fall off.
 
 ### A wiring harness
 

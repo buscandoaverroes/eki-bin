@@ -133,6 +133,16 @@ docs, and the colour measurements below.
 property — run it **out** of the bottle) and `make hue-test` (glass property —
 run it **in**, and try several vessels).
 
+**⚠ Two things need discussing before more features, both forced by the
+second unit, both written up in `dev-status.md` § "Two outstanding
+discussions" and at the top of `docs/roadmap.md`'s priority list:** a
+**wiring harness / casing** (mounting the IMU took 20 minutes of chopstick
+work through the bottle mouth, and the battery build sends a pack, a load
+switch and a gated rail through the same hole), and a **provisioning
+manifest** (multiple DS3231s now exist with nothing to tell them apart —
+and `data/rtc-drift.jsonl` has no unit field, so one `make rtc-drift`
+against the wrong chip silently pollutes bottle-01's fit).
+
 **Open:** the vessel decision — thick brown is the best-looking and the most
 limiting. `docs/roadmap.md` v1.1 (Qi + soldering) is the next hardware step.
 When touching board-specific pins, update `pinouts/<board>.md` alongside
