@@ -59,7 +59,11 @@ FULL_TILT_DEG = 35.0        # tilt at which the control is at full authority
 # session went 0.15 → 0.90 in one movement, which reads as a broken control
 # rather than a fast one. 0.12 takes ~7s end to end, which is slow enough to
 # aim and still fast enough not to feel stuck.
-RATE_PER_SEC = 0.12         # "rate" mode: brightness units per second at full
+# 0.12 puts a floor of 0.87/0.12 ≈ 7.3s under a full-range traverse, which
+# showed up in the 2026-09-13 numbers as every target costing at least that
+# before any aiming. Expo now protects the low end, so the top can afford to
+# be quicker: 0.20 gives a ~4.4s traverse.
+RATE_PER_SEC = 0.20         # "rate" mode: brightness units per second at full
 GAIN = 0.45                 # "absolute" mode: brightness units at full tilt
 
 # ⚠ WAS 1200 — and 1200 made DIMMING STRUCTURALLY IMPOSSIBLE. Reversing
@@ -183,14 +187,35 @@ ENGAGE_SAMPLES = 4          # consecutive good samples past the deadzone
 #     hand from a table, so testing the smoothed signal throws away the
 #     evidence.
 #
-# 0.4° is a STARTING GUESS, not a measured value. The telemetry prints the
-# live spread precisely so the real number can be read off a session: hold
-# it, then set it down, and look at where the two populations sit.
-STILL_DEG = 0.4             # spread, in degrees, over STILL_WINDOW samples
+# ⚠ MEASURED 2026-09-13, and the guess was wrong in an important way:
+# **the instantaneous spread does NOT separate a hand from a table.**
+#
+#   table, set down        0.11°
+#   hand, held very steady 0.12°  ← overlaps outright
+#   hand, typical aiming   0.3-0.9°
+#
+# A 0.4° threshold released mid-tilt at 25.6° and made THAT neutral — the
+# same poisoned reference, one layer further in.
+#
+# What does separate them is DURATION, not depth. Across the whole session
+# the longest unbroken hand-held run under 0.4° was 1.5s; under 0.8°, 4.0s.
+# A bottle on a table is quiet for as long as you leave it. So the fix is
+# not a tighter threshold — that just moves which hand-steady moment slips
+# through — it is a LONGER ONE.
+#
+#   thr 0.4° → longest hand run 1.5s
+#   thr 0.5° → 2.75s
+#   thr 0.8° → 4.0s
+#
+# 6000ms at 0.5° sits well clear of every hand run measured, and the cost
+# of being wrong is asymmetric: releasing late is a mild annoyance,
+# re-baselining onto a hand-held angle poisons every reading afterwards.
+STILL_DEG = 0.5             # spread, in degrees, over STILL_WINDOW samples
 STILL_WINDOW = 24           # ~0.6s at POLL_MS — long enough to catch tremor
-STILL_RELEASE_MS = 1500     # stillness this long releases. DIFFERENT JOB
+STILL_RELEASE_MS = 6000     # stillness this long releases. DIFFERENT JOB
 #   from RELEASE_MS, hence a different number: RELEASE_MS is the budget for
-#   a deliberate reversal through the deadzone, this is "you put it down".
+#   a deliberate reversal through the deadzone, this is "you put it down"
+#   — and it is deliberately the most conservative number in the file.
 BASELINE_ALPHA = 0.02       # ~1.2s to re-learn neutral at 40Hz
 
 MIN_BRIGHT = 0.03           # never all the way off — a dark strip is
@@ -579,10 +604,13 @@ def run(curve=None, target=None, announce=True):
                 # inferred from how fast a number crept — which is why
                 # "even 10 made no difference" was a reasonable reading of
                 # a genuinely huge change.
-                print("   %5.1f°  %s  rate %+.3f/s  %.2f  jitter %.2f°%s"
+                # "jitter 0.00°" used to mean "window not full yet", which
+                # reads as PERFECTLY STILL — the opposite of the truth.
+                jit = "  --  " if spread > 900 else "%.2f°" % spread
+                print("   %5.1f°  %s  rate %+.3f/s  %.2f  jitter %s%s"
                       % (deg, "UP  " if amount > 0 else "DOWN",
                          RATE_PER_SEC * amount, settings.BRIGHTNESS,
-                         spread if spread < 900 else 0.0, rail))
+                         jit, rail))
 
             time.sleep_ms(POLL_MS)
     except KeyboardInterrupt:
@@ -605,6 +633,13 @@ def run(curve=None, target=None, announce=True):
 
 CURVES = (0.0, 0.6, 1.0)        # linear, the current default, pure cubic
 TARGETS = (0.70, 0.20, 0.45)    # up, a long way down, then a middle value
+# ⚠ Two of these start from the far rail and therefore REQUIRE A REVERSAL
+# through the deadzone. The 2026-09-13 numbers show where the time went:
+# linear's 28.8s and expo's 35.9s were both the 0.20 target, and both were
+# dominated by getting turned around rather than by the curve. If you want
+# to compare curves cleanly, use targets reachable WITHOUT reversing —
+# TARGETS = (0.30, 0.55, 0.80) from MIN — and keep the reversal cases as a
+# separate question.
 
 
 def curve_test(curves=CURVES, targets=TARGETS):

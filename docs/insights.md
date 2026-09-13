@@ -1562,6 +1562,62 @@ deadzone before engaging) cover glancing knocks that land inside the window.
 > magnitude — so the two gestures can coexist on one IMU without fighting,
 > and neither needs to know about the other.
 
+### Tilt neutral: the discriminator is duration, not depth
+
+Three rounds of getting this wrong, and the third one is the useful one.
+
+The reference for "upright" was first captured once at startup, which made
+neutral whatever orientation happened to be under the sensor at that
+instant — producing a bottle flat on a table reading 8.1° forever, and
+later sitting at a rock-steady 28.5°.
+
+The fix — release when the bottle stops moving, and re-learn neutral there
+— then **overshot into the same bug**: a hand holding a tilt to aim passed
+a 2° stillness test, so 25° became neutral.
+
+The proposed discriminator was *"a hand is never perfectly still; a bottle
+on a table is."* True in principle. **Measured, the instantaneous spread
+does not separate them:**
+
+| | jitter |
+|---|---|
+| table, set down | **0.11°** |
+| hand, held very steady | **0.12°** |
+| hand, typical aiming | 0.3-0.9° |
+
+Those overlap outright, so no threshold on spread alone can work — which
+is why tightening 2.0° → 0.4° moved *which* hand-steady moment slipped
+through rather than stopping it.
+
+**What separates them is how long the quiet lasts.** Across a full session
+the longest unbroken hand-held run was:
+
+| threshold | longest hand-held quiet run |
+|---|---|
+| 0.4° | 1.5 s |
+| 0.5° | 2.75 s |
+| 0.8° | 4.0 s |
+
+A bottle on a table is quiet for as long as you leave it. So the answer is
+a *longer* window, not a tighter one — 6 s at 0.5° clears every hand run
+measured.
+
+**And the cost of being wrong is asymmetric**, which is what justifies
+being conservative: releasing late is a mild annoyance, while re-baselining
+onto a hand-held angle poisons every reading afterwards. When two error
+directions cost different amounts, the threshold does not belong in the
+middle.
+
+### Telemetry that lies is worse than none
+
+`jitter 0.00°` was printed whenever the sample window was not yet full.
+It reads as *perfectly still* — the exact opposite of *no data yet* — and
+it appeared at the start of every session, which is precisely when the
+reference is most suspect. Now prints `--`.
+
+Same lesson as the rail indicator two days earlier: an instrument added to
+explain a behaviour has to be read as carefully as the behaviour.
+
 ### MicroPython compiles docstrings away
 
 `demo()` labelled each word with `fn.__doc__` and died at the first one:
