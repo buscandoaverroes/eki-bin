@@ -238,9 +238,18 @@ rtc-drift: _check-mpremote
 # Now the destructive one has to be asked for by name.
 #   make rtc-seed     WRITES        make rtc-test  reads    make rtc-drift  measures
 # Full procedure, including checking the HOST clock first: runbook §5b.
+#
+# ⚠ `rtc --set` IS CHAINED INTO THE SAME mpremote INVOCATION, not left to a
+# separate `make set-time`. The board's own RTC is VOLATILE — it has no
+# battery, and any reset returns it to 2021-01-01. Run as two commands there
+# is a window between them, and on 2026-09-13 a board really did reset inside
+# it: set-time confirmed 2026-09-13 21:10, and the very next command read
+# 2021-01-01 00:00:04 — four seconds of uptime. The seed guard caught it and
+# refused, which is the system working, but the window should not exist.
+# One invocation, no window. The guard stays as defence in depth.
 .PHONY: rtc-seed
 rtc-seed: _check-mpremote
-	$(MPREMOTE) run $(SRC_DIR)/rtc_seed.py
+	$(MPREMOTE) rtc --set run $(SRC_DIR)/rtc_seed.py
 
 # Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
 # (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,
