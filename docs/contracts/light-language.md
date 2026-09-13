@@ -1,6 +1,11 @@
 # The light language — struck glass
 
-**Status: design, nothing implemented.** Written 2026-09-04 out of the 24-hour
+**Status: §3's five words and §4's restructure are IMPLEMENTED** as of
+2026-09-13 (`micropython/motion.py`, behind `MOTION_ENABLED`, default off);
+§6's tilt shipped in `micropython/tilt.py` behind `TILT_ENABLED`. §5's
+deceleration rule is enforced in code (no word runs at constant velocity)
+but has **not** been judged on real glass yet — that is `make
+motion-sandbox`'s `ab("around")`. Everything else below is still design. Written 2026-09-04 out of the 24-hour
 field session on the v1.6 production unit (`docs/insights.md` §14). This doc
 names the general pattern; `docs/contracts/led-status-messages.md`'s catalog
 of errors and acknowledgments is a **subset of it**, not a rival — the same

@@ -42,7 +42,8 @@ from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
-    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, TILT_ENABLED,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, MOTION_AROUND_MS,
+    MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
     HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
@@ -50,6 +51,7 @@ from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLO
     SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
     WAKE_INTERACTION_ENABLED)
 from signals import (LeaveSignal, leave_signal, next_departures)
+import motion
 from tilt import TiltController
 from status import (quiet_onboard_leds,
     _play_startup_burst, _run_startup_failure_forever)
@@ -526,8 +528,13 @@ def _run_interactive_loop(schedule_data, led):
                         response = _handle_tap(
                             i2c, imu_addr, tick_now, dev, tap_state,
                             signal, signal_b, status_message,
+                            can_cycle=len(lines) > 1,
                         )
-                        if response == "cycle" and len(lines) > 1:
+                        # No `len(lines) > 1` guard here any more: the
+                        # response is now correct BY CONSTRUCTION, because
+                        # _handle_tap was told whether the action exists
+                        # before it chose how to answer.
+                        if response == "cycle":
                             line_index = (line_index + 1) % len(lines)
                             # Recompute NOW rather than waiting up to
                             # LOOP_INTERVAL_SECS for the slow task: a tap
@@ -535,6 +542,19 @@ def _run_interactive_loop(schedule_data, led):
                             # as a broken tap, not a slow one.
                             last_refresh = None
                             _apply_line_color(ACTIVE_CONTRACT, lines[line_index])
+                            if MOTION_ENABLED:
+                                # `around` AFTER the new line is applied, in
+                                # the NEW line's colour — so the motion
+                                # delivers the new state instead of
+                                # announcing that one is coming
+                                # (light-language.md §4). Two events, not
+                                # three, and the motion carries continuity
+                                # across the capture gap in a way the
+                                # brightness shelf never could.
+                                color = lines[line_index].get("color")
+                                motion.play("around",
+                                            tuple(color) if color else STARTUP_COLOR,
+                                            MOTION_AROUND_MS)
                             print(f"  [LINE] {lines[line_index].get('name', '?')}")
                         trigger_buffer = []  # the window covered this stretch
                         last_render = None  # force a repaint after the jolt

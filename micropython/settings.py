@@ -188,6 +188,11 @@ EXTEND_CONFIRM_MS = getattr(config, "EXTEND_CONFIRM_MS", 600)
 # under every other CONTRACT) — this vocabulary works the same regardless of
 # which CONTRACT is active.
 STATUS_LED_INDEX = getattr(config, "STATUS_LED_INDEX", NUM_LEDS // 2)
+NO_CYCLE_COLOR = getattr(config, "NO_CYCLE_COLOR", (128, 0, 200))  # purple —
+#   "you asked to change station and there is none". Shares QUIET_TAP_COLOR's
+#   value but NOT its constant, deliberately: the two are mutually exclusive
+#   in time (a no-cycle tap only reaches the classifier OUTSIDE quiet hours),
+#   so reuse is safe — but tuning one must never silently move the other.
 QUIET_TAP_COLOR = getattr(config, "QUIET_TAP_COLOR", (128, 0, 200))  # purple
 QUIET_TAP_DURATION_MS = getattr(config, "QUIET_TAP_DURATION_MS", 2500)
 NO_DATA_COLOR = getattr(config, "NO_DATA_COLOR", (200, 160, 0))  # gold/amber
@@ -449,6 +454,33 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   is an annoyance; re-baselining onto a hand-held angle poisons every
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
+
+# ── The light language: motion words ─────────────────────────────────
+# light-language.md §3. Motion is the one expressive channel not already
+# carrying meaning — position is time-to-leave, hue is line identity (and
+# §12 measured that thick brown glass supports only 2-3 hues at all), and
+# brightness is urgency/anchor/marker/day-night. Motion also survives the
+# enclosure best: diffusion blurs position and filters hue, but
+# change-over-time passes through it intact.
+#
+# ⚠ DEFAULT OFF. With this on, a tap's CONFIRM stops being a flash and
+# becomes a motion — a visible behaviour change on an existing unit
+# (design-principle #9).
+MOTION_ENABLED = getattr(config, "MOTION_ENABLED", False)
+MOTION_OUTWARD_MS = getattr(config, "MOTION_OUTWARD_MS", 900)   # the ACK
+MOTION_AROUND_MS = getattr(config, "MOTION_AROUND_MS", 1400)    # a transition
+MOTION_INWARD_MS = getattr(config, "MOTION_INWARD_MS", 1600)
+MOTION_SHAKE_MS = getattr(config, "MOTION_SHAKE_MS", 650)       # the "no"
+MOTION_SHAKE_BOUNCES = getattr(config, "MOTION_SHAKE_BOUNCES", 3)
+
+# ⚠ PER-UNIT PHYSICAL FACT, like ARC_ORIGIN and the arm A/B orientation:
+# the two LEDs flanking the LABEL EDGE, so the "no" bounces against the one
+# boundary the vessel actually has. Established with the bottle in hand
+# (`make motion-sandbox`), recorded in that unit's registry entry, and NOT
+# derivable from code. The default below is a placeholder that is wrong for
+# every real bottle — it keeps the word working rather than being right.
+SHAKE_BOUNDS = getattr(config, "SHAKE_BOUNDS",
+                       (max(0, NUM_LEDS // 2 - 3), min(NUM_LEDS - 1, NUM_LEDS // 2 + 3)))
 
 # ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
 # "off"  — driven dark at boot. Right for a finished object: a jar with a

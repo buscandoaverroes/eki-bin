@@ -72,6 +72,7 @@ When writing Rust code in this repo, take a teaching role:
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
 | The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
+| **The five motion words, as shipped** — `outward` on wake, `around` on a line change, `shake` for "nothing to change to" | `micropython/motion.py` |
 | **Tilt-to-adjust, the shipped controller** — magnitude gate, neutral re-learning, expo curve. One implementation, used by both the firmware and the sandboxes | `micropython/tilt.py` |
 | Tilt bench tests: the go-up-first overshoot (**run in the dark**) and `curve_test`'s timed target acquisition | `micropython/tilt_sandbox.py` (`make tilt-sandbox`) |
 | Tilt **freeform** — no target, logs every sample to JSONL, asks how it felt. The one that produces usable data | `micropython/tilt_freeform.py` |

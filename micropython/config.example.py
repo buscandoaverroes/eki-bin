@@ -373,6 +373,23 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # DAY_BRIGHTNESS = 0.30
 # NIGHT_BRIGHTNESS = 0.15
 #
+# ── The light language: motion instead of flashes ──────────────────
+# With this on, a tap's CONFIRM stops being a flash and becomes a word:
+#   wake from asleep        → `outward` from the anchor, ∝ strike force
+#   cycle to another line   → `around`, in the NEW line's colour
+#   cycle, but only 1 line  → `shake` — motion that fails to complete
+# The ACK stays a flash: it is the tactile "click" of the button and has
+# to fire before anything is classified. docs/contracts/light-language.md
+MOTION_ENABLED = True
+#
+# ⚠ SHAKE_BOUNDS IS PER-UNIT AND THE DEFAULT IS WRONG FOR YOUR BOTTLE.
+# The two LEDs flanking the LABEL EDGE, so the "no" bounces against the
+# one boundary the vessel actually has. Find it with `make motion-sandbox`
+# with the bottle in its final orientation, then record it here AND in
+# that unit's registry entry — like ARC_ORIGIN and the arm A/B direction,
+# it is established by hand and cannot be re-derived from code.
+# SHAKE_BOUNDS = (7, 13)
+
 # ── Tilt to adjust brightness ──────────────────────────────────────
 # Tilt the bottle: the first lean past the deadzone defines the axis AND
 # means "up"; leaning back the other way means "down". Return to upright

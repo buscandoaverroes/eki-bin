@@ -99,6 +99,11 @@ it with `getattr(config, "NAME", default)`, so
 | `DAY_END_HOUR` | int | no | `17` | End of "day" (exclusive); window may wrap past midnight |
 | `DAY_BRIGHTNESS` | float | no | `BRIGHTNESS` | Brightness during the day window. **Defaults to `BRIGHTNESS`, so the feature is neutral until set** |
 | `NIGHT_BRIGHTNESS` | float | no | `BRIGHTNESS` | Brightness outside it |
+| `MOTION_ENABLED` | bool | no | `False` | A tap's CONFIRM becomes a motion word instead of a flash |
+| `SHAKE_BOUNDS` | (int, int) | no | middle ±3 | **Per-unit.** The two LEDs flanking the label edge — where the "no" bounces. Default is wrong for every real bottle |
+| `MOTION_OUTWARD_MS` / `MOTION_AROUND_MS` / `MOTION_SHAKE_MS` | int | no | 900 / 1400 / 650 | Word durations |
+| `NO_CYCLE_COLOR` | (r,g,b) | no | `(128, 0, 200)` | "You asked to change line and there is none" |
+| `TILT_ENABLED` | bool | no | `False` | Tilt the bottle to adjust brightness |
 
 The display fields (`CONTRACT`, `COLOR_SCHEME`, `MINUTES_PER_LED`,
 `URGENCY_THRESHOLDS`, `BRIGHTNESS`, …) drive the rendering pipeline documented in
