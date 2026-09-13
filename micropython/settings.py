@@ -129,6 +129,16 @@ MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.25)  # LINEAR multipl
 #   the STATIC path (see _write_frame) — direct linear, no gamma. Needs to
 #   clear ~1 output code per MARKER_COLOR channel or it truncates invisibly
 #   to black. 0 = idle LEDs fully off.
+# ⚠ PER-STRIP MEASUREMENT, not a universal constant. The raw PWM value
+# below which WS2812B channels stop matching, so equal R=G=B stops reading
+# neutral and takes on an unpredictable hue. Measured at 3 on the
+# AE-WS2812B-STICK8 (insights.md §12); `make low-pwm-test`, OUT of the
+# bottle, re-measures it for a given strip. Every check in palette.py takes
+# this as its input, so a wrong value here makes those checks confidently
+# wrong — record the measured number in the unit's registry entry alongside
+# ARC_ORIGIN and SHAKE_CENTER.
+LOW_PWM_FLOOR = getattr(config, "LOW_PWM_FLOOR", 3)
+
 MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant

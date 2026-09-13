@@ -52,6 +52,7 @@ from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLO
     WAKE_INTERACTION_ENABLED)
 from signals import (LeaveSignal, leave_signal, next_departures)
 import motion
+import palette
 from tilt import TiltController
 from status import (quiet_onboard_leds,
     _play_startup_burst, _run_startup_failure_forever)
@@ -635,6 +636,21 @@ def main():
     #                        very visible inside a glass jar. status.py.
 
     if isinstance(ACTIVE_CONTRACT, ApproachContract):
+        # Palette is checked BEFORE geometry, deliberately: a bad geometry
+        # crashes the render loop and a bad palette merely looks wrong, so
+        # the one that will never announce itself goes first. Reported, not
+        # fatal — a hue that reads off is a real problem and not a reason to
+        # refuse to tell someone when their train is.
+        for _line in palette.describe():
+            print(_line)
+        _pal = palette.palette_problems()
+        if _pal:
+            print("\n  ⚠ PALETTE PROBLEMS (display only — not fatal):")
+            for _p in _pal:
+                print("     • %s" % _p)
+            print("     docs/contracts/config.md § How the brightness values"
+                  " compose\n")
+
         _geo = geometry_problems()
         if _geo:
             print("  ✗ ApproachContract geometry doesn't fit NUM_LEDS=%d:"
