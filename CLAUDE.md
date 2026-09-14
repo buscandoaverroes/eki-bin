@@ -55,6 +55,7 @@ When writing Rust code in this repo, take a teaching role:
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
 | **Palette checks** — `palette_problems()` / `safe_range()` / boot report; the usable BRIGHTNESS window and what binds each end | `micropython/palette.py` |
+| **On-board detection** — ESN vs the MLC, a piezo, and the gyro; why the mic wall is conceptual. *Analysis; nothing built* | `docs/on-board-detection.md` |
 | **Palette/brightness config — three proposals** to stop clipping and floor bugs being invisible. *A proposal; nothing built* | `docs/palette-model.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
 | Design rationale + full V2 hardware list | `docs/concept.md` |

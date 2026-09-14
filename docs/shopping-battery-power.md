@@ -166,3 +166,87 @@ Don't pre-solve it. Note it, and check it first if the strip misbehaves.
 - [ ] NiMH AA ×4 (×8 for a swap set)
 - [ ] 1000 µF electrolytic, 330 Ω, 10 kΩ
 - [ ] Optional: 74AHCT125, Schottky, inline switch
+
+
+---
+
+# Addendum — a piezo disc (a separate, cheaper errand)
+
+Not part of the battery build. Added 2026-09-14 because it is the same shop
+and the reasoning is in `docs/on-board-detection.md` §3②: **a contact piezo
+hears the glass actually ring.** A tap is a narrowband resonance and
+handling noise is broadband, which separates far more cleanly in frequency
+than in accelerometer magnitude — where §8 fought to 98.4% across fifteen
+sessions and stalled.
+
+## What to buy
+
+You want a **bare piezo element**: a brass disc with a ceramic layer and two
+wire leads. **Not** a buzzer — those have an oscillator built in and are
+outputs, not inputs.
+
+| Requirement | Value | Why |
+|---|---|---|
+| Type | bare element / diaphragm, 2 leads | a self-driving buzzer cannot be read |
+| Diameter | **measure your jar mouth first** | 20mm and 27mm are the common sizes; 35mm exists and probably won't fit |
+| Leads | pre-soldered wires preferred | soldering to the ceramic face lifts it if you dwell |
+
+### Search terms
+
+| Japanese | what it finds |
+|---|---|
+| `圧電素子` | piezo element — the main term |
+| `ピエゾ素子` | same, katakana spelling; try both |
+| `圧電サウンダ 素子` | sounder *element* (as opposed to a driven sounder) |
+| `圧電振動センサ` | piezo vibration sensor — sometimes sold pre-mounted |
+| `コンタクトマイク` | contact mic — the same part, framed as audio |
+| `圧電ブザー` | ⚠ buzzer — **the thing to avoid**, listed so you recognise it |
+
+Akizuki stocks these under sounders; Switch Science lists them under sensors
+and under Grove/Qwiic breakouts. A breakout with the conditioning already
+done is worth the premium if one exists — see the traps below for what it
+saves you.
+
+## ⚠ Three electrical traps
+
+### 1. A piezo can output tens of volts on a sharp strike
+
+It is a generator, not a sensor with a supply. A hard tap on a rigid mount
+can swing well past ±30 V — straight into a 3.3 V ADC pin. **It must be
+clamped before it reaches the MCU.**
+
+The standard circuit is three parts:
+
+```
+  piezo + ───┬─────┬──────── ADC pin
+             │     │
+            R1    D1  (Schottky to 3V3)
+            1M     │
+             │    D2  (Schottky to GND)
+  piezo - ───┴─────┴──────── GND
+```
+
+- **R1 (1 MΩ)** across the element — gives the charge somewhere to bleed and
+  sets the input impedance.
+- **D1/D2** clamp anything outside 0–3V3. Two Schottky diodes, or a single
+  BAT54S which is both in one package.
+
+Grab `ショットキーダイオード` and `カーボン抵抗 1MΩ` while you are there.
+
+### 2. High output impedance — it needs a high-impedance input
+
+A piezo is effectively a small capacitor. Load it with a low impedance and
+the signal disappears. The RP2350's ADC input is fine; do **not** add a
+divider, and keep the leads short.
+
+### 3. The mount decides what it hears
+
+Same lesson as the IMU (`insights.md` §17-adjacent): a piezo taped loosely
+hears the tape. It needs firm contact with the glass — and the same
+thin-hard-adhesive rule applies, for the same reason foam ruined tilt.
+
+**Where** is an open question worth testing rather than assuming: the base
+couples to the table (and therefore to every mug set down nearby), the side
+wall is where the ring lives. The accelerometer's answer was the base; the
+piezo's may well be the opposite, because the two are listening for
+different things.

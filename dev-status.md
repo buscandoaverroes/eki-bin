@@ -933,6 +933,17 @@ the answer turns out to be, it belongs in both.
 
 **Deferred with a reason, not dropped:**
 
+- **ESN, and what comes before it** — now written up properly in
+  `docs/on-board-detection.md`, which supersedes this paragraph. Short
+  version: the case is stronger than it was (what has been hand-built in
+  `tilt.py` *is* a reservoir, badly tuned), but the failures actually
+  being hit are composition bugs in the state machine, not
+  misclassifications — so fix that first. Three things rank ahead of it:
+  the **gyro axes** (free, on-chip, and rotation rate separates exactly
+  the three cases that keep being confused), the **LSM6DSV16X's MLC**
+  (decision trees on the sensor die at µA, while the MCU sleeps), and a
+  **piezo disc** (hears the glass actually ring — narrowband against
+  broadband handling noise, and a physically independent modality).
 - **ESN (echo state network) gesture classification.** Converges with the
   battery work rather than competing with it: run the reservoir *after* the
   IMU's hardware wake, on the captured window, never continuously — which
