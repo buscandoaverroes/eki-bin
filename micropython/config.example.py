@@ -142,7 +142,16 @@ COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
 #   classifies the LEVEL shown in console output, nothing more.
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
-GAMMA = 2.2  # perceptual brightness curve (higher = smoother dim-end fades)
+GAMMA = 2.2
+# ⚠ DITHER earns its keep the moment anything FADES. It buys intermediate
+# levels where there are few output codes left — the last second of a fade
+# — and _write_frame's static/animated split means static pixels skip it
+# entirely, so the idle LEDs pay nothing. If a fade steps, check this
+# before blaming the curve. insights.md §19.
+# TRANSITION_STYLE = "chase"   # or "crossfade" — crossfade won on brown
+#                              #   glass, but read the note in settings.py:
+#                              #   it is a choice about the VESSEL, not a
+#                              #   general improvement.  # perceptual brightness curve (higher = smoother dim-end fades)
 BREATHE_PERIOD_MS = 8000  # length of one breath, ms (breathing contracts)
 BREATHE_FLOOR = 0.2  # dim end of the breath, 0..1 (raise if gamma makes it vanish)
 DITHER = True  # temporal dithering — smooths low-end brightness steps (set False to A/B)
@@ -188,10 +197,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #   anchor note below). Confirm per strip with `make low-pwm-test`.
 #   docs/insights.md §12, and "How the brightness values compose" in
 #   docs/contracts/config.md.
+#
+#   ⚠ ZERO IS NOT IN THE DANGER ZONE — it is OFF, and it is a legitimate
+#   choice, not a workaround. The warning above is about the range
+#   0 < x ≲ 0.15, where a channel is lit but too dim to be matched. An
+#   unlit LED has no hue to get wrong.
+#
+#   **In a thick opaque bottle, off is often the right answer** (measured
+#   over 24h, insights §18): the ticks diffuse into a yellow haze that
+#   adds no information and competes with the two things that carry it,
+#   the station and the train. Their job — "how far does the arc reach" —
+#   is a question a clear vessel raises and an opaque one answers for you.
 # MARKER_BRIGHTNESS = 0.25  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker) for the idle
-#                            "tick" LEDs — 0 = fully off. A train is never
-#                            dimmer than BRIGHTNESS itself.
+#                            "tick" LEDs. **0 = OFF** — see above.
+#                            A train is never dimmer than BRIGHTNESS itself.
 # MARKER_COLOR = (80, 80, 80)     # idle tick-LED colour, NOT a dimmed LINE_COLOR
 # TRANSITION_MS = 4000     # chase-transition duration, ms; 0 = instant switch.
 #                            A moving highlight sweeps LED-by-LED between old
@@ -391,6 +411,21 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # instead of sitting lit. Distinct from the no-data acknowledgment,
 # because "come back tomorrow" and "you missed the last train" are
 # different facts.
+# When AWAKE_MINUTES expires, unwind instead of cutting to black — which
+# is indistinguishable from a power loss. ONE wave, not three: you stopped
+# looking, which is a smaller fact than the day ending.
+SLEEP_UNWIND_ENABLED = True
+# The scene fades as one gesture in both directions: trains on SCATTERED
+# delays (the object has no front, and the train positions are not known in
+# advance — a choreographed sweep asserts an order the data does not have),
+# station first in and last out. insights.md §20.
+WAKE_FADE_ENABLED = True         # fade UP after a wake instead of snapping
+# MOTION_SCENE_FADE_MS = 3200    # one element's own fade. ⚠ wants
+#                                #   DITHER = True or the last second steps.
+# MOTION_SCENE_STAGGER_MS = 1000 # how wide the scatter window is
+# SLEEP_UNWIND_MS = 2200
+# SLEEP_UNWIND_COLOR = (150, 70, 20)
+
 GOODNIGHT_ENABLED = True
 # Three waves, because one is a gesture and three are a ceremony. The
 # sequence is a SUNSET — slower, dimmer and cooler each time — and its

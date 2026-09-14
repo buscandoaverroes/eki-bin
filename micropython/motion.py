@@ -26,9 +26,14 @@
 
 import time
 
+try:
+    import random as _random
+except ImportError:          # not every MicroPython build ships it
+    _random = None
+
 import leds
 import primitives
-from settings import (MOTION_AROUND_MS, MOTION_INWARD_MS, MOTION_OUTWARD_MS,
+from settings import (MOTION_AROUND_MS, MOTION_SCENE_STAGGER_MS, MOTION_INWARD_MS, MOTION_OUTWARD_MS,
     MOTION_SHAKE_BOUNCES, MOTION_SHAKE_MS, NUM_LEDS, SHAKE_BOUNDS)
 
 # ANCHOR_INDEX defaults to 0 for every non-approach contract, which would
@@ -160,6 +165,138 @@ def breathe(phase_ms, ms=4000, floor=0.35):
 
 WORDS = {"inward": inward, "outward": outward, "around": around,
          "shake": shake, "breathe": breathe}
+
+
+def slow_out(t):
+    """The station's curve, chosen on glass 2026-09-14 (insights §19).
+
+    Lingers near the top and leaves quickly at the end. For a fade-OUT
+    that is a station holding on rather than a dimmer being turned down —
+    which is the whole difference between an object settling and a switch
+    being thrown.
+
+    ⚠ Already perceptually shaped. The animated path applies gamma, so
+    output ∝ mult**2.2 and perception ∝ mult — a LINEAR mult ramp is
+    perceptually even, and this deliberately bends away from even."""
+    return t ** 0.55
+
+
+def fade(color, ms, index=None, rising=False, curve=None, frame_ms=16):
+    """Fade ONE LED — by default the station — in or out. BLOCKING.
+
+    Animated path (a 2-tuple, not "static"), which is gamma-corrected and
+    dithered. **Both matter here**: gamma is what makes the ramp
+    perceptually even, and dithering is what keeps it from stepping at the
+    bottom, where there are few output codes left. If this looks like a
+    staircase on hardware, DITHER is off."""
+    index = ANCHOR if index is None else index
+    curve = slow_out if curve is None else curve
+    start = time.ticks_ms()
+    while True:
+        phase = time.ticks_diff(time.ticks_ms(), start)
+        if phase >= ms:
+            break
+        t = phase / ms
+        v = curve(t if rising else 1.0 - t)
+        frame = [None] * NUM_LEDS
+        if v > 0.001:
+            frame[index] = (color, min(1.0, max(0.0, v)))
+        leds._write_frame(frame)
+        time.sleep_ms(frame_ms)
+    leds.clear()
+
+
+def _rand_unit():
+    """0..1. getrandbits is the one primitive every build with the module
+    has — random() needs float support some ports omit."""
+    if _random is None:
+        return (time.ticks_us() % 9973) / 9973.0
+    return _random.getrandbits(16) / 65535.0
+
+
+def fade_scene(frame, ms, rising, stagger_ms=None, station_index=None,
+               curve=None, frame_ms=16):
+    """Fade a whole rendered scene in or out, each LED on its own delay.
+
+    ⚠ THE DELAYS ARE SCATTERED, NOT SEQUENCED, and that is a decision
+    about what the object IS rather than about what looks nice
+    (insights.md §20). A bottle is radially symmetric: it has no front,
+    no back, no left and no right. Sweeping the trains in from one side
+    performs a bilateral symmetry the object does not have — "this bottle
+    has two sides, wink wink".
+
+    And the honesty argument, which is the stronger one: **the train
+    positions are not known in advance.** Not knowing where they are is
+    the entire point of the device. A choreographed arrival asserts an
+    order the data does not contain, so a regulated appearance is already
+    a facade. Scatter asserts nothing.
+
+    The station is exempt: it leads on the way in and is last to let go on
+    the way out. That imposition is deliberate and it is honest about
+    being one — it is the one fixed point, and it is absent 99% of the
+    time anyway.
+    """
+    stagger_ms = MOTION_SCENE_STAGGER_MS if stagger_ms is None else stagger_ms
+    curve = slow_out if curve is None else curve
+    lit = [i for i, e in enumerate(frame) if e is not None]
+    if not lit:
+        return
+    station_index = ANCHOR if station_index is None else station_index
+
+    delays = {}
+    for i in lit:
+        if i == station_index:
+            continue
+        delays[i] = int(_rand_unit() * stagger_ms) + (stagger_ms if rising else 0)
+    if station_index in lit:
+        # Leads in; last out. Never scattered — see the docstring.
+        delays[station_index] = 0 if rising else (
+            max(delays.values()) if delays else 0)
+
+    span = ms
+    total = span + (max(delays.values()) if delays else 0)
+    start = time.ticks_ms()
+    while True:
+        el = time.ticks_diff(time.ticks_ms(), start)
+        if el >= total:
+            break
+        out = [None] * NUM_LEDS
+        for i in lit:
+            t = (el - delays[i]) / span
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            v = curve(t if rising else 1.0 - t)
+            if v > 0.001:
+                entry = frame[i]
+                out[i] = (entry[0], min(1.0, entry[1] * v))
+        leds._write_frame(out)
+        time.sleep_ms(frame_ms)
+    leds.clear() if not rising else leds._write_frame(frame)
+
+
+def recoil(color, ms=140, depth=0.35, frame_ms=15):
+    """A brief dip and return, whole strip. **NOT a sixth word.**
+
+    Words say something. This is a physical reaction — the same category
+    as the ACK flash, which is also not a word. A bottle tilted past what
+    the table allows does not communicate; it stops, and you feel it stop.
+
+    ⚠ Deliberately a BRIGHTNESS dip and not a positional bounce, which was
+    the first instinct. At a brightness rail the whole ring is lit, so a
+    blob moving a couple of LEDs is invisible against it — whereas the
+    object recoiling reads at any lit state. The physical metaphor agrees:
+    the thing that bounces is the bottle, not a spot on it."""
+    start = time.ticks_ms()
+    while True:
+        phase = time.ticks_diff(time.ticks_ms(), start)
+        if phase >= ms:
+            break
+        t = phase / ms
+        # down fast, back up slower — a bounce is asymmetric
+        mult = (1.0 - depth * (t / 0.3) if t < 0.3
+                else 1.0 - depth * (1.0 - (t - 0.3) / 0.7))
+        leds._write_frame([(color, max(0.0, min(1.0, mult)))] * NUM_LEDS)
+        time.sleep_ms(frame_ms)
+    leds.clear()
 
 
 def play_sequence(waves, word="outward", gap_ms=0, frame_ms=20):

@@ -166,3 +166,156 @@ Don't pre-solve it. Note it, and check it first if the strip misbehaves.
 - [ ] NiMH AA ×4 (×8 for a swap set)
 - [ ] 1000 µF electrolytic, 330 Ω, 10 kΩ
 - [ ] Optional: 74AHCT125, Schottky, inline switch
+
+
+---
+
+# Addendum — a piezo disc (a separate, cheaper errand)
+
+Not part of the battery build. Added 2026-09-14 because it is the same shop
+and the reasoning is in `docs/on-board-detection.md` §3②: **a contact piezo
+hears the glass actually ring.** A tap is a narrowband resonance and
+handling noise is broadband, which separates far more cleanly in frequency
+than in accelerometer magnitude — where §8 fought to 98.4% across fifteen
+sessions and stalled.
+
+## What to buy
+
+You want a **bare piezo element**: a brass disc with a ceramic layer and two
+wire leads. **Not** a buzzer — those have an oscillator built in and are
+outputs, not inputs.
+
+| Requirement | Value | Why |
+|---|---|---|
+| Type | bare element / diaphragm, 2 leads | a self-driving buzzer cannot be read |
+| Diameter | **measure your jar mouth first** | 20mm and 27mm are the common sizes; 35mm exists and probably won't fit |
+| Leads | pre-soldered wires preferred | soldering to the ceramic face lifts it if you dwell |
+
+### Search terms
+
+| Japanese | what it finds |
+|---|---|
+| `圧電素子` | piezo element — the main term |
+| `ピエゾ素子` | same, katakana spelling; try both |
+| `圧電サウンダ 素子` | sounder *element* (as opposed to a driven sounder) |
+| `圧電振動センサ` | piezo vibration sensor — sometimes sold pre-mounted |
+| `コンタクトマイク` | contact mic — the same part, framed as audio |
+| `圧電ブザー` | ⚠ buzzer — **the thing to avoid**, listed so you recognise it |
+
+Akizuki stocks these under sounders; Switch Science lists them under sensors
+and under Grove/Qwiic breakouts. A breakout with the conditioning already
+done is worth the premium if one exists — see the traps below for what it
+saves you.
+
+## ⚠ Three electrical traps
+
+### 1. A piezo can output tens of volts on a sharp strike
+
+It is a generator, not a sensor with a supply. A hard tap on a rigid mount
+can swing well past ±30 V — straight into a 3.3 V ADC pin. **It must be
+clamped before it reaches the MCU.**
+
+The standard circuit is three parts:
+
+```
+  piezo + ───┬─────┬──────── ADC pin
+             │     │
+            R1    D1  (Schottky to 3V3)
+            1M     │
+             │    D2  (Schottky to GND)
+  piezo - ───┴─────┴──────── GND
+```
+
+- **R1 (1 MΩ)** across the element — gives the charge somewhere to bleed and
+  sets the input impedance.
+- **D1/D2** clamp anything outside 0–3V3. Two Schottky diodes, or a single
+  BAT54S which is both in one package.
+
+Grab `ショットキーダイオード` and `カーボン抵抗 1MΩ` while you are there.
+
+### 2. High output impedance — it needs a high-impedance input
+
+A piezo is effectively a small capacitor. Load it with a low impedance and
+the signal disappears. The RP2350's ADC input is fine; do **not** add a
+divider, and keep the leads short.
+
+### 3. The mount decides what it hears
+
+Same lesson as the IMU (`insights.md` §17-adjacent): a piezo taped loosely
+hears the tape. It needs firm contact with the glass — and the same
+thin-hard-adhesive rule applies, for the same reason foam ruined tilt.
+
+**Where** is an open question worth testing rather than assuming: the base
+couples to the table (and therefore to every mug set down nearby), the side
+wall is where the ring lives. The accelerometer's answer was the base; the
+piezo's may well be the opposite, because the two are listening for
+different things.
+
+
+---
+
+# Addendum — making the light look like light, not like a strip
+
+Added 2026-09-14, alongside `docs/chandelier-concept.md`. Not urgent, and
+the reasoning matters more than the parts.
+
+## The problem principle #6 creates
+
+**A bottle with no front also has no back.** That is the same fact from
+`design-principles.md` #6, read from the other side, and it is why an LED
+strip in a *clear* vessel is structurally hard rather than merely untidy:
+there is no angle that is "behind", so the tape's back — PCB, traces,
+solder pads, the wire — is always somebody's view. Opaque brown glass has
+been hiding this, which is why it has not come up.
+
+Three ways out, in increasing order of how much they solve:
+
+1. **Diffuse it** — wrap the strip so the whole assembly reads as a glowing
+   line rather than as components. Cheapest, works now.
+2. **Make the wiring invisible** — thin enough, or clear enough, that it
+   stops registering.
+3. **Have no strip** — the chandelier. The real answer, and the one that
+   needs the Vf measurement first.
+
+## ① Diffusion and hiding the backing
+
+| Item | Japanese search | Note |
+|---|---|---|
+| Milky silicone tube over the strip | `シリコンチューブ 乳白`, `LEDディフューザー チューブ` | sized by strip width — measure first; 8mm tape wants ~10mm ID |
+| Diffuser sheet / acrylic | `拡散板`, `乳白アクリル板 1mm` | for a flat backing behind the strip |
+| Light-blocking tape | `遮光テープ` | ⚠ **not** `絶縁テープ` — that is electrical tape, which is about insulation, not opacity |
+| White reflective film | `反射シート`, `白色 反射フィルム` | behind the strip, so light that would go backwards comes forward |
+| Heat-shrink, clear or white | `熱収縮チューブ 透明` | the tidiest way to cover a soldered joint |
+
+## ② Wire that disappears
+
+This is the part that matters most for a clear vessel, and Japan sells
+exactly the right things for it.
+
+| Item | Japanese search | Why |
+|---|---|---|
+| **Ultra-thin ETFE wire** | `ジュンフロン線`, `耐熱電子ワイヤー AWG30` | the model-railway and diorama standard: ~0.5mm overall, solders without the insulation shrinking back, and nearly vanishes against glass |
+| **Enamelled copper (UEW)** | `ポリウレタン銅線`, `UEW線 0.2mm` | thinner still and effectively invisible. ⚠ The enamel IS the insulation — it must be tinned off or burned through when soldering, and a nicked strand breaks later rather than now |
+| **Fishing line, for suspension** | `テグス` | holds a form in place while being invisible in glass. The standard trick, and it costs nothing |
+| Clear silicone adhesive | `シリコン接着剤 透明` | anchoring without a visible blob |
+
+## ③ For the chandelier itself
+
+Gated on `hardware.md` § "Filament array" **step zero — measure the forward
+voltage** before buying anything here. The 60–100 V Edison family would
+disqualify the whole plan, and a 9 V battery with a 1 kΩ resistor answers
+it in a minute.
+
+| Item | Japanese search | Note |
+|---|---|---|
+| Filament LEDs | `LEDフィラメント`, `フィラメントLED`, `COBフィラメント` | ⚠ the listing usually gives Vf — if it says 3 V the plan survives, if 60 V+ it does not |
+| Flexible filament | `フレキシブル LEDフィラメント` | bendable, which is the whole point of a twisted 3D form |
+| Warm/cool pairs | `電球色`, `昼白色` | the two ends of the temperature axis §12's glass actually passes. Buy both |
+| Addressable string | `WS2812B ストリング`, `ピクセルストリング` | the micro-LED cousin. ⚠ often 12mm bullet pixels — too big for a bottle neck; check the pitch and the pixel size, not just the count |
+| Decorative fairy lights | `LEDジュエリーライト`, `ワイヤーライト` | the ones sold for glassware. **Usually NOT addressable** — assume not unless it says so |
+
+**Constant-current drivers matter for filaments** in a way they do not for
+WS2812B, which has its driver on-die. A filament is a bare LED string: it
+needs current limiting per channel, and PWM on top of that if the
+cross-fade idea is to work. `定電流ドライバ` / `LED定電流回路`, or a
+resistor per channel as the crude version that proves the concept.

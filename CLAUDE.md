@@ -52,9 +52,11 @@ When writing Rust code in this repo, take a teaching role:
 | Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
 | What's done / next / open decisions | `dev-status.md` |
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
+| **Form-factor proposal: the chandelier** — filaments suspended in 3D, the culmination of "the object has no front". *A proposal; nothing scheduled* | `docs/chandelier-concept.md` |
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
 | **Palette checks** — `palette_problems()` / `safe_range()` / boot report; the usable BRIGHTNESS window and what binds each end | `micropython/palette.py` |
+| **On-board detection** — ESN vs the MLC, a piezo, and the gyro; why the mic wall is conceptual. *Analysis; nothing built* | `docs/on-board-detection.md` |
 | **Palette/brightness config — three proposals** to stop clipping and floor bugs being invisible. *A proposal; nothing built* | `docs/palette-model.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
 | Design rationale + full V2 hardware list | `docs/concept.md` |
@@ -73,6 +75,7 @@ When writing Rust code in this repo, take a teaching role:
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| **Crawl sandbox** — how a train moves (6 hop styles) and how the station fades (5). The physics-vs-agency fork the metaphor cannot settle | `micropython/crawl_sandbox.py` (`make crawl-sandbox`) |
 | The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
 | **Horizon ceremonies** — goodnight when trains exist but none is in reach, and the morning wake that lets the arc be seen opening | `micropython/horizon.py` |
 | **The five motion words, as shipped** — `outward` on wake, `around` on a line change, `shake` for "nothing to change to" | `micropython/motion.py` |

@@ -182,3 +182,63 @@ def test_reversing_takes_as_long_as_you_like(load_main):
     _settle(ctl, m, 3.0, ms=4000)              # dawdling through neutral
     assert ctl.engaged, "the axis must survive a slow reversal"
     assert ctl.axis == up_axis
+
+
+# ── hitting a brightness rail ────────────────────────────────────
+
+
+def test_a_fresh_rail_hit_is_reported_once(load_main):
+    """A rail is invisible — the display simply stops changing, and
+    "already at maximum" looks exactly like "not working". That is how the
+    first hardware session read it, and how 24h of real use read it again."""
+    m = _load(load_main, BRIGHTNESS=0.89, TILT_MAX_BRIGHT=0.90,
+              TILT_RATE_PER_SEC=0.20, TILT_RAIL_REPEAT_MS=900)
+    ctl = m.TiltController()
+    _settle(ctl, m, 0.0, ms=1000)
+    hits = 0
+    for i in range(40):                      # 1s of pushing past the top
+        ctl.update(_g(35.0), 1000 + i * 25, 25)
+        if ctl.rail_bounce:
+            hits += 1
+    assert m.settings.BRIGHTNESS == 0.90
+    assert hits == 1, "throttled — a held tilt is one request, not forty"
+
+
+def test_the_rail_repeats_while_you_keep_pushing(load_main):
+    """Throttled, not edge-only: holding past the rail is a CONTINUOUS
+    request, so answering once and then going quiet is the same silence
+    the recoil exists to break."""
+    m = _load(load_main, BRIGHTNESS=0.89, TILT_MAX_BRIGHT=0.90,
+              TILT_RAIL_REPEAT_MS=400)
+    ctl = m.TiltController()
+    _settle(ctl, m, 0.0, ms=1000)
+    hits = sum(1 for i in range(80)
+               if (ctl.update(_g(35.0), 1000 + i * 25, 25),
+                   ctl.rail_bounce)[1])
+    assert hits >= 4, "2s past the rail at a 400ms throttle"
+
+
+def test_both_rails_answer(load_main):
+    """Symmetric on purpose. The top is the stronger metaphor — a bottle
+    bounces off a table — but both are the same fact, "no further", and
+    answering only one would be the more arbitrary choice."""
+    m = _load(load_main, BRIGHTNESS=0.06, TILT_MIN_BRIGHT=0.05,
+              TILT_FIRST_MEANS="down")
+    ctl = m.TiltController()
+    _settle(ctl, m, 0.0, ms=1000)
+    seen = set()
+    for i in range(40):
+        ctl.update(_g(35.0), 1000 + i * 25, 25)
+        if ctl.rail_bounce:
+            seen.add(ctl.rail_bounce)
+    assert seen == {"min"}
+
+
+def test_no_bounce_while_there_is_room_to_move(load_main):
+    m = _load(load_main, BRIGHTNESS=0.40, TILT_MIN_BRIGHT=0.05,
+              TILT_MAX_BRIGHT=0.90)
+    ctl = m.TiltController()
+    _settle(ctl, m, 0.0, ms=1000)
+    for i in range(40):
+        ctl.update(_g(30.0), 1000 + i * 25, 25)
+        assert ctl.rail_bounce is None

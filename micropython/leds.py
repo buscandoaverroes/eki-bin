@@ -33,7 +33,22 @@ np = NeoPixel(Pin(LED_PIN, Pin.OUT), NUM_LEDS)
 
 
 def clear():
-    """All LEDs off."""
+    """All LEDs off — and there is no longer a scene.
+
+    ⚠ RESETTING last_frame IS THE POINT, not bookkeeping. Without it, "the
+    last thing rendered" survived a clear, so a fade-out could be handed a
+    frame that is no longer on the strip. That is exactly what happened at
+    boot on 2026-09-14: _play_startup_burst ends with clear(), leaving
+    last_frame holding the burst's final frame at mult ~0, and the sleep
+    unwind then spent 3.2s fading out something already invisible — which
+    with DITHER on is the whole strip sparkling at sub-code values, and
+    with DITHER off is nothing at all.
+
+    A cleared strip has no scene. Saying so is what makes
+    `last_frame is not None` a usable test for "is there anything to fade".
+    """
+    global last_frame
+    last_frame = None
     for i in range(NUM_LEDS):
         np[i] = (0, 0, 0)
     np.write()
@@ -62,6 +77,47 @@ def _heartbeat_pin(name):
 # staggered init decorrelates the pattern across LEDs so they don't flicker in
 # lockstep (spatial + temporal averaging → a smooth glow).
 _residual = [[((i * 3 + ch) % 5) / 5.0 for ch in range(3)] for i in range(NUM_LEDS)]
+
+# ⚠ ONE SHARED residual, for frames where every lit LED wants the SAME
+# value. Found on hardware 2026-09-14, as "dim thunder" across the whole
+# strip during the startup burst's rise and tail.
+#
+# The per-LED residuals above are deliberately phase-staggered so idle LEDs
+# do not flicker in lockstep. That is right for a frame where each pixel is
+# doing its own thing — and exactly WRONG for a uniform one. At a low
+# shared value the stagger means LED 3 rounds up while LED 4 rounds down,
+# so at any instant you see a random scatter of on and off pixels across a
+# strip that is supposed to be one even glow. Temporally it is perfectly
+# accurate; spatially it is noise.
+#
+# So the rule this file had was half of one:
+#
+#   dithering is safe when neighbouring LEDs DIFFER, and visible when they
+#   are UNIFORM — because the decorrelation that prevents synchronised
+#   flicker is the same thing that creates spatial scatter.
+#
+# A uniform frame wants its LEDs synchronised, which is what sharing a
+# residual does. Detected rather than declared, so it fixes every uniform
+# animation at once (the burst, the failure breathe, recoil) without any
+# call site having to know.
+_uniform_residual = [0.0, 0.0, 0.0]
+
+
+def _uniform_entry(frame):
+    """The single (color, mult) every lit LED shares, or None if they
+    differ. Cheap: bails on the first mismatch, and most frames mismatch
+    immediately."""
+    found = None
+    for entry in frame:
+        if entry is None:
+            continue
+        if len(entry) > 2:
+            return None          # STATIC pixels never dither anyway
+        if found is None:
+            found = entry
+        elif entry[0] != found[0] or entry[1] != found[1]:
+            return None
+    return found
 
 
 def _quantize(value, res, ch):
@@ -110,6 +166,33 @@ def _layer_hue_shift(index):
     return 0 if index == 0 else SECONDARY_HUE_SHIFT_DEG * index
 
 
+# The last logical frame handed to _write_frame, and a flag to build one
+# WITHOUT latching it. Both exist for one reason: a fade-in has to know
+# what it is fading TOWARD, and only the active contract knows that.
+#
+# Without capture(), the only way to learn the target scene is to render
+# it — which snaps it on, which is exactly what a fade-in exists to avoid.
+last_frame = None
+_capture_only = False
+
+
+def capture(render_fn, *args):
+    """Run a render WITHOUT sending it to the strip; return its frame.
+
+    A flag rather than a parameter threaded through every contract: the
+    render path is `contract.render(signal, phase)` and widening that
+    signature would touch six contracts to serve one caller. Set, call,
+    unset — and `finally`, so a contract that raises cannot leave the
+    module silently swallowing every subsequent write."""
+    global _capture_only
+    _capture_only = True
+    try:
+        render_fn(*args)
+    finally:
+        _capture_only = False
+    return last_frame
+
+
 def _write_frame(frame):
     """Composite a resolved frame onto the physical strip in ONE np.write().
     This is the shared tail every render path converges on, and honours the
@@ -146,6 +229,28 @@ def _write_frame(frame):
                                  Same root cause docs/insights.md §6 already
                                  hit with EchoContract's dimmed secondary layer
                                  — see docs/contracts/approach-contract.md."""
+    global last_frame
+    last_frame = frame
+    if _capture_only:
+        return          # built, not latched — see capture()
+    # ⚠ A uniform frame is quantized ONCE and copied, not quantized per
+    # LED against a shared residual. The first attempt did the latter and
+    # still scattered, for a reason worth recording: _quantize MUTATES the
+    # residual it is handed, so LED 1 would quantize against the error LED
+    # 0 had just left behind. That is error diffusion ALONG THE STRIP —
+    # spatial dithering, which is precisely the artefact being removed.
+    # One value, one residual advance, every pixel identical.
+    shared_entry = _uniform_entry(frame) if DITHER else None
+    if shared_entry is not None:
+        _color, _mult = shared_entry
+        _level = settings.BRIGHTNESS * gamma(_mult)
+        _vals = tuple(_quantize(_color[ch] * _level, _uniform_residual, ch)
+                      for ch in range(3))
+        for logical in range(NUM_LEDS):
+            np[_physical(logical)] = _vals if frame[logical] is not None else (0, 0, 0)
+        np.write()
+        return
+
     for logical in range(NUM_LEDS):
         phys = _physical(logical)
         entry = frame[logical]

@@ -142,6 +142,25 @@ LOW_PWM_FLOOR = getattr(config, "LOW_PWM_FLOOR", 3)
 MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
+# How a train MOVES between two positions. Judged on real glass
+# (`make crawl-sandbox`, insights §19) and **crossfade won** — it reads as
+# more fluid and less "sticky" than an eased slide, and both beat a cut.
+#
+# ⚠ THIS REVERSES A STANDING DECISION, so read before switching. CHASE
+# exists BECAUSE an earlier brightness-blend crossfade was removed: it
+# necessarily passes through low-brightness intermediates, and at
+# BRIGHTNESS 0.15 those fell below the low-PWM floor where channels stop
+# matching. That premise has partly changed (BRIGHTNESS is 0.5-0.62 now,
+# and DITHER exists) but it has NOT gone away — with LINE_COLOR (34,139,34)
+# a half-faded train puts R and B near raw 4, and a quarter-faded one puts
+# them under the floor while G stays above it. The train shifts hue in
+# transit.
+#
+# Why it looked fine anyway: §12 measured this brown glass as collapsing
+# hue onto the red-green axis, so it HIDES the very artefact crossfade
+# causes. That makes crossfade a choice about THIS VESSEL, not a general
+# improvement — a clear bottle may show what the brown one conceals.
+TRANSITION_STYLE = getattr(config, "TRANSITION_STYLE", "chase")  # or "crossfade"
 
 # Boot ceremony — see docs/contracts/startup-sequence.md. Runs once at power-on,
 # before the main loop starts; never recurs during normal operation.
@@ -174,6 +193,12 @@ ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 # WAKE_INTERACTION_ENABLED, so existing config.py files keep working —
 # design principle #9. The old name is kept only for compatibility; it
 # describes a design that has been superseded.
+# Taps are ignored for this long after the loop starts. Plugging a unit in
+# or setting it down IS handling, and the recognizer's 98.4% is measured
+# against POOLED handling noise — so a boot-time false trigger is expected
+# rather than surprising. Without this, connecting USB reliably woke the
+# display and played a wake wave nobody asked for.
+GESTURE_BOOT_IGNORE_MS = getattr(config, "GESTURE_BOOT_IGNORE_MS", 3000)
 WAKE_INTERACTION_ENABLED = getattr(
     config, "GESTURE_ENABLED", getattr(config, "WAKE_INTERACTION_ENABLED", False)
 )
@@ -361,7 +386,23 @@ ACK_PEAK_CEIL = getattr(config, "ACK_PEAK_CEIL", 6.0)  # hardest-tap ACK peak.
 #   ⚠ Bounded by SATURATION, not taste: once BRIGHTNESS * mult * channel
 #   hits 255 every harder tap renders identically. 10.0 did exactly that
 #   past ~65% strength. tests/test_gesture_sandbox.py guards this.
-SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.08)  # dim, deliberately not dark
+# ⚠ RAISED 0.08 → 0.20 on 2026-09-14. 0.08 had NEVER rendered: it is an
+# ANIMATED mult, so the output is BRIGHTNESS x shelf**GAMMA, and at
+# BRIGHTNESS 0.50 that is raw 0.49 — below a single output code. With
+# DITHER off it truncated to nothing; with DITHER on it lit roughly half
+# the frames, per-LED staggered, which reads as the whole strip sparkling
+# for the 1.2s capture window. Diagnosed as "thundering after the burst".
+#
+#   255 x 0.50 x 0.20**2.2 = raw 3.7   (clears the low-PWM floor of 3)
+#   255 x 0.50 x 0.25**2.2 = raw 6.0   (SHELF_CEIL)
+#
+# ⚠ The usable range is now narrow (0.20-0.25 → raw 3-6) and it MOVES with
+# BRIGHTNESS, the same coupling MARKER_BRIGHTNESS has. palette.py now
+# checks it, so a bad combination is reported at boot rather than
+# discovered as a rendering artefact. §12's durable fix — clamping any
+# nonzero channel up to LOW_PWM_FLOOR — remains the real answer and is
+# still unbuilt.
+SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.20)  # dim, deliberately not dark
 SHELF_CEIL = getattr(config, "SHELF_CEIL", 0.25)  # stays under ACK_PEAK_FLOOR
 ACK_HOLD_MS = getattr(config, "ACK_HOLD_MS", 400)  # rise+dip duration. 150ms
 #   was too brief to perceive a strength difference before it settled.
@@ -465,6 +506,29 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 
+# ── Hitting a brightness rail ────────────────────────────────────────
+# A rail is INVISIBLE: the display stops changing, and "already at maximum"
+# looks exactly like "not working" — which is how the first hardware
+# session read it (insights §15), and how 24h of real use read it again
+# (§18).
+#
+# What a bottle actually does when you tilt it past what the table allows
+# is stop, and you feel it stop — so the answer is a recoil, not a message.
+# A brightness DIP rather than a positional bounce: at a rail the whole
+# ring is lit, so a blob moving two LEDs is invisible against it, while the
+# object recoiling reads at any lit state.
+#
+# Symmetric at both ends. The top rail is the stronger metaphor (a bottle
+# bounces off a table), but both are the same fact — "no further" — and
+# giving only one of them an answer would be the more arbitrary choice.
+TILT_RAIL_BOUNCE_ENABLED = getattr(config, "TILT_RAIL_BOUNCE_ENABLED", True)
+TILT_RAIL_MS = getattr(config, "TILT_RAIL_MS", 140)  # brief. It is a
+#   reaction, not a statement — see motion.recoil's "not a sixth word".
+TILT_RAIL_DEPTH = getattr(config, "TILT_RAIL_DEPTH", 0.35)  # how deep the dip
+TILT_RAIL_REPEAT_MS = getattr(config, "TILT_RAIL_REPEAT_MS", 900)  # throttle.
+#   Holding a tilt past the rail is a CONTINUOUS request, so answering once
+#   and then going quiet is the same silence the recoil exists to break.
+
 # ── Horizon ceremonies: goodnight, and the morning flower ────────────
 # insights.md §17. A lit anchor is a PROMISE — "here is the station, here
 # is what's coming". Rendering it with nothing on the arms is a promise
@@ -479,6 +543,38 @@ TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 #
 # Goodnight is `outward`, slowed: energy leaving the station and
 # dissipating. No sixth word needed.
+# ── The sleep unwind ─────────────────────────────────────────────────
+# What happens when AWAKE_MINUTES expires. Cutting straight to black is
+# indistinguishable from a power loss — the same hazard quiet hours has a
+# printed warning about, except nobody is reading a console.
+#
+# ⚠ ONE WAVE, not three, and the difference is the whole point. Three
+# waves are a ceremony: the day ending. One is a gesture: you stopped
+# looking. Reusing goodnight's sequence here would say something much
+# larger than what happened.
+#
+# `outward` already does exactly what "the station flickers out and
+# unwinds from in to out" describes, because its amplitude decays as it
+# travels (motion.py) — the anchor blob leaves AND dims. No new word.
+SLEEP_UNWIND_ENABLED = getattr(config, "SLEEP_UNWIND_ENABLED", False)
+SLEEP_UNWIND_MS = getattr(config, "SLEEP_UNWIND_MS", 2200)  # slow; nothing
+#   is waiting on it
+SLEEP_UNWIND_COLOR = getattr(config, "SLEEP_UNWIND_COLOR", (150, 70, 20))
+# The station fades FIRST, then the unwind travels out — "the station
+# flickers out, then the lights unwind from in to out". 3200ms, chosen on
+# glass: long enough to read as an object settling rather than a switch
+# being thrown, with `slow_out` as the curve that won (insights §19).
+# ⚠ WANTS DITHER = True. At the bottom of a fade there are few output codes
+# left, and without dithering the last second visibly steps.
+# How long ONE element takes to fade, and how wide the scatter window is.
+# Named for the SCENE rather than for sleep, because the same two numbers
+# govern the wake fade-in — they are one gesture run in two directions.
+MOTION_SCENE_FADE_MS = getattr(config, "MOTION_SCENE_FADE_MS", 3200)
+MOTION_SCENE_STAGGER_MS = getattr(config, "MOTION_SCENE_STAGGER_MS", 1000)
+# The display fades UP after a wake, instead of snapping on behind the
+# `outward` wave. Off by default — a visible behaviour change.
+WAKE_FADE_ENABLED = getattr(config, "WAKE_FADE_ENABLED", False)
+
 GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
 
 # THREE waves, because one is a gesture and three are a ceremony. Each is

@@ -39,12 +39,17 @@ from diag import (_mem_checkpoint, _mem_report)
 from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
     _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
     _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+import leds
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
+    GESTURE_BOOT_IGNORE_MS,
     GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
-    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS,
+    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS, SLEEP_UNWIND_COLOR,
+    MOTION_SCENE_FADE_MS, SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS,
+    WAKE_FADE_ENABLED, TILT_RAIL_BOUNCE_ENABLED,
+    TILT_RAIL_DEPTH, TILT_RAIL_MS,
     MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
@@ -409,6 +414,7 @@ def _run_interactive_loop(schedule_data, led):
         print(f"  Lines: {', '.join(l.get('name', '?') for l in lines)}  (tap to cycle)")
 
     last_refresh = None
+    loop_started = time.ticks_ms()
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
     morning_armed = False  # self-arming: set when we SEE everything out of
@@ -512,7 +518,13 @@ def _run_interactive_loop(schedule_data, led):
         if phase_change == "asleep":
             print("  [SLEEP] awake window expired")
 
-        if imu_addr is not None and tap_state.accepts_input():
+        # Plugging a unit in IS handling, and handling is what the
+        # recognizer's 98.4% is measured against — so a false trigger in
+        # the first seconds is expected, not surprising. It used to wake
+        # the display and play a wake wave nobody asked for.
+        _booting = time.ticks_diff(tick_now, loop_started) < GESTURE_BOOT_IGNORE_MS
+
+        if imu_addr is not None and tap_state.accepts_input() and not _booting:
             raw, last_error_print = _safe_read_accel(
                 i2c, imu_addr, tick_now, last_error_print
             )
@@ -532,6 +544,11 @@ def _run_interactive_loop(schedule_data, led):
                     tilt_ms = tick_now
                     if tilt_state in ("up", "down"):
                         last_render = None   # repaint at the new brightness
+                    if (tilt_ctl.rail_bounce is not None
+                            and TILT_RAIL_BOUNCE_ENABLED and MOTION_ENABLED):
+                        motion.recoil(STARTUP_COLOR, TILT_RAIL_MS,
+                                      TILT_RAIL_DEPTH)
+                        last_render = None
 
                 mag = _gesture_magnitude_mg((tick_now,) + raw)
                 baseline = None
@@ -562,6 +579,22 @@ def _run_interactive_loop(schedule_data, led):
                         # response is now correct BY CONSTRUCTION, because
                         # _handle_tap was told whether the action exists
                         # before it chose how to answer.
+                        if (response == "wake" and WAKE_FADE_ENABLED
+                                and MOTION_ENABLED
+                                and not horizon.beyond_horizon(signal, signal_b)):
+                            # Fade UP into the scene rather than snapping
+                            # on behind the wave. capture() builds the
+                            # contract's frame without latching it —
+                            # rendering it to find out what it is would
+                            # be the snap this exists to avoid.
+                            _target = leds.capture(
+                                _render_dispatch(ACTIVE_CONTRACT, signal,
+                                                 signal_b), tick_now)
+                            if _target is not None:
+                                motion.fade_scene(_target,
+                                                  MOTION_SCENE_FADE_MS,
+                                                  rising=True)
+                                last_render = tick_now
                         if (response == "wake" and GOODNIGHT_ENABLED
                                 and horizon.beyond_horizon(signal, signal_b)):
                             # Trains exist, none within reach. Say so, then
@@ -616,6 +649,23 @@ def _run_interactive_loop(schedule_data, led):
             else:
                 print("  (asleep after %d min — tap to wake; not a fault)"
                       % (BOOT_AWAKE_MINUTES if loop_count <= 1 else AWAKE_MINUTES))
+                # Unwind rather than cut to black. ONE wave: you stopped
+                # looking, which is a smaller fact than the day ending.
+                # ⚠ THE WHOLE CEREMONY IS GATED ON THERE BEING A SCENE,
+                # not just the fade. With BOOT_AWAKE_MINUTES = 0 the unit
+                # is "awake" for zero milliseconds, so this transition
+                # fires on the very first tick — and a goodbye for a
+                # display that never showed anything is not a goodbye, it
+                # is a boot artefact. clear() nulls last_frame, so the
+                # burst ending cleanly is exactly what makes this False.
+                if (SLEEP_UNWIND_ENABLED and MOTION_ENABLED
+                        and leds.last_frame is not None):
+                    # Fade the scene that IS on the strip — trains
+                    # scattered, station last to let go — then the unwind.
+                    motion.fade_scene(leds.last_frame,
+                                      MOTION_SCENE_FADE_MS, rising=False)
+                    motion.play("outward", SLEEP_UNWIND_COLOR,
+                                SLEEP_UNWIND_MS)
             was_awake = tap_state.awake
 
         if status_message.active(tick_now):

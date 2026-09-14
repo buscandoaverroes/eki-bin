@@ -1794,3 +1794,353 @@ a sunset, a brown one gets a fade, and neither depends on the other.
 That is a design property worth reusing. Anywhere hue carries meaning in
 this project, something else should carry it too — not as redundancy, but
 because the vessel is a variable and hue is the channel it takes away.
+
+
+---
+
+## 18. 24 hours with the ceremonies (2026-09-14)
+
+### The tick markers are wrong in an opaque bottle
+
+Turn them off. In thick brown glass they diffuse into a yellow haze that
+carries no information and competes with the only two things that do — the
+station and the train.
+
+**The setting already exists: `MARKER_BRIGHTNESS = 0`.** No new knob, and
+adding a `MARKERS_ENABLED` boolean alongside it would create exactly the
+two-ways-to-say-one-thing confusion `palette-model.md`'s own rule forbids.
+What was wrong was the *documentation*: the config's warning read as "never
+set this low", when it is really about the range `0 < x ≲ 0.15` — where a
+channel is lit but too dim for the channels to match. **An unlit LED has no
+hue to get wrong.** Zero is off, and off is a legitimate choice rather than
+the bug-workaround it was the first time it appeared (§12).
+
+The deeper point is about what the markers were *for*: "how far does the
+arc reach". That is a question a clear vessel raises and an opaque one
+answers for you, by making the lit region obvious against the dark. So the
+right value is **per-vessel**, like brightness (§14) and hue count (§12) —
+a third setting whose correct value is a property of the glass.
+
+### One wave, three waves, and a recoil
+
+Three ceremonies now exist and the distinction between them is the useful
+part, not the animations:
+
+| event | what it is | shape |
+|---|---|---|
+| you stopped looking (`AWAKE_MINUTES` expires) | a gesture | **one** slow `outward` |
+| the day ended (nothing within reach) | a ceremony | **three** waves, a sunset |
+| you hit a brightness rail | **not a word at all** | a recoil |
+
+Cutting straight to black on timeout is indistinguishable from a power
+loss — the same hazard quiet hours has a printed warning about, except
+nobody is reading a console at the time.
+
+**The unwind needed no new word.** "The station flickers out and unwinds
+from in to out" is exactly what `outward` already does, because its
+amplitude decays as it travels: the anchor blob leaves *and* dims. Reaching
+for a sixth word here would have been the mistake §16 warns about — words
+that are too close collapse into each other.
+
+### A rail is invisible, and the fix is physical rather than semantic
+
+"Already at maximum" looks exactly like "not working". §15 hit this on the
+bench and 24h of real use hit it again, which makes it a property of the
+control rather than of one session.
+
+**The answer came from asking what a bottle would do**, not what a message
+should say: tilted past what the table allows it stops, and you feel it
+stop. So — a recoil, and deliberately **not a word**. Words say something;
+this is a physical reaction, the same category as the ACK flash.
+
+Two choices inside it worth keeping:
+
+- **A brightness dip, not a positional bounce.** The first instinct was
+  `shake`, which is genuinely the right *meaning* ("no further"). But at a
+  brightness rail the whole ring is lit, so a blob moving two LEDs is
+  invisible against it — while the object recoiling reads at any lit state.
+  The metaphor agrees: the thing that bounces is the bottle, not a spot on
+  it.
+- **Throttled, not edge-triggered.** Holding a tilt past the rail is a
+  *continuous* request. Answering once and then going quiet is the same
+  silence the recoil exists to break.
+
+### Still open
+
+Separating pick-up from tilt. §17's spurious-tap fix (suppress the tap
+trigger while a tilt session is engaged) addresses taps-during-tilt, not
+handling-that-looks-like-tilt. That one is the ESN thread, and it stays
+parked.
+
+
+---
+
+## 19. Physics won, and it is a design principle (2026-09-14)
+
+`crawl_sandbox.py` put six train-movement styles and five station fades on
+real glass — the two animations the light language never specified, because
+every other word was derived from what glass does when struck and **there
+is no bottle-equivalent for a light moving inside glass.** The fork was
+genuine: PHYSICS (the light has mass — slides, eases, settles) versus
+AGENCY (the light is alive — hops, blinks, vanishes and reappears).
+
+**Physics won, and not narrowly.**
+
+| | winner | runner-up |
+|---|---|---|
+| station fade | **`slow_out`** — "natural, interesting, nice to look at" | `slow_in` |
+| train movement | **`crossfade`** — more fluid, less "sticky" | `ease_slide` |
+
+The interesting part is *why the agency styles lost*. They did not look
+bad. They read as **"something needs your attention"** — a firefly hop and
+a guttering fade both produce a small alarm. Which yields the principle,
+now promoted to `design-principles.md` #5:
+
+> **A thing with intent wants something from you. Physics is indifferent,
+> and indifference is what lets an object be ambient.**
+
+That is the missing half of principle #1 ("ambient, not demanding"). #1 says
+not to *notify*; this says the motion itself can notify even when nothing is
+being announced. An object can demand attention purely by seeming alive.
+
+And the framing that generalises furthest: **a bottle has no sharp edges,
+so the language is curves.** GUIs are boxes, straight lines, furniture.
+This is a break from that, and the break is the point.
+
+### ⚠ Crossfade reverses a standing decision, and the reason it looks fine
+### is the vessel
+
+`CHASE` exists *because* a brightness-blend crossfade was removed: it
+necessarily passes through low-brightness intermediates, and at
+`BRIGHTNESS = 0.15` those fell below the low-PWM floor where channels stop
+matching (§6, §12).
+
+That premise has only **partly** changed. Brightness is 0.5–0.62 now and
+dithering exists, but with `LINE_COLOR (34,139,34)` a half-faded train puts
+R and B near raw 4, and a quarter-faded one puts them **under the floor
+while G stays above it** — so the train shifts hue in transit.
+
+It looked fine anyway, and the reason is the finding: **§12 measured this
+brown glass as collapsing hue onto the red-green axis, so the vessel hides
+the very artefact crossfade creates.** Crossfade is therefore a choice
+about *this bottle*, not a general improvement — a clear one may show what
+the brown one conceals. Shipped as `TRANSITION_STYLE`, defaulting to
+`chase`, with the arithmetic written next to it.
+
+Third time the same shape has appeared: the vessel is not a container for
+the design, it is a *parameter of* it (§12 hue count, §14 brightness, §18
+markers, now this).
+
+### Smoothness at the bottom of a fade is a dithering question
+
+"As slow as a smooth LED fade will allow, without stepping" has an existing
+answer that was switched off: `DITHER`. Temporal dithering exists precisely
+to buy intermediate levels where there are few output codes left, which is
+exactly the last second of a fade — and `_write_frame`'s static/animated
+split means enabling it costs the idle LEDs nothing, since static pixels
+skip dithering entirely.
+
+Worth stating plainly because it was nearly re-solved in the curve instead:
+**if a fade steps, check `DITHER` before blaming the shape.**
+
+
+---
+
+## 20. A bottle has no front, and the data has no order (2026-09-14)
+
+Testing the whole-scene arrival sequences produced the most structural
+finding so far, and it is not about animation.
+
+### The object has no front, and everything keeps trying to give it one
+
+A bottle is radially symmetric. Like a circle or a sphere, it has **no
+geometric front, back, left or right** — and that is genuinely alien to
+humans, whose own bodies supply those axes for free. An octopus has no
+such problem. We are in that world.
+
+Two things in this design have been quietly imposing a front anyway:
+
+- **The anchor.** It has to be *somewhere*, and wherever it is becomes
+  "the front".
+- **The label.** Same effect, arrived at by manufacturing rather than by
+  us — and the bench bottle has none, which is what made this visible.
+
+So **there is no real left and right**, and a symmetric arrival sequence —
+trains sweeping in from both ends toward the middle — *performs* a
+bilateral symmetry the object does not possess. It reads as facetious:
+*"this bottle has two sides, wink wink."*
+
+**The anchor survives the critique and the sweep does not**, for a reason
+worth keeping: the anchor is an imposition that is *honest about being
+one*. It is a single declared fixed point, and it is absent 99% of the
+time. A choreographed sweep is an imposition pretending to be a property.
+
+This also explains, retroactively, why the arm A/B orientation work was so
+persistently confusing (`approach-contract.md` § "the face you view it
+from"): four combinations, none derivable from the object, and the whole
+difficulty was a *symptom*. We kept trying to give sides to a thing that
+has none.
+
+### The stronger argument is honesty about the data
+
+**The train positions are not known in advance. Not knowing where they are
+is the entire point of the device.**
+
+So a choreographed arrival asserts an order the data does not contain. A
+regulated appearance is already a facade — it implies the display knew
+something before it showed it. **Scatter asserts nothing**, which is the
+only truthful thing an arrival can do here.
+
+That is the same commitment this project keeps making elsewhere: a
+plausible wrong time is worse than a dark jar; a dark strip that looks
+like a fault gets a printed warning rather than a quiet hope. *Do not
+represent state you do not have.* Applied to motion for the first time.
+
+> **"One to two seconds of delayed mystery is not only worth the effect,
+> it's the randomness of broken glass."**
+
+Which extends the foundation rather than departing from it. `struck` glass
+rings — ordered, resonant, the same every time. `broken` glass scatters —
+disordered, unique, never repeated. **Both are glass physics**, and the
+light language now uses both.
+
+### This narrows §19 rather than contradicting it
+
+§19 concluded that anything seeming *alive* reads as "something needs your
+attention", and irregular timing is the most direct way to seem alive. But
+`firefly` and `flicker` were irregular **and discontinuous**. `scatter` is
+irregular and smooth — and it reads as pleasant, not alarming.
+
+So the discriminator is not regularity:
+
+> **Irregularity reads as ALIVE when it looks decided, and as PHYSICAL
+> when it looks unchosen.** A firefly hops because it chose to; broken
+> glass lands where it lands.
+
+Principle #5 was right as literally written — *a bottle has no sharp
+edges; the language is curves*. The gloss around it was too broad. Sharp
+edges are the problem; irregularity is not.
+
+### Shipped
+
+`fade_scene()` fades a rendered scene with per-LED scattered delays, in
+either direction, re-rolled every time — so a wake never looks the same
+twice. The station is the one exempt element: first in, last out.
+
+`leds.capture()` is what makes the fade-IN possible at all. Only the active
+contract knows the target scene, and the only way to learn it was to render
+it — which snaps it on, which is exactly what a fade-in exists to avoid.
+
+
+---
+
+## 21. The ACK shelf had never rendered (2026-09-14)
+
+Reported as *"thundering between the burst and the wrap-around"*, and the
+diagnosis is worth keeping because **every part of the description pointed
+at the wrong thing.**
+
+### What it actually was
+
+| observed | actually |
+|---|---|
+| "the startup sequence" | not the startup sequence — `_draw_startup_circle` is called only from `net.py`, so on `TIME_SOURCE = "ds3231"` there is no loading circle in the boot path at all |
+| "the burst is thundering" | the burst in isolation was fine, and always had been |
+| "then the wrap-around" | `motion.play("outward", ...)` — the wake wave. On a strip wound round a bottle, two blobs leaving the anchor for both ends *literally* wrap around |
+
+The real sequence: **burst → a spurious tap fires → ACK shelf held for the
+~1.2 s capture window → `outward` wake wave.** Nothing after the burst
+belonged to the boot ceremony; it was the gesture layer, triggered by
+plugging the unit in.
+
+### The shelf was below one output code, and always had been
+
+`SHELF_FLOOR = 0.08` is an **animated** mult, so its output is
+`BRIGHTNESS × shelf**GAMMA` — not `BRIGHTNESS × shelf`. The gamma is the
+part that hides it:
+
+```
+255 × 0.50 × 0.08**2.2 = raw 0.49
+```
+
+Below a single code. So:
+
+- **`DITHER` off** → truncates to 0 → *nothing*, for 1.2 s
+- **`DITHER` on** → lights ~half the frames, per-LED staggered → the whole
+  strip sparkling, for 1.2 s
+
+Both were reported, and both are the same number. At the older
+`BRIGHTNESS = 0.15` it was raw 0.15 — **the shelf has never once rendered
+as a shelf.** Whatever was tuned in §10 was being judged on the ACK peak
+and the CONFIRM jolt either side of it.
+
+### Why nothing caught it
+
+`palette.py` checked train, anchor and marker. The shelf is the one role
+that is **both** a product of config values **and** on the animated path,
+and it was not in the list. The checker was built in response to exactly
+this class of bug and still missed an instance of it, for the ordinary
+reason: a checker only checks what it was told about.
+
+Now included, with its gamma pre-applied so the existing floor and
+clipping tests work unchanged. `SHELF_FLOOR` raised to 0.20 → raw 3.7,
+clearing the measured floor.
+
+**And the narrow range that leaves — 0.20 to 0.25, raw 3 to 6 — is itself
+the argument for §12's deferred durable fix**: clamping any nonzero
+channel up to `LOW_PWM_FLOOR` at the point of output. Every one of these
+bugs has been the same shape, and every fix so far has been a different
+constant.
+
+### Plugging a unit in is handling
+
+The spurious tap is not a mystery. `gesture-envelope.md`'s 98.4% is
+measured against **pooled handling noise** — pickup, carry, setdown, bump —
+so a false trigger while connecting USB is the expected rate, not a fault.
+
+`GESTURE_BOOT_IGNORE_MS` (3 s) suppresses the trigger at loop start.
+Nothing a person does in the first seconds after power is a deliberate
+tap, so this costs nothing and removes a wake wave nobody asked for.
+
+### ⚠ And then the console disproved that too
+
+The shelf arithmetic above is real and the fix stands, but **it was not
+what was happening.** A boot capture showed no `(awake — tap registered)`
+line at all, which rules out a tap. What it showed instead:
+
+```
+  [SLEEP] awake window expired
+  (asleep after 0 min — tap to wake; not a fault)   ← thunder starts here
+```
+
+`BOOT_AWAKE_MINUTES = 0` sets `awake_until = now + 0`, so the unit goes
+awake → asleep on the very first tick and **the sleep ceremony fires at
+boot.** Position 2 was `fade_scene()`; the wrap-around was its `outward`
+unwind. Both mine, both added the same day.
+
+And the reason the fade was invisible-but-sparkling is a second bug in the
+same place: **`clear()` never reset `last_frame`.** `_play_startup_burst`
+ends with `clear()`, so `last_frame` still held the burst's *final* frame —
+every LED at mult ≈ 0, the end of the decay. `fade_scene` then spent 3.2 s
+scaling that toward zero: sub-code values throughout, which is sparkle with
+`DITHER` on and nothing with it off.
+
+Two fixes, and both are about honesty rather than tuning:
+
+- **`clear()` nulls `last_frame`.** A cleared strip has no scene. Saying so
+  is what makes `last_frame is not None` a usable test for "is there
+  anything to fade".
+- **The whole ceremony is gated on there being a scene**, not just the
+  fade. A goodbye for a display that never showed anything is not a
+  goodbye, it is a boot artefact.
+
+### The rule worth carrying
+
+> **A description of a bug is a description of where it was noticed, not
+> of where it is.** Four specific claims went wrong here — that it was the
+> startup sequence, that it was the burst, that the third phase was a
+> spin, and then that it was a spurious tap. Each was a reasonable reading
+> of what the strip did, and the arithmetic for the tap theory was even
+> correct on its own terms. **One line of console output disproved all of
+> them.** The shelf bug it turned up was real and worth fixing; it just
+> was not this.
