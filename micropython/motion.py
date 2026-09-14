@@ -26,9 +26,14 @@
 
 import time
 
+try:
+    import random as _random
+except ImportError:          # not every MicroPython build ships it
+    _random = None
+
 import leds
 import primitives
-from settings import (MOTION_AROUND_MS, MOTION_INWARD_MS, MOTION_OUTWARD_MS,
+from settings import (MOTION_AROUND_MS, MOTION_SCENE_STAGGER_MS, MOTION_INWARD_MS, MOTION_OUTWARD_MS,
     MOTION_SHAKE_BOUNCES, MOTION_SHAKE_MS, NUM_LEDS, SHAKE_BOUNDS)
 
 # ANCHOR_INDEX defaults to 0 for every non-approach contract, which would
@@ -199,6 +204,73 @@ def fade(color, ms, index=None, rising=False, curve=None, frame_ms=16):
         leds._write_frame(frame)
         time.sleep_ms(frame_ms)
     leds.clear()
+
+
+def _rand_unit():
+    """0..1. getrandbits is the one primitive every build with the module
+    has — random() needs float support some ports omit."""
+    if _random is None:
+        return (time.ticks_us() % 9973) / 9973.0
+    return _random.getrandbits(16) / 65535.0
+
+
+def fade_scene(frame, ms, rising, stagger_ms=None, station_index=None,
+               curve=None, frame_ms=16):
+    """Fade a whole rendered scene in or out, each LED on its own delay.
+
+    ⚠ THE DELAYS ARE SCATTERED, NOT SEQUENCED, and that is a decision
+    about what the object IS rather than about what looks nice
+    (insights.md §20). A bottle is radially symmetric: it has no front,
+    no back, no left and no right. Sweeping the trains in from one side
+    performs a bilateral symmetry the object does not have — "this bottle
+    has two sides, wink wink".
+
+    And the honesty argument, which is the stronger one: **the train
+    positions are not known in advance.** Not knowing where they are is
+    the entire point of the device. A choreographed arrival asserts an
+    order the data does not contain, so a regulated appearance is already
+    a facade. Scatter asserts nothing.
+
+    The station is exempt: it leads on the way in and is last to let go on
+    the way out. That imposition is deliberate and it is honest about
+    being one — it is the one fixed point, and it is absent 99% of the
+    time anyway.
+    """
+    stagger_ms = MOTION_SCENE_STAGGER_MS if stagger_ms is None else stagger_ms
+    curve = slow_out if curve is None else curve
+    lit = [i for i, e in enumerate(frame) if e is not None]
+    if not lit:
+        return
+    station_index = ANCHOR if station_index is None else station_index
+
+    delays = {}
+    for i in lit:
+        if i == station_index:
+            continue
+        delays[i] = int(_rand_unit() * stagger_ms) + (stagger_ms if rising else 0)
+    if station_index in lit:
+        # Leads in; last out. Never scattered — see the docstring.
+        delays[station_index] = 0 if rising else (
+            max(delays.values()) if delays else 0)
+
+    span = ms
+    total = span + (max(delays.values()) if delays else 0)
+    start = time.ticks_ms()
+    while True:
+        el = time.ticks_diff(time.ticks_ms(), start)
+        if el >= total:
+            break
+        out = [None] * NUM_LEDS
+        for i in lit:
+            t = (el - delays[i]) / span
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            v = curve(t if rising else 1.0 - t)
+            if v > 0.001:
+                entry = frame[i]
+                out[i] = (entry[0], min(1.0, entry[1] * v))
+        leds._write_frame(out)
+        time.sleep_ms(frame_ms)
+    leds.clear() if not rising else leds._write_frame(frame)
 
 
 def recoil(color, ms=140, depth=0.35, frame_ms=15):

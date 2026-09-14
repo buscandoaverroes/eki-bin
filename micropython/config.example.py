@@ -415,9 +415,14 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # is indistinguishable from a power loss. ONE wave, not three: you stopped
 # looking, which is a smaller fact than the day ending.
 SLEEP_UNWIND_ENABLED = True
-# SLEEP_STATION_FADE_MS = 3200   # the station fades out FIRST, then the
-#                                #   unwind travels outward. ⚠ wants
+# The scene fades as one gesture in both directions: trains on SCATTERED
+# delays (the object has no front, and the train positions are not known in
+# advance — a choreographed sweep asserts an order the data does not have),
+# station first in and last out. insights.md §20.
+WAKE_FADE_ENABLED = True         # fade UP after a wake instead of snapping
+# MOTION_SCENE_FADE_MS = 3200    # one element's own fade. ⚠ wants
 #                                #   DITHER = True or the last second steps.
+# MOTION_SCENE_STAGGER_MS = 1000 # how wide the scatter window is
 # SLEEP_UNWIND_MS = 2200
 # SLEEP_UNWIND_COLOR = (150, 70, 20)
 

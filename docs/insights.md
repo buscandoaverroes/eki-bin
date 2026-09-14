@@ -1942,3 +1942,91 @@ skip dithering entirely.
 
 Worth stating plainly because it was nearly re-solved in the curve instead:
 **if a fade steps, check `DITHER` before blaming the shape.**
+
+
+---
+
+## 20. A bottle has no front, and the data has no order (2026-09-14)
+
+Testing the whole-scene arrival sequences produced the most structural
+finding so far, and it is not about animation.
+
+### The object has no front, and everything keeps trying to give it one
+
+A bottle is radially symmetric. Like a circle or a sphere, it has **no
+geometric front, back, left or right** — and that is genuinely alien to
+humans, whose own bodies supply those axes for free. An octopus has no
+such problem. We are in that world.
+
+Two things in this design have been quietly imposing a front anyway:
+
+- **The anchor.** It has to be *somewhere*, and wherever it is becomes
+  "the front".
+- **The label.** Same effect, arrived at by manufacturing rather than by
+  us — and the bench bottle has none, which is what made this visible.
+
+So **there is no real left and right**, and a symmetric arrival sequence —
+trains sweeping in from both ends toward the middle — *performs* a
+bilateral symmetry the object does not possess. It reads as facetious:
+*"this bottle has two sides, wink wink."*
+
+**The anchor survives the critique and the sweep does not**, for a reason
+worth keeping: the anchor is an imposition that is *honest about being
+one*. It is a single declared fixed point, and it is absent 99% of the
+time. A choreographed sweep is an imposition pretending to be a property.
+
+This also explains, retroactively, why the arm A/B orientation work was so
+persistently confusing (`approach-contract.md` § "the face you view it
+from"): four combinations, none derivable from the object, and the whole
+difficulty was a *symptom*. We kept trying to give sides to a thing that
+has none.
+
+### The stronger argument is honesty about the data
+
+**The train positions are not known in advance. Not knowing where they are
+is the entire point of the device.**
+
+So a choreographed arrival asserts an order the data does not contain. A
+regulated appearance is already a facade — it implies the display knew
+something before it showed it. **Scatter asserts nothing**, which is the
+only truthful thing an arrival can do here.
+
+That is the same commitment this project keeps making elsewhere: a
+plausible wrong time is worse than a dark jar; a dark strip that looks
+like a fault gets a printed warning rather than a quiet hope. *Do not
+represent state you do not have.* Applied to motion for the first time.
+
+> **"One to two seconds of delayed mystery is not only worth the effect,
+> it's the randomness of broken glass."**
+
+Which extends the foundation rather than departing from it. `struck` glass
+rings — ordered, resonant, the same every time. `broken` glass scatters —
+disordered, unique, never repeated. **Both are glass physics**, and the
+light language now uses both.
+
+### This narrows §19 rather than contradicting it
+
+§19 concluded that anything seeming *alive* reads as "something needs your
+attention", and irregular timing is the most direct way to seem alive. But
+`firefly` and `flicker` were irregular **and discontinuous**. `scatter` is
+irregular and smooth — and it reads as pleasant, not alarming.
+
+So the discriminator is not regularity:
+
+> **Irregularity reads as ALIVE when it looks decided, and as PHYSICAL
+> when it looks unchosen.** A firefly hops because it chose to; broken
+> glass lands where it lands.
+
+Principle #5 was right as literally written — *a bottle has no sharp
+edges; the language is curves*. The gloss around it was too broad. Sharp
+edges are the problem; irregularity is not.
+
+### Shipped
+
+`fade_scene()` fades a rendered scene with per-LED scattered delays, in
+either direction, re-rolled every time — so a wake never looks the same
+twice. The station is the one exempt element: first in, last out.
+
+`leds.capture()` is what makes the fade-IN possible at all. Only the active
+contract knows the target scene, and the only way to learn it was to render
+it — which snaps it on, which is exactly what a fade-in exists to avoid.

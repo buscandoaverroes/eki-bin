@@ -180,3 +180,73 @@ def test_explicit_bounds_still_win(load_main):
     the constant should not take the option away."""
     m = _load(load_main, NUM_LEDS=21, SHAKE_BOUNDS=(2, 5))
     assert m.SHAKE_BOUNDS == (2, 5)
+
+
+# ── fading a whole scene ─────────────────────────────────────────
+
+
+def test_the_station_leads_in_and_is_last_out(load_main):
+    """The one element that is NOT scattered. A bottle has no front, so
+    the anchor is a deliberate imposition — and being deliberate is what
+    makes it honest. Everything else has no order to assert."""
+    _fake_ticks()
+    m = _load(load_main, NUM_LEDS=21, ANCHOR_INDEX=10)
+    calls = []
+    m.leds._write_frame = lambda f: calls.append(f)
+    m.time.sleep_ms = lambda ms: None
+    frame = [None] * 21
+    for i in (3, 10, 17):
+        frame[i] = ((10, 20, 30), 1.0)
+
+    calls.clear()
+    m.fade_scene(frame, 200, rising=True, stagger_ms=400)
+    # The first frames are legitimately empty — a fade-in starts at zero.
+    # The property is which element lights FIRST, not which is lit at t=0.
+    first_lit = next(f for f in calls if any(e is not None for e in f))
+    assert first_lit[10] is not None, "station is up before anything else"
+    assert first_lit[3] is None and first_lit[17] is None
+
+
+def test_scene_fade_ends_on_the_real_frame(load_main):
+    """A fade-IN must land exactly on what the contract painted — off by
+    a hair and the first steady render is a visible jump."""
+    _fake_ticks()
+    m = _load(load_main, NUM_LEDS=21, ANCHOR_INDEX=10)
+    calls = []
+    m.leds._write_frame = lambda f: calls.append(f)
+    m.time.sleep_ms = lambda ms: None
+    frame = [None] * 21
+    frame[10] = ((10, 20, 30), 1.0)
+    m.fade_scene(frame, 50, rising=True, stagger_ms=0)
+    assert calls[-1] is frame
+
+
+def test_an_empty_scene_is_not_an_animation(load_main):
+    """Nothing lit means nothing to fade — and a stagger computed over an
+    empty set would divide by a max() of nothing."""
+    _fake_ticks()
+    m = _load(load_main, NUM_LEDS=21, ANCHOR_INDEX=10)
+    calls = []
+    m.leds._write_frame = lambda f: calls.append(f)
+    m.fade_scene([None] * 21, 200, rising=False)
+    assert calls == []
+
+
+def test_capture_builds_a_frame_without_latching_it(load_main):
+    """The whole reason a fade-in is possible: only the contract knows
+    the target scene, and rendering it to find out would snap it on."""
+    main = load_main(NUM_LEDS=21)
+    import importlib
+    sys.modules.pop("leds", None)
+    lm = importlib.import_module("leds")
+    written = []
+    lm.np.write = lambda: written.append(1)
+    want = [None] * 21
+    want[4] = ((1, 2, 3), 1.0)
+
+    got = lm.capture(lm._write_frame, want)
+    assert got is want
+    assert written == [], "capture must not latch"
+
+    lm._write_frame(want)
+    assert written == [1], "and normal writes still latch afterwards"

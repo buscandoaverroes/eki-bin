@@ -493,6 +493,8 @@ def demo(repeats=None):
 
 
 ACTIVE = arrivals   # ← or demo / hops / fades, or call from the REPL
+#   scatter won (insights §20) and is what the firmware now does;
+#   the rest stay for comparing on a different vessel.
 
 if __name__ == "__main__":
     ACTIVE()

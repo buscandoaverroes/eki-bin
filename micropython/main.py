@@ -39,14 +39,15 @@ from diag import (_mem_checkpoint, _mem_report)
 from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
     _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
     _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+import leds
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
     GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
     MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS, SLEEP_UNWIND_COLOR,
-    SLEEP_STATION_FADE_MS, SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS,
-    ANCHOR_COLOR, TILT_RAIL_BOUNCE_ENABLED,
+    MOTION_SCENE_FADE_MS, SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS,
+    WAKE_FADE_ENABLED, TILT_RAIL_BOUNCE_ENABLED,
     TILT_RAIL_DEPTH, TILT_RAIL_MS,
     MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
@@ -570,6 +571,22 @@ def _run_interactive_loop(schedule_data, led):
                         # response is now correct BY CONSTRUCTION, because
                         # _handle_tap was told whether the action exists
                         # before it chose how to answer.
+                        if (response == "wake" and WAKE_FADE_ENABLED
+                                and MOTION_ENABLED
+                                and not horizon.beyond_horizon(signal, signal_b)):
+                            # Fade UP into the scene rather than snapping
+                            # on behind the wave. capture() builds the
+                            # contract's frame without latching it —
+                            # rendering it to find out what it is would
+                            # be the snap this exists to avoid.
+                            _target = leds.capture(
+                                _render_dispatch(ACTIVE_CONTRACT, signal,
+                                                 signal_b), tick_now)
+                            if _target is not None:
+                                motion.fade_scene(_target,
+                                                  MOTION_SCENE_FADE_MS,
+                                                  rising=True)
+                                last_render = tick_now
                         if (response == "wake" and GOODNIGHT_ENABLED
                                 and horizon.beyond_horizon(signal, signal_b)):
                             # Trains exist, none within reach. Say so, then
@@ -627,13 +644,14 @@ def _run_interactive_loop(schedule_data, led):
                 # Unwind rather than cut to black. ONE wave: you stopped
                 # looking, which is a smaller fact than the day ending.
                 if SLEEP_UNWIND_ENABLED and MOTION_ENABLED:
-                    # Two phases, in the order described on hardware: the
-                    # station fades out FIRST, then the unwind travels
-                    # outward. Separate because they are different
-                    # gestures — one thing letting go, then the rest
-                    # dispersing — and running them together read as a
-                    # single dimmer being turned down.
-                    motion.fade(ANCHOR_COLOR, SLEEP_STATION_FADE_MS)
+                    # Fade the SCENE that is currently lit — trains
+                    # scattered, station last to let go — and only then
+                    # the unwind wave. leds.last_frame is whatever the
+                    # contract painted on the previous tick, which is
+                    # exactly the thing on screen right now.
+                    if leds.last_frame is not None:
+                        motion.fade_scene(leds.last_frame,
+                                          MOTION_SCENE_FADE_MS, rising=False)
                     motion.play("outward", SLEEP_UNWIND_COLOR,
                                 SLEEP_UNWIND_MS)
             was_awake = tap_state.awake

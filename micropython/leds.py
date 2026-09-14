@@ -110,6 +110,33 @@ def _layer_hue_shift(index):
     return 0 if index == 0 else SECONDARY_HUE_SHIFT_DEG * index
 
 
+# The last logical frame handed to _write_frame, and a flag to build one
+# WITHOUT latching it. Both exist for one reason: a fade-in has to know
+# what it is fading TOWARD, and only the active contract knows that.
+#
+# Without capture(), the only way to learn the target scene is to render
+# it — which snaps it on, which is exactly what a fade-in exists to avoid.
+last_frame = None
+_capture_only = False
+
+
+def capture(render_fn, *args):
+    """Run a render WITHOUT sending it to the strip; return its frame.
+
+    A flag rather than a parameter threaded through every contract: the
+    render path is `contract.render(signal, phase)` and widening that
+    signature would touch six contracts to serve one caller. Set, call,
+    unset — and `finally`, so a contract that raises cannot leave the
+    module silently swallowing every subsequent write."""
+    global _capture_only
+    _capture_only = True
+    try:
+        render_fn(*args)
+    finally:
+        _capture_only = False
+    return last_frame
+
+
 def _write_frame(frame):
     """Composite a resolved frame onto the physical strip in ONE np.write().
     This is the shared tail every render path converges on, and honours the
@@ -146,6 +173,10 @@ def _write_frame(frame):
                                  Same root cause docs/insights.md §6 already
                                  hit with EchoContract's dimmed secondary layer
                                  — see docs/contracts/approach-contract.md."""
+    global last_frame
+    last_frame = frame
+    if _capture_only:
+        return          # built, not latched — see capture()
     for logical in range(NUM_LEDS):
         phys = _physical(logical)
         entry = frame[logical]

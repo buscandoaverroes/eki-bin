@@ -544,7 +544,14 @@ SLEEP_UNWIND_COLOR = getattr(config, "SLEEP_UNWIND_COLOR", (150, 70, 20))
 # being thrown, with `slow_out` as the curve that won (insights §19).
 # ⚠ WANTS DITHER = True. At the bottom of a fade there are few output codes
 # left, and without dithering the last second visibly steps.
-SLEEP_STATION_FADE_MS = getattr(config, "SLEEP_STATION_FADE_MS", 3200)
+# How long ONE element takes to fade, and how wide the scatter window is.
+# Named for the SCENE rather than for sleep, because the same two numbers
+# govern the wake fade-in — they are one gesture run in two directions.
+MOTION_SCENE_FADE_MS = getattr(config, "MOTION_SCENE_FADE_MS", 3200)
+MOTION_SCENE_STAGGER_MS = getattr(config, "MOTION_SCENE_STAGGER_MS", 1000)
+# The display fades UP after a wake, instead of snapping on behind the
+# `outward` wave. Off by default — a visible behaviour change.
+WAKE_FADE_ENABLED = getattr(config, "WAKE_FADE_ENABLED", False)
 
 GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
 
