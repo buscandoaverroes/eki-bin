@@ -317,6 +317,21 @@ fully-encapsulated build, distinct from the ST25DV dynamic tag used now.
 | Lavet stepper + dial | ~0 between steps | µJ/step | Most literally "analog metaphor"; most fun to build |
 | **Filament LED array** | n/a (lit) | continuous PWM | Not a drop-in — a filament is *one* light. Full design, cross-fade maths and the step-zero forward-voltage measurement already written up: `docs/hardware.md` § "Filament array" |
 
+### The chandelier — a display with no orientation (2026-09-14)
+
+Filament LEDs twisted into a suspended 3D form inside a larger bottle. The
+culmination of design-principle #6 ("the object has no front"): not a
+better mapping of time onto a line, but a display with no line to map
+onto. Wired and always-on, which removes the wake/sleep model and turns a
+tap from "wake" into "tell me more".
+
+Needs no change to stage 1 — a new `DisplayContract` emitting (count,
+temperature) rather than (position), which is the two-stage split earning
+its keep on exactly the case it was designed for.
+
+Gated on `hardware.md`'s forward-voltage measurement, and downstream of
+the IMU work. Full write-up: `docs/chandelier-concept.md`.
+
 ### Hiding a display behind the label (2026-09-04)
 
 A rigid rectangular display is the hardest thing to reconcile with design
