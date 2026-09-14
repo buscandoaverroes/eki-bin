@@ -162,6 +162,32 @@ WORDS = {"inward": inward, "outward": outward, "around": around,
          "shake": shake, "breathe": breathe}
 
 
+def recoil(color, ms=140, depth=0.35, frame_ms=15):
+    """A brief dip and return, whole strip. **NOT a sixth word.**
+
+    Words say something. This is a physical reaction — the same category
+    as the ACK flash, which is also not a word. A bottle tilted past what
+    the table allows does not communicate; it stops, and you feel it stop.
+
+    ⚠ Deliberately a BRIGHTNESS dip and not a positional bounce, which was
+    the first instinct. At a brightness rail the whole ring is lit, so a
+    blob moving a couple of LEDs is invisible against it — whereas the
+    object recoiling reads at any lit state. The physical metaphor agrees:
+    the thing that bounces is the bottle, not a spot on it."""
+    start = time.ticks_ms()
+    while True:
+        phase = time.ticks_diff(time.ticks_ms(), start)
+        if phase >= ms:
+            break
+        t = phase / ms
+        # down fast, back up slower — a bounce is asymmetric
+        mult = (1.0 - depth * (t / 0.3) if t < 0.3
+                else 1.0 - depth * (1.0 - (t - 0.3) / 0.7))
+        leds._write_frame([(color, max(0.0, min(1.0, mult)))] * NUM_LEDS)
+        time.sleep_ms(frame_ms)
+    leds.clear()
+
+
 def play_sequence(waves, word="outward", gap_ms=0, frame_ms=20):
     """Play several waves back to back. Each is (color, ms, peak).
 

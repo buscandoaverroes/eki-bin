@@ -1794,3 +1794,80 @@ a sunset, a brown one gets a fade, and neither depends on the other.
 That is a design property worth reusing. Anywhere hue carries meaning in
 this project, something else should carry it too — not as redundancy, but
 because the vessel is a variable and hue is the channel it takes away.
+
+
+---
+
+## 18. 24 hours with the ceremonies (2026-09-14)
+
+### The tick markers are wrong in an opaque bottle
+
+Turn them off. In thick brown glass they diffuse into a yellow haze that
+carries no information and competes with the only two things that do — the
+station and the train.
+
+**The setting already exists: `MARKER_BRIGHTNESS = 0`.** No new knob, and
+adding a `MARKERS_ENABLED` boolean alongside it would create exactly the
+two-ways-to-say-one-thing confusion `palette-model.md`'s own rule forbids.
+What was wrong was the *documentation*: the config's warning read as "never
+set this low", when it is really about the range `0 < x ≲ 0.15` — where a
+channel is lit but too dim for the channels to match. **An unlit LED has no
+hue to get wrong.** Zero is off, and off is a legitimate choice rather than
+the bug-workaround it was the first time it appeared (§12).
+
+The deeper point is about what the markers were *for*: "how far does the
+arc reach". That is a question a clear vessel raises and an opaque one
+answers for you, by making the lit region obvious against the dark. So the
+right value is **per-vessel**, like brightness (§14) and hue count (§12) —
+a third setting whose correct value is a property of the glass.
+
+### One wave, three waves, and a recoil
+
+Three ceremonies now exist and the distinction between them is the useful
+part, not the animations:
+
+| event | what it is | shape |
+|---|---|---|
+| you stopped looking (`AWAKE_MINUTES` expires) | a gesture | **one** slow `outward` |
+| the day ended (nothing within reach) | a ceremony | **three** waves, a sunset |
+| you hit a brightness rail | **not a word at all** | a recoil |
+
+Cutting straight to black on timeout is indistinguishable from a power
+loss — the same hazard quiet hours has a printed warning about, except
+nobody is reading a console at the time.
+
+**The unwind needed no new word.** "The station flickers out and unwinds
+from in to out" is exactly what `outward` already does, because its
+amplitude decays as it travels: the anchor blob leaves *and* dims. Reaching
+for a sixth word here would have been the mistake §16 warns about — words
+that are too close collapse into each other.
+
+### A rail is invisible, and the fix is physical rather than semantic
+
+"Already at maximum" looks exactly like "not working". §15 hit this on the
+bench and 24h of real use hit it again, which makes it a property of the
+control rather than of one session.
+
+**The answer came from asking what a bottle would do**, not what a message
+should say: tilted past what the table allows it stops, and you feel it
+stop. So — a recoil, and deliberately **not a word**. Words say something;
+this is a physical reaction, the same category as the ACK flash.
+
+Two choices inside it worth keeping:
+
+- **A brightness dip, not a positional bounce.** The first instinct was
+  `shake`, which is genuinely the right *meaning* ("no further"). But at a
+  brightness rail the whole ring is lit, so a blob moving two LEDs is
+  invisible against it — while the object recoiling reads at any lit state.
+  The metaphor agrees: the thing that bounces is the bottle, not a spot on
+  it.
+- **Throttled, not edge-triggered.** Holding a tilt past the rail is a
+  *continuous* request. Answering once and then going quiet is the same
+  silence the recoil exists to break.
+
+### Still open
+
+Separating pick-up from tilt. §17's spurious-tap fix (suppress the tap
+trigger while a tilt session is engaged) addresses taps-during-tilt, not
+handling-that-looks-like-tilt. That one is the ESN thread, and it stays
+parked.

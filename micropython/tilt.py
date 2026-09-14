@@ -18,7 +18,7 @@ import math
 import settings
 from settings import (TILT_BASELINE_ALPHA, TILT_DEADZONE_DEG, TILT_ENGAGE_SAMPLES,
     TILT_EXPO, TILT_FIRST_MEANS, TILT_FULL_DEG, TILT_G_TOLERANCE,
-    TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, TILT_RATE_PER_SEC,
+    TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, TILT_RAIL_REPEAT_MS, TILT_RATE_PER_SEC,
     TILT_SMOOTH_ALPHA, TILT_STILL_DEG, TILT_STILL_MS, TILT_STILL_WINDOW)
 
 # ⚠ THE "3.5s TO REVERSE" BUDGET IS GONE, and its absence is a feature.
@@ -124,6 +124,9 @@ class TiltController:
         self.deg = 0.0
         self.jitter = None      # None until the stillness window fills
         self.rate = 0.0         # brightness units/sec right now — signed
+        self.rail_bounce = None # "min"/"max" for exactly ONE update when a
+        #   rail is freshly hit; None otherwise. See _note_rail.
+        self._rail_at = None
         self._sign = 1.0 if TILT_FIRST_MEANS == "up" else -1.0
 
     def update(self, raw, now_ms, dt_ms):
@@ -210,11 +213,37 @@ class TiltController:
         amount = expo(amount) * along * self._sign
 
         self.rate = TILT_RATE_PER_SEC * amount
-        settings.BRIGHTNESS = max(
-            TILT_MIN_BRIGHT,
-            min(TILT_MAX_BRIGHT,
-                settings.BRIGHTNESS + self.rate * (dt_ms / 1000.0)))
+        wanted = settings.BRIGHTNESS + self.rate * (dt_ms / 1000.0)
+        settings.BRIGHTNESS = max(TILT_MIN_BRIGHT, min(TILT_MAX_BRIGHT, wanted))
+        self._note_rail(wanted, now_ms)
         return "up" if amount > 0 else "down"
+
+    def _note_rail(self, wanted, now_ms):
+        """Flag a FRESH arrival at a brightness rail, throttled.
+
+        Reported because a rail is invisible: the display simply stops
+        changing, and "already at maximum" looks exactly like "not
+        working" — which is precisely how the first hardware session read
+        it (insights.md §15). `wanted` rather than the clamped value is
+        what makes this detectable at all: the clamp destroys the evidence
+        that you were still asking for more.
+
+        Throttled rather than edge-only, because holding a tilt past the
+        rail is a continuous request and answering it once and then going
+        silent for a minute is the same silence again."""
+        self.rail_bounce = None
+        hit = None
+        if wanted > TILT_MAX_BRIGHT:
+            hit = "max"
+        elif wanted < TILT_MIN_BRIGHT:
+            hit = "min"
+        if hit is None:
+            self._rail_at = None
+            return
+        if (self._rail_at is None
+                or _elapsed(now_ms, self._rail_at) >= TILT_RAIL_REPEAT_MS):
+            self.rail_bounce = hit
+            self._rail_at = now_ms
 
 
 def _elapsed(now_ms, since_ms):

@@ -183,6 +183,9 @@ def describe(floor=None):
     floor = LOW_PWM_FLOOR if floor is None else floor
     lo, lo_why, hi, hi_why = safe_range(floor)
     lines = ["  palette (floor %d, static path — no gamma):" % floor]
+    if MARKER_BRIGHTNESS <= 0:
+        lines.append("    markers OFF (MARKER_BRIGHTNESS = 0) — deliberate, "
+                     "not a fault")
     if lo <= hi:
         lines.append("    usable BRIGHTNESS %.2f-%.2f  (%s sets the floor, "
                      "%s clips first)" % (lo, hi, lo_why, hi_why))

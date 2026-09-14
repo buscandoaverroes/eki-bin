@@ -188,10 +188,21 @@ SECONDARY_BREATHE_FLOOR = 0.7  # high — subtle motion, not a dim/urgent pulse
 #   anchor note below). Confirm per strip with `make low-pwm-test`.
 #   docs/insights.md §12, and "How the brightness values compose" in
 #   docs/contracts/config.md.
+#
+#   ⚠ ZERO IS NOT IN THE DANGER ZONE — it is OFF, and it is a legitimate
+#   choice, not a workaround. The warning above is about the range
+#   0 < x ≲ 0.15, where a channel is lit but too dim to be matched. An
+#   unlit LED has no hue to get wrong.
+#
+#   **In a thick opaque bottle, off is often the right answer** (measured
+#   over 24h, insights §18): the ticks diffuse into a yellow haze that
+#   adds no information and competes with the two things that carry it,
+#   the station and the train. Their job — "how far does the arc reach" —
+#   is a question a clear vessel raises and an opaque one answers for you.
 # MARKER_BRIGHTNESS = 0.25  # LINEAR mult of BRIGHTNESS (no gamma, no dither —
 #                            avoids low-brightness flicker) for the idle
-#                            "tick" LEDs — 0 = fully off. A train is never
-#                            dimmer than BRIGHTNESS itself.
+#                            "tick" LEDs. **0 = OFF** — see above.
+#                            A train is never dimmer than BRIGHTNESS itself.
 # MARKER_COLOR = (80, 80, 80)     # idle tick-LED colour, NOT a dimmed LINE_COLOR
 # TRANSITION_MS = 4000     # chase-transition duration, ms; 0 = instant switch.
 #                            A moving highlight sweeps LED-by-LED between old
@@ -391,6 +402,13 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # instead of sitting lit. Distinct from the no-data acknowledgment,
 # because "come back tomorrow" and "you missed the last train" are
 # different facts.
+# When AWAKE_MINUTES expires, unwind instead of cutting to black — which
+# is indistinguishable from a power loss. ONE wave, not three: you stopped
+# looking, which is a smaller fact than the day ending.
+SLEEP_UNWIND_ENABLED = True
+# SLEEP_UNWIND_MS = 2200
+# SLEEP_UNWIND_COLOR = (150, 70, 20)
+
 GOODNIGHT_ENABLED = True
 # Three waves, because one is a gesture and three are a ceremony. The
 # sequence is a SUNSET — slower, dimmer and cooler each time — and its

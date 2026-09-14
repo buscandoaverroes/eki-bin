@@ -104,6 +104,8 @@ it with `getattr(config, "NAME", default)`, so
 | `MOTION_OUTWARD_MS` / `MOTION_AROUND_MS` / `MOTION_SHAKE_MS` | int | no | 900 / 1400 / 650 | Word durations |
 | `NO_CYCLE_COLOR` | (r,g,b) | no | `(128, 0, 200)` | "You asked to change line and there is none" |
 | `TILT_ENABLED` | bool | no | `False` | Tilt the bottle to adjust brightness |
+| `SLEEP_UNWIND_ENABLED` | bool | no | `False` | Unwind when `AWAKE_MINUTES` expires instead of cutting to black |
+| `TILT_RAIL_BOUNCE_ENABLED` | bool | no | `True` | Recoil when tilt hits a brightness rail — a rail is otherwise invisible |
 | `GOODNIGHT_ENABLED` | bool | no | `False` | A wake with no train in reach gets a farewell, then goes dark |
 | `MORNING_WAKE_ENABLED` | bool | no | `False` | Wake as the first train crosses into view. **Costs one awake window/day** |
 | `MORNING_LEAD_MINUTES` | int | no | `1` | How far ahead of the crossing to wake |

@@ -44,7 +44,9 @@ from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
     GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
-    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS,
+    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS, SLEEP_UNWIND_COLOR,
+    SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS, TILT_RAIL_BOUNCE_ENABLED,
+    TILT_RAIL_DEPTH, TILT_RAIL_MS,
     MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
     DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
     ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
@@ -532,6 +534,11 @@ def _run_interactive_loop(schedule_data, led):
                     tilt_ms = tick_now
                     if tilt_state in ("up", "down"):
                         last_render = None   # repaint at the new brightness
+                    if (tilt_ctl.rail_bounce is not None
+                            and TILT_RAIL_BOUNCE_ENABLED and MOTION_ENABLED):
+                        motion.recoil(STARTUP_COLOR, TILT_RAIL_MS,
+                                      TILT_RAIL_DEPTH)
+                        last_render = None
 
                 mag = _gesture_magnitude_mg((tick_now,) + raw)
                 baseline = None
@@ -616,6 +623,11 @@ def _run_interactive_loop(schedule_data, led):
             else:
                 print("  (asleep after %d min — tap to wake; not a fault)"
                       % (BOOT_AWAKE_MINUTES if loop_count <= 1 else AWAKE_MINUTES))
+                # Unwind rather than cut to black. ONE wave: you stopped
+                # looking, which is a smaller fact than the day ending.
+                if SLEEP_UNWIND_ENABLED and MOTION_ENABLED:
+                    motion.play("outward", SLEEP_UNWIND_COLOR,
+                                SLEEP_UNWIND_MS)
             was_awake = tap_state.awake
 
         if status_message.active(tick_now):

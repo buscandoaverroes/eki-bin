@@ -465,6 +465,29 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 
+# ── Hitting a brightness rail ────────────────────────────────────────
+# A rail is INVISIBLE: the display stops changing, and "already at maximum"
+# looks exactly like "not working" — which is how the first hardware
+# session read it (insights §15), and how 24h of real use read it again
+# (§18).
+#
+# What a bottle actually does when you tilt it past what the table allows
+# is stop, and you feel it stop — so the answer is a recoil, not a message.
+# A brightness DIP rather than a positional bounce: at a rail the whole
+# ring is lit, so a blob moving two LEDs is invisible against it, while the
+# object recoiling reads at any lit state.
+#
+# Symmetric at both ends. The top rail is the stronger metaphor (a bottle
+# bounces off a table), but both are the same fact — "no further" — and
+# giving only one of them an answer would be the more arbitrary choice.
+TILT_RAIL_BOUNCE_ENABLED = getattr(config, "TILT_RAIL_BOUNCE_ENABLED", True)
+TILT_RAIL_MS = getattr(config, "TILT_RAIL_MS", 140)  # brief. It is a
+#   reaction, not a statement — see motion.recoil's "not a sixth word".
+TILT_RAIL_DEPTH = getattr(config, "TILT_RAIL_DEPTH", 0.35)  # how deep the dip
+TILT_RAIL_REPEAT_MS = getattr(config, "TILT_RAIL_REPEAT_MS", 900)  # throttle.
+#   Holding a tilt past the rail is a CONTINUOUS request, so answering once
+#   and then going quiet is the same silence the recoil exists to break.
+
 # ── Horizon ceremonies: goodnight, and the morning flower ────────────
 # insights.md §17. A lit anchor is a PROMISE — "here is the station, here
 # is what's coming". Rendering it with nothing on the arms is a promise
@@ -479,6 +502,24 @@ TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
 #
 # Goodnight is `outward`, slowed: energy leaving the station and
 # dissipating. No sixth word needed.
+# ── The sleep unwind ─────────────────────────────────────────────────
+# What happens when AWAKE_MINUTES expires. Cutting straight to black is
+# indistinguishable from a power loss — the same hazard quiet hours has a
+# printed warning about, except nobody is reading a console.
+#
+# ⚠ ONE WAVE, not three, and the difference is the whole point. Three
+# waves are a ceremony: the day ending. One is a gesture: you stopped
+# looking. Reusing goodnight's sequence here would say something much
+# larger than what happened.
+#
+# `outward` already does exactly what "the station flickers out and
+# unwinds from in to out" describes, because its amplitude decays as it
+# travels (motion.py) — the anchor blob leaves AND dims. No new word.
+SLEEP_UNWIND_ENABLED = getattr(config, "SLEEP_UNWIND_ENABLED", False)
+SLEEP_UNWIND_MS = getattr(config, "SLEEP_UNWIND_MS", 2200)  # slow; nothing
+#   is waiting on it
+SLEEP_UNWIND_COLOR = getattr(config, "SLEEP_UNWIND_COLOR", (150, 70, 20))
+
 GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
 
 # THREE waves, because one is a gesture and three are a ceremony. Each is
