@@ -149,3 +149,30 @@ def test_an_impossible_palette_is_reported_as_impossible(load_main):
     lo, _lw, hi, _hw = p.safe_range()
     assert lo > hi
     assert any("NO usable BRIGHTNESS" in line for line in p.describe())
+
+
+def test_the_ack_shelf_is_checked_and_is_gamma_corrected(load_main):
+    """The role that hid for months. The ACK shelf is the one entry that
+    is BOTH a product of config values AND rendered on the animated path,
+    so its output is BRIGHTNESS × mult**GAMMA rather than BRIGHTNESS ×
+    mult. At the old SHELF_FLOOR of 0.08 and BRIGHTNESS 0.50 that is raw
+    0.49 — below a single output code, so it either vanished (DITHER off)
+    or sparkled across the whole strip for the 1.2s capture window
+    (DITHER on). Nothing checked it, so nobody knew."""
+    p = _load(load_main, CONTRACT="approach", GESTURE_ENABLED=True,
+              BRIGHTNESS=0.50, SHELF_FLOOR=0.08,
+              DAY_NIGHT_ENABLED=False, TILT_ENABLED=False)
+    probs = p.palette_problems()
+    assert any("ACK shelf" in x and "floor" in x for x in probs), probs
+
+
+def test_the_raised_shelf_clears_the_floor(load_main):
+    p = _load(load_main, CONTRACT="approach", GESTURE_ENABLED=True,
+              BRIGHTNESS=0.50, SHELF_FLOOR=0.20,
+              DAY_NIGHT_ENABLED=False, TILT_ENABLED=False)
+    assert not any("ACK shelf" in x for x in p.palette_problems())
+
+
+def test_no_ack_role_when_gestures_are_off(load_main):
+    p = _load(load_main, CONTRACT="approach", GESTURE_ENABLED=False)
+    assert not any("ACK" in r[0] for r in p.roles())

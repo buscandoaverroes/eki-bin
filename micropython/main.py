@@ -44,6 +44,7 @@ from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
 from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
     CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
+    GESTURE_BOOT_IGNORE_MS,
     GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
     MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS, SLEEP_UNWIND_COLOR,
     MOTION_SCENE_FADE_MS, SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS,
@@ -413,6 +414,7 @@ def _run_interactive_loop(schedule_data, led):
         print(f"  Lines: {', '.join(l.get('name', '?') for l in lines)}  (tap to cycle)")
 
     last_refresh = None
+    loop_started = time.ticks_ms()
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
     morning_armed = False  # self-arming: set when we SEE everything out of
@@ -516,7 +518,13 @@ def _run_interactive_loop(schedule_data, led):
         if phase_change == "asleep":
             print("  [SLEEP] awake window expired")
 
-        if imu_addr is not None and tap_state.accepts_input():
+        # Plugging a unit in IS handling, and handling is what the
+        # recognizer's 98.4% is measured against — so a false trigger in
+        # the first seconds is expected, not surprising. It used to wake
+        # the display and play a wake wave nobody asked for.
+        _booting = time.ticks_diff(tick_now, loop_started) < GESTURE_BOOT_IGNORE_MS
+
+        if imu_addr is not None and tap_state.accepts_input() and not _booting:
             raw, last_error_print = _safe_read_accel(
                 i2c, imu_addr, tick_now, last_error_print
             )

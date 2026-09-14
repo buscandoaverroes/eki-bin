@@ -193,6 +193,12 @@ ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 # WAKE_INTERACTION_ENABLED, so existing config.py files keep working —
 # design principle #9. The old name is kept only for compatibility; it
 # describes a design that has been superseded.
+# Taps are ignored for this long after the loop starts. Plugging a unit in
+# or setting it down IS handling, and the recognizer's 98.4% is measured
+# against POOLED handling noise — so a boot-time false trigger is expected
+# rather than surprising. Without this, connecting USB reliably woke the
+# display and played a wake wave nobody asked for.
+GESTURE_BOOT_IGNORE_MS = getattr(config, "GESTURE_BOOT_IGNORE_MS", 3000)
 WAKE_INTERACTION_ENABLED = getattr(
     config, "GESTURE_ENABLED", getattr(config, "WAKE_INTERACTION_ENABLED", False)
 )
@@ -380,7 +386,23 @@ ACK_PEAK_CEIL = getattr(config, "ACK_PEAK_CEIL", 6.0)  # hardest-tap ACK peak.
 #   ⚠ Bounded by SATURATION, not taste: once BRIGHTNESS * mult * channel
 #   hits 255 every harder tap renders identically. 10.0 did exactly that
 #   past ~65% strength. tests/test_gesture_sandbox.py guards this.
-SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.08)  # dim, deliberately not dark
+# ⚠ RAISED 0.08 → 0.20 on 2026-09-14. 0.08 had NEVER rendered: it is an
+# ANIMATED mult, so the output is BRIGHTNESS x shelf**GAMMA, and at
+# BRIGHTNESS 0.50 that is raw 0.49 — below a single output code. With
+# DITHER off it truncated to nothing; with DITHER on it lit roughly half
+# the frames, per-LED staggered, which reads as the whole strip sparkling
+# for the 1.2s capture window. Diagnosed as "thundering after the burst".
+#
+#   255 x 0.50 x 0.20**2.2 = raw 3.7   (clears the low-PWM floor of 3)
+#   255 x 0.50 x 0.25**2.2 = raw 6.0   (SHELF_CEIL)
+#
+# ⚠ The usable range is now narrow (0.20-0.25 → raw 3-6) and it MOVES with
+# BRIGHTNESS, the same coupling MARKER_BRIGHTNESS has. palette.py now
+# checks it, so a bad combination is reported at boot rather than
+# discovered as a rendering artefact. §12's durable fix — clamping any
+# nonzero channel up to LOW_PWM_FLOOR — remains the real answer and is
+# still unbuilt.
+SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.20)  # dim, deliberately not dark
 SHELF_CEIL = getattr(config, "SHELF_CEIL", 0.25)  # stays under ACK_PEAK_FLOOR
 ACK_HOLD_MS = getattr(config, "ACK_HOLD_MS", 400)  # rise+dip duration. 150ms
 #   was too brief to perceive a strength difference before it settled.

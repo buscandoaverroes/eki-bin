@@ -30,7 +30,9 @@
 from settings import (ANCHOR_BRIGHTNESS, ANCHOR_COLOR, BACKGROUND_BRIGHTNESS,
     BRIGHTNESS, CONTRACT_NAME, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, LINE_COLOR,
     LOW_PWM_FLOOR, MARKER_BRIGHTNESS, MARKER_COLOR, NIGHT_BRIGHTNESS,
-    N_TRAINS, TILT_ENABLED, TILT_MAX_BRIGHT, TILT_MIN_BRIGHT)
+    N_TRAINS, SHELF_FLOOR, STARTUP_COLOR, TILT_ENABLED,
+    TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, WAKE_INTERACTION_ENABLED)
+from primitives import gamma
 
 _CH = ("R", "G", "B")
 
@@ -49,13 +51,25 @@ def roles():
 
     Not the status messages either: those render at mult 1.0 in a fixed
     colour, so they cannot drift the way a product of three config values
-    can."""
+    can.
+
+    ⚠ The ACK SHELF is included and had to be, because it is the one role
+    that is BOTH a product of config values AND rendered on the animated
+    path — so its output is BRIGHTNESS x mult**GAMMA, not BRIGHTNESS x
+    mult. At the old SHELF_FLOOR of 0.08 that put it at raw 0.49, below a
+    single output code, where it either vanished or sparkled depending on
+    DITHER. It went undetected for months because nothing checked it."""
     if CONTRACT_NAME == "approach":
         # Anchor and markers exist ONLY here; every train renders at 1.0.
         out = [("train", LINE_COLOR, 1.0),
                ("anchor", ANCHOR_COLOR, ANCHOR_BRIGHTNESS)]
         if MARKER_BRIGHTNESS > 0:
             out.append(("marker", MARKER_COLOR, MARKER_BRIGHTNESS))
+        if WAKE_INTERACTION_ENABLED:
+            # ⚠ GAMMA'd, unlike every other role here — the ACK renders on
+            # the ANIMATED path. Pre-applying it lets the same floor and
+            # clipping checks below work unchanged.
+            out.append(("ACK shelf", STARTUP_COLOR, gamma(SHELF_FLOOR)))
         return out
     # Arc-based contracts: geometric falloff per layer, no anchor, no
     # markers. Only the DIMMEST layer can hit the floor, so checking that

@@ -2030,3 +2030,82 @@ twice. The station is the one exempt element: first in, last out.
 `leds.capture()` is what makes the fade-IN possible at all. Only the active
 contract knows the target scene, and the only way to learn it was to render
 it — which snaps it on, which is exactly what a fade-in exists to avoid.
+
+
+---
+
+## 21. The ACK shelf had never rendered (2026-09-14)
+
+Reported as *"thundering between the burst and the wrap-around"*, and the
+diagnosis is worth keeping because **every part of the description pointed
+at the wrong thing.**
+
+### What it actually was
+
+| observed | actually |
+|---|---|
+| "the startup sequence" | not the startup sequence — `_draw_startup_circle` is called only from `net.py`, so on `TIME_SOURCE = "ds3231"` there is no loading circle in the boot path at all |
+| "the burst is thundering" | the burst in isolation was fine, and always had been |
+| "then the wrap-around" | `motion.play("outward", ...)` — the wake wave. On a strip wound round a bottle, two blobs leaving the anchor for both ends *literally* wrap around |
+
+The real sequence: **burst → a spurious tap fires → ACK shelf held for the
+~1.2 s capture window → `outward` wake wave.** Nothing after the burst
+belonged to the boot ceremony; it was the gesture layer, triggered by
+plugging the unit in.
+
+### The shelf was below one output code, and always had been
+
+`SHELF_FLOOR = 0.08` is an **animated** mult, so its output is
+`BRIGHTNESS × shelf**GAMMA` — not `BRIGHTNESS × shelf`. The gamma is the
+part that hides it:
+
+```
+255 × 0.50 × 0.08**2.2 = raw 0.49
+```
+
+Below a single code. So:
+
+- **`DITHER` off** → truncates to 0 → *nothing*, for 1.2 s
+- **`DITHER` on** → lights ~half the frames, per-LED staggered → the whole
+  strip sparkling, for 1.2 s
+
+Both were reported, and both are the same number. At the older
+`BRIGHTNESS = 0.15` it was raw 0.15 — **the shelf has never once rendered
+as a shelf.** Whatever was tuned in §10 was being judged on the ACK peak
+and the CONFIRM jolt either side of it.
+
+### Why nothing caught it
+
+`palette.py` checked train, anchor and marker. The shelf is the one role
+that is **both** a product of config values **and** on the animated path,
+and it was not in the list. The checker was built in response to exactly
+this class of bug and still missed an instance of it, for the ordinary
+reason: a checker only checks what it was told about.
+
+Now included, with its gamma pre-applied so the existing floor and
+clipping tests work unchanged. `SHELF_FLOOR` raised to 0.20 → raw 3.7,
+clearing the measured floor.
+
+**And the narrow range that leaves — 0.20 to 0.25, raw 3 to 6 — is itself
+the argument for §12's deferred durable fix**: clamping any nonzero
+channel up to `LOW_PWM_FLOOR` at the point of output. Every one of these
+bugs has been the same shape, and every fix so far has been a different
+constant.
+
+### Plugging a unit in is handling
+
+The spurious tap is not a mystery. `gesture-envelope.md`'s 98.4% is
+measured against **pooled handling noise** — pickup, carry, setdown, bump —
+so a false trigger while connecting USB is the expected rate, not a fault.
+
+`GESTURE_BOOT_IGNORE_MS` (3 s) suppresses the trigger at loop start.
+Nothing a person does in the first seconds after power is a deliberate
+tap, so this costs nothing and removes a wake wave nobody asked for.
+
+### The rule worth carrying
+
+> **A description of a bug is a description of where it was noticed, not
+> of where it is.** Three specific claims here — that it was the startup
+> sequence, that it was the burst, that the third phase was a spin — were
+> all wrong, and each one was a reasonable reading of what the strip did.
+> The console said otherwise and the arithmetic settled it.
