@@ -41,6 +41,11 @@ import time
 
 import leds
 import settings
+
+try:
+    import random as _random
+except ImportError:          # not every MicroPython build ships it
+    _random = None
 from settings import ANCHOR_COLOR, ANCHOR_INDEX, LINE_COLOR, NUM_LEDS
 
 ANCHOR = ANCHOR_INDEX or NUM_LEDS // 2
@@ -210,6 +215,23 @@ FADES = (("linear       (perceptually even)", linear),
 #   far_first   the world fills in from the horizon inward — the same
 #               direction the approach paradigm already means by `inward`
 #   near_first  the most urgent thing resolves first, then context
+#   random      a clean sequence with NO spatial meaning — every train
+#               still gets its own slot, the assignment is just shuffled
+#   scatter     no sequence at all; each train picks its own delay
+#               independently, so two can land almost together
+#
+# ⚠ random and scatter are re-rolled on EVERY play, and independently for
+# the way in and the way out — so the same run never repeats and arriving
+# never predicts leaving. That is the point of them: a fixed random order
+# is just an order you did not choose.
+#
+# The two are not the same experiment. `random` keeps the rhythm and
+# removes the meaning; `scatter` removes the rhythm too. Whether either
+# reads as ORGANIC or as BROKEN is the open question — §19 found that
+# anything seeming alive reads as "something needs your attention", and
+# irregular timing is the most direct way to seem alive. These are smooth
+# curves throughout, so this tests whether that finding was about the
+# flicker specifically or about irregularity in general.
 #
 # Direction is handled automatically and is NOT symmetric: arriving, the
 # station leads and the trains follow; leaving, the trains go first and the
@@ -222,6 +244,8 @@ ARRIVALS = (
     ("far first       (1.0s, horizon inward)", slow_out, slow_out, 1000, "far_first"),
     ("near first      (1.0s, urgent first)", slow_out, slow_out, 1000, "near_first"),
     ("slow bloom      (1.6s, far first, slow_in trains)", slow_out, slow_in, 1600, "far_first"),
+    ("random          (1.0s, shuffled slots)", slow_out, slow_out, 1000, "random"),
+    ("scatter         (1.0s, independent delays)", slow_out, slow_out, 1000, "scatter"),
 )
 
 SCENE_OFFSETS = (3, 7)     # train distances from the anchor, both arms
@@ -241,11 +265,58 @@ def _scene_trains():
     return out
 
 
+def _rand_unit():
+    """0..1. getrandbits is the one primitive every build with the module
+    has — random() needs float support, which some ports omit. Falls back
+    to the clock so the sandbox still runs where there is no module at
+    all; that is not a good random source and does not need to be."""
+    if _random is None:
+        return (time.ticks_us() % 9973) / 9973.0
+    return _random.getrandbits(16) / 65535.0
+
+
+def _shuffled(seq):
+    """Fisher-Yates. Written out rather than random.shuffle(), which is
+    missing from several MicroPython builds."""
+    out = list(seq)
+    for i in range(len(out) - 1, 0, -1):
+        j = int(_rand_unit() * (i + 1))
+        out[i], out[j] = out[min(j, i)], out[i]
+    return out
+
+
 def _delays(spec, rising, trains, total_ms):
-    """When each element starts, in ms. The whole design is in here."""
+    """When each element starts, in ms. The whole design is in here.
+
+    ⚠ Called once PER DIRECTION, which is what makes the random orders
+    re-roll between arriving and leaving rather than mirroring."""
     _lbl, _sc, _tc, stagger, order = spec
     n_ranks = max((r for _i, r in trains), default=0) + 1
     sub = stagger // 2 if order != "together" else 0
+
+    if order == "scatter":
+        # No slots at all — each train picks its own delay in the window
+        # the ordered styles would have spanned, so the total duration is
+        # comparable and only the structure differs.
+        window = stagger + sub * max(0, n_ranks - 1)
+        delays = {idx: int(_rand_unit() * window) for idx, _r in trains}
+        lead = stagger if rising else 0
+        delays = {i: d + (lead if rising else 0) for i, d in delays.items()}
+        station = 0 if rising else max(delays.values()) if delays else 0
+        return station, delays
+
+    if order == "random":
+        # Every train gets its OWN slot — a clean sequence with the
+        # spatial meaning removed, which is the difference from scatter.
+        slots = _shuffled(range(len(trains)))
+        sub_r = stagger // 3     # more slots than the ordered styles, so a
+        #   narrower step keeps the total from running away
+        delays = {}
+        for (idx, _rank), slot in zip(trains, slots):
+            delays[idx] = (stagger + sub_r * slot) if rising else sub_r * slot
+        station = 0 if rising else (max(delays.values()) if delays else 0)
+        return station, delays
+
     station = 0 if rising else stagger + sub * max(0, n_ranks - 1)
     delays = {}
     for idx, rank in trains:
