@@ -651,15 +651,19 @@ def _run_interactive_loop(schedule_data, led):
                       % (BOOT_AWAKE_MINUTES if loop_count <= 1 else AWAKE_MINUTES))
                 # Unwind rather than cut to black. ONE wave: you stopped
                 # looking, which is a smaller fact than the day ending.
-                if SLEEP_UNWIND_ENABLED and MOTION_ENABLED:
-                    # Fade the SCENE that is currently lit — trains
-                    # scattered, station last to let go — and only then
-                    # the unwind wave. leds.last_frame is whatever the
-                    # contract painted on the previous tick, which is
-                    # exactly the thing on screen right now.
-                    if leds.last_frame is not None:
-                        motion.fade_scene(leds.last_frame,
-                                          MOTION_SCENE_FADE_MS, rising=False)
+                # ⚠ THE WHOLE CEREMONY IS GATED ON THERE BEING A SCENE,
+                # not just the fade. With BOOT_AWAKE_MINUTES = 0 the unit
+                # is "awake" for zero milliseconds, so this transition
+                # fires on the very first tick — and a goodbye for a
+                # display that never showed anything is not a goodbye, it
+                # is a boot artefact. clear() nulls last_frame, so the
+                # burst ending cleanly is exactly what makes this False.
+                if (SLEEP_UNWIND_ENABLED and MOTION_ENABLED
+                        and leds.last_frame is not None):
+                    # Fade the scene that IS on the strip — trains
+                    # scattered, station last to let go — then the unwind.
+                    motion.fade_scene(leds.last_frame,
+                                      MOTION_SCENE_FADE_MS, rising=False)
                     motion.play("outward", SLEEP_UNWIND_COLOR,
                                 SLEEP_UNWIND_MS)
             was_awake = tap_state.awake

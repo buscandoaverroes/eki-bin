@@ -206,3 +206,34 @@ def test_static_pixels_are_never_treated_as_uniform(load_main):
     frame = [((1, 2, 3), 0.4)] * 21
     frame[0] = ((1, 2, 3), 0.4, "static")
     assert lm._uniform_entry(frame) is None
+
+
+def test_clear_drops_the_scene(load_main):
+    """A cleared strip has no scene, and saying so is what makes
+    `last_frame is not None` a usable test for "is there anything to fade".
+
+    THE bug: _play_startup_burst ends with clear(), which used to leave
+    last_frame holding the burst's final frame at mult ~0. The sleep
+    unwind then spent 3.2s fading out something already invisible — the
+    whole strip sparkling at sub-code values with DITHER on, and nothing
+    at all with it off."""
+    lm = _leds(load_main, NUM_LEDS=21)
+    lm.np.write = lambda: None
+    frame = [((10, 20, 30), 0.9)] * 21
+    lm._write_frame(frame)
+    assert lm.last_frame is frame
+    lm.clear()
+    assert lm.last_frame is None
+
+
+def test_capture_does_not_survive_a_clear_either(load_main):
+    """capture() sets last_frame without latching; a clear afterwards must
+    still mean "nothing on the strip"."""
+    lm = _leds(load_main, NUM_LEDS=21)
+    lm.np.write = lambda: None
+    want = [None] * 21
+    want[3] = ((1, 2, 3), 1.0)
+    lm.capture(lm._write_frame, want)
+    assert lm.last_frame is want
+    lm.clear()
+    assert lm.last_frame is None

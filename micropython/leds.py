@@ -33,7 +33,22 @@ np = NeoPixel(Pin(LED_PIN, Pin.OUT), NUM_LEDS)
 
 
 def clear():
-    """All LEDs off."""
+    """All LEDs off — and there is no longer a scene.
+
+    ⚠ RESETTING last_frame IS THE POINT, not bookkeeping. Without it, "the
+    last thing rendered" survived a clear, so a fade-out could be handed a
+    frame that is no longer on the strip. That is exactly what happened at
+    boot on 2026-09-14: _play_startup_burst ends with clear(), leaving
+    last_frame holding the burst's final frame at mult ~0, and the sleep
+    unwind then spent 3.2s fading out something already invisible — which
+    with DITHER on is the whole strip sparkling at sub-code values, and
+    with DITHER off is nothing at all.
+
+    A cleared strip has no scene. Saying so is what makes
+    `last_frame is not None` a usable test for "is there anything to fade".
+    """
+    global last_frame
+    last_frame = None
     for i in range(NUM_LEDS):
         np[i] = (0, 0, 0)
     np.write()

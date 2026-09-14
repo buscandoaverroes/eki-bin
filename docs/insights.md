@@ -2102,10 +2102,45 @@ so a false trigger while connecting USB is the expected rate, not a fault.
 Nothing a person does in the first seconds after power is a deliberate
 tap, so this costs nothing and removes a wake wave nobody asked for.
 
+### ⚠ And then the console disproved that too
+
+The shelf arithmetic above is real and the fix stands, but **it was not
+what was happening.** A boot capture showed no `(awake — tap registered)`
+line at all, which rules out a tap. What it showed instead:
+
+```
+  [SLEEP] awake window expired
+  (asleep after 0 min — tap to wake; not a fault)   ← thunder starts here
+```
+
+`BOOT_AWAKE_MINUTES = 0` sets `awake_until = now + 0`, so the unit goes
+awake → asleep on the very first tick and **the sleep ceremony fires at
+boot.** Position 2 was `fade_scene()`; the wrap-around was its `outward`
+unwind. Both mine, both added the same day.
+
+And the reason the fade was invisible-but-sparkling is a second bug in the
+same place: **`clear()` never reset `last_frame`.** `_play_startup_burst`
+ends with `clear()`, so `last_frame` still held the burst's *final* frame —
+every LED at mult ≈ 0, the end of the decay. `fade_scene` then spent 3.2 s
+scaling that toward zero: sub-code values throughout, which is sparkle with
+`DITHER` on and nothing with it off.
+
+Two fixes, and both are about honesty rather than tuning:
+
+- **`clear()` nulls `last_frame`.** A cleared strip has no scene. Saying so
+  is what makes `last_frame is not None` a usable test for "is there
+  anything to fade".
+- **The whole ceremony is gated on there being a scene**, not just the
+  fade. A goodbye for a display that never showed anything is not a
+  goodbye, it is a boot artefact.
+
 ### The rule worth carrying
 
 > **A description of a bug is a description of where it was noticed, not
-> of where it is.** Three specific claims here — that it was the startup
-> sequence, that it was the burst, that the third phase was a spin — were
-> all wrong, and each one was a reasonable reading of what the strip did.
-> The console said otherwise and the arithmetic settled it.
+> of where it is.** Four specific claims went wrong here — that it was the
+> startup sequence, that it was the burst, that the third phase was a
+> spin, and then that it was a spurious tap. Each was a reasonable reading
+> of what the strip did, and the arithmetic for the tap theory was even
+> correct on its own terms. **One line of console output disproved all of
+> them.** The shelf bug it turned up was real and worth fixing; it just
+> was not this.
