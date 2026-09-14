@@ -142,7 +142,22 @@ micro-LED version and the filament version arrive at the same contract from
 opposite directions, which is a reasonable sign the contract is the right
 one.
 
-## 7. Prerequisites, in order
+## 7. Parts and search terms
+
+`shopping-battery-power.md` § "Making the light look like light" — filament
+families and the Vf trap, warm/cool pairs, addressable strings and the
+pixel-size trap, plus the two things that make a clear vessel viable at
+all: **ジュンフロン線** (ultra-thin ETFE wire) and **テグス** (fishing line,
+for invisible suspension).
+
+It opens with the problem this concept exists to solve, which is worth
+restating here because it is principle #6 read from the other side:
+**a bottle with no front also has no back.** There is no angle that is
+"behind", so a strip's PCB, traces and solder pads are always somebody's
+view. Opaque brown glass has been hiding that, which is the only reason it
+has not come up yet.
+
+## 8. Prerequisites, in order
 
 1. **The forward-voltage measurement** (`hardware.md` § Filament array,
    "step zero"). 9 V battery and a 1 kΩ resistor. This single measurement

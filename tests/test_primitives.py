@@ -146,3 +146,63 @@ def test_gamma_contract(load_main):
     vals = [m.gamma(x / 20) for x in range(21)]
     assert all(b >= a for a, b in zip(vals, vals[1:])), "must be monotonic"
     assert all(0.0 <= v <= 1.0 for v in vals)
+
+
+# ── uniform frames share one residual ────────────────────────────
+# Found on hardware 2026-09-14 as "dim thunder" across the whole strip
+# during the startup burst. The per-LED residuals are phase-staggered so
+# idle LEDs don't flicker in lockstep — which is right for a frame where
+# each pixel differs, and exactly wrong for one where they don't.
+
+
+def _leds(load_main, **overrides):
+    import importlib
+    import sys
+    load_main(**overrides)
+    sys.modules.pop("leds", None)
+    return importlib.import_module("leds")
+
+
+def test_a_uniform_frame_paints_every_led_identically(load_main):
+    """THE bug. At a low shared value the staggered residuals made LED 3
+    round up while LED 4 rounded down — a random scatter of on/off pixels
+    across a strip that is supposed to be one even glow. Temporally
+    accurate, spatially noise."""
+    lm = _leds(load_main, NUM_LEDS=21, DITHER=True, BRIGHTNESS=0.5)
+    lm.np.write = lambda: None
+    lm._write_frame([((10, 20, 30), 0.12)] * 21)
+    painted = {tuple(lm.np[i]) for i in range(21)}
+    assert len(painted) == 1, "a uniform frame must not scatter: %s" % painted
+
+
+def test_a_mixed_frame_still_decorrelates(load_main):
+    """The stagger is not being removed — it is the right behaviour when
+    pixels differ, and removing it would bring back lockstep flicker on
+    idle LEDs, which is the problem it was added for."""
+    lm = _leds(load_main, NUM_LEDS=21, DITHER=True, BRIGHTNESS=0.5)
+    lm.np.write = lambda: None
+    frame = [((10, 20, 30), 0.12)] * 21
+    frame[0] = ((10, 20, 30), 0.9)      # one pixel differs → not uniform
+    lm._write_frame(frame)
+    painted = {tuple(lm.np[i]) for i in range(1, 21)}
+    assert len(painted) > 1, "mixed frames should still decorrelate"
+
+
+def test_uniformity_ignores_unlit_pixels(load_main):
+    """A single travelling blob on a dark strip is uniform by this test,
+    and should be — one lit pixel cannot scatter against itself."""
+    lm = _leds(load_main, NUM_LEDS=21, DITHER=True)
+    assert lm._uniform_entry([None] * 21) is None
+    frame = [None] * 21
+    frame[5] = ((1, 2, 3), 0.4)
+    assert lm._uniform_entry(frame) == ((1, 2, 3), 0.4)
+
+
+def test_static_pixels_are_never_treated_as_uniform(load_main):
+    """STATIC skips dithering entirely, so a frame containing one cannot
+    take the shared-residual path — the flag would be meaningless and the
+    mixed case is the safe default."""
+    lm = _leds(load_main, NUM_LEDS=21, DITHER=True)
+    frame = [((1, 2, 3), 0.4)] * 21
+    frame[0] = ((1, 2, 3), 0.4, "static")
+    assert lm._uniform_entry(frame) is None

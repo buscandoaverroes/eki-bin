@@ -250,3 +250,72 @@ couples to the table (and therefore to every mug set down nearby), the side
 wall is where the ring lives. The accelerometer's answer was the base; the
 piezo's may well be the opposite, because the two are listening for
 different things.
+
+
+---
+
+# Addendum — making the light look like light, not like a strip
+
+Added 2026-09-14, alongside `docs/chandelier-concept.md`. Not urgent, and
+the reasoning matters more than the parts.
+
+## The problem principle #6 creates
+
+**A bottle with no front also has no back.** That is the same fact from
+`design-principles.md` #6, read from the other side, and it is why an LED
+strip in a *clear* vessel is structurally hard rather than merely untidy:
+there is no angle that is "behind", so the tape's back — PCB, traces,
+solder pads, the wire — is always somebody's view. Opaque brown glass has
+been hiding this, which is why it has not come up.
+
+Three ways out, in increasing order of how much they solve:
+
+1. **Diffuse it** — wrap the strip so the whole assembly reads as a glowing
+   line rather than as components. Cheapest, works now.
+2. **Make the wiring invisible** — thin enough, or clear enough, that it
+   stops registering.
+3. **Have no strip** — the chandelier. The real answer, and the one that
+   needs the Vf measurement first.
+
+## ① Diffusion and hiding the backing
+
+| Item | Japanese search | Note |
+|---|---|---|
+| Milky silicone tube over the strip | `シリコンチューブ 乳白`, `LEDディフューザー チューブ` | sized by strip width — measure first; 8mm tape wants ~10mm ID |
+| Diffuser sheet / acrylic | `拡散板`, `乳白アクリル板 1mm` | for a flat backing behind the strip |
+| Light-blocking tape | `遮光テープ` | ⚠ **not** `絶縁テープ` — that is electrical tape, which is about insulation, not opacity |
+| White reflective film | `反射シート`, `白色 反射フィルム` | behind the strip, so light that would go backwards comes forward |
+| Heat-shrink, clear or white | `熱収縮チューブ 透明` | the tidiest way to cover a soldered joint |
+
+## ② Wire that disappears
+
+This is the part that matters most for a clear vessel, and Japan sells
+exactly the right things for it.
+
+| Item | Japanese search | Why |
+|---|---|---|
+| **Ultra-thin ETFE wire** | `ジュンフロン線`, `耐熱電子ワイヤー AWG30` | the model-railway and diorama standard: ~0.5mm overall, solders without the insulation shrinking back, and nearly vanishes against glass |
+| **Enamelled copper (UEW)** | `ポリウレタン銅線`, `UEW線 0.2mm` | thinner still and effectively invisible. ⚠ The enamel IS the insulation — it must be tinned off or burned through when soldering, and a nicked strand breaks later rather than now |
+| **Fishing line, for suspension** | `テグス` | holds a form in place while being invisible in glass. The standard trick, and it costs nothing |
+| Clear silicone adhesive | `シリコン接着剤 透明` | anchoring without a visible blob |
+
+## ③ For the chandelier itself
+
+Gated on `hardware.md` § "Filament array" **step zero — measure the forward
+voltage** before buying anything here. The 60–100 V Edison family would
+disqualify the whole plan, and a 9 V battery with a 1 kΩ resistor answers
+it in a minute.
+
+| Item | Japanese search | Note |
+|---|---|---|
+| Filament LEDs | `LEDフィラメント`, `フィラメントLED`, `COBフィラメント` | ⚠ the listing usually gives Vf — if it says 3 V the plan survives, if 60 V+ it does not |
+| Flexible filament | `フレキシブル LEDフィラメント` | bendable, which is the whole point of a twisted 3D form |
+| Warm/cool pairs | `電球色`, `昼白色` | the two ends of the temperature axis §12's glass actually passes. Buy both |
+| Addressable string | `WS2812B ストリング`, `ピクセルストリング` | the micro-LED cousin. ⚠ often 12mm bullet pixels — too big for a bottle neck; check the pitch and the pixel size, not just the count |
+| Decorative fairy lights | `LEDジュエリーライト`, `ワイヤーライト` | the ones sold for glassware. **Usually NOT addressable** — assume not unless it says so |
+
+**Constant-current drivers matter for filaments** in a way they do not for
+WS2812B, which has its driver on-die. A filament is a bare LED string: it
+needs current limiting per channel, and PWM on top of that if the
+cross-fade idea is to work. `定電流ドライバ` / `LED定電流回路`, or a
+resistor per channel as the crude version that proves the concept.
