@@ -23,6 +23,7 @@
 #   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
 #   make motion-sandbox    — the five motion words, on real glass
+#   make crawl-sandbox     — how a train HOPS, how the station FADES
 #   make tilt-sandbox      — tilt-to-adjust; run it IN THE DARK
 #   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
 #                             handling_test.py data files on the device's flash
@@ -179,6 +180,21 @@ hue-test: _check-mpremote
 .PHONY: motion-sandbox
 motion-sandbox: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/motion_sandbox.py
+
+# The two animations the light language never specified, and could not:
+# every other word was derived from what glass does when struck, and there
+# is NO bottle-equivalent for a light moving inside glass. So the fork is
+# real — PHYSICS (the light has mass: slides, eases, settles) vs AGENCY
+# (the light is alive: hops, blinks, vanishes and reappears). Six hop
+# styles and five station fades, labelled, side by side. Reasoning cannot
+# pick between them; the bottle can.
+#
+# ⚠ Also the place to test DITHER. A low-brightness fade steps visibly
+# without it, and the static/animated split means turning it on costs the
+# idle LEDs nothing.
+.PHONY: crawl-sandbox
+crawl-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/crawl_sandbox.py
 
 # Tilt as a continuous input — the bottle-native alternative to sliding a
 # finger up and down it (light-language.md §6). ⚠ RUN IT IN THE DARK: the

@@ -74,6 +74,7 @@ When writing Rust code in this repo, take a teaching role:
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
 | Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| **Crawl sandbox** — how a train moves (6 hop styles) and how the station fades (5). The physics-vs-agency fork the metaphor cannot settle | `micropython/crawl_sandbox.py` (`make crawl-sandbox`) |
 | The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
 | **Horizon ceremonies** — goodnight when trains exist but none is in reach, and the morning wake that lets the arc be seen opening | `micropython/horizon.py` |
 | **The five motion words, as shipped** — `outward` on wake, `around` on a line change, `shake` for "nothing to change to" | `micropython/motion.py` |
