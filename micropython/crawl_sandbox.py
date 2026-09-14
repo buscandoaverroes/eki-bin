@@ -21,8 +21,14 @@
 # reasoning picks between them — which is why this file exists rather than
 # a design doc. Run it, and see which one the bottle wants to be.
 #
-#   make crawl-sandbox              both, labelled, in a loop
-#   Or set ACTIVE at the bottom to hops / fades.
+#   make crawl-sandbox              the full scene arriving and leaving
+#   Or set ACTIVE at the bottom to demo / hops / fades.
+#
+# THREE QUESTIONS, and they are separable on purpose:
+#   fades()     one LED, in and out — the CURVE, isolated
+#   hops()      a train crawling an arm — the HANDOFF, isolated
+#   arrivals()  station AND trains together — the SEQUENCING, which is the
+#               one that actually happens after a tap and at timeout
 #
 # ⚠ Everything renders through leds._write_frame on the ANIMATED path
 # (a 2-tuple, not "static"), which is gamma-corrected AND dithered. That is
@@ -186,6 +192,133 @@ FADES = (("linear       (perceptually even)", linear),
          ("flicker_settle (agency)", flicker_settle))
 
 
+# ── HOW THE WHOLE SCENE ARRIVES AND LEAVES ───────────────────────
+# The fades above test ONE LED. This tests the composite, which is a
+# different question and the one that actually happens: after a tap the
+# station AND every train have to appear, and at timeout they all have to
+# go. Whether they move together or in sequence changes what the object
+# seems to be doing.
+#
+# ⚠ NEITHER HALF IS IMPLEMENTED YET. A wake currently snaps the display on
+# after the `outward` wave, and the sleep unwind fades only the station —
+# the trains just vanish. So this is designing both, not tuning one.
+#
+# Each spec is (label, station_curve, train_curve, stagger_ms, order).
+# `order` decides what the trains do among THEMSELVES:
+#
+#   together    neutral; says nothing
+#   far_first   the world fills in from the horizon inward — the same
+#               direction the approach paradigm already means by `inward`
+#   near_first  the most urgent thing resolves first, then context
+#
+# Direction is handled automatically and is NOT symmetric: arriving, the
+# station leads and the trains follow; leaving, the trains go first and the
+# station is last to let go. That ordering was already chosen on hardware —
+# this is about the timing and the curves inside it.
+
+ARRIVALS = (
+    ("together        (baseline)", linear, linear, 0, "together"),
+    ("station leads   (1.0s, together)", slow_out, slow_out, 1000, "together"),
+    ("far first       (1.0s, horizon inward)", slow_out, slow_out, 1000, "far_first"),
+    ("near first      (1.0s, urgent first)", slow_out, slow_out, 1000, "near_first"),
+    ("slow bloom      (1.6s, far first, slow_in trains)", slow_out, slow_in, 1600, "far_first"),
+)
+
+SCENE_OFFSETS = (3, 7)     # train distances from the anchor, both arms
+SCENE_HOLD_MS = 1500       # lit, between the fade in and the fade out
+
+
+def _scene_trains():
+    """(index, rank) for each train — rank 0 is nearest the anchor.
+
+    Both arms, because a one-armed scene cannot show whether a stagger
+    reads as symmetric or as a sweep across the strip."""
+    out = []
+    for rank, off in enumerate(SCENE_OFFSETS):
+        for idx in (ANCHOR + off, ANCHOR - off):
+            if 0 <= idx < NUM_LEDS:
+                out.append((idx, rank))
+    return out
+
+
+def _delays(spec, rising, trains, total_ms):
+    """When each element starts, in ms. The whole design is in here."""
+    _lbl, _sc, _tc, stagger, order = spec
+    n_ranks = max((r for _i, r in trains), default=0) + 1
+    sub = stagger // 2 if order != "together" else 0
+    station = 0 if rising else stagger + sub * max(0, n_ranks - 1)
+    delays = {}
+    for idx, rank in trains:
+        if order == "far_first":
+            k = (n_ranks - 1 - rank)
+        elif order == "near_first":
+            k = rank
+        else:
+            k = 0
+        # Reverse the RANK order on the way out too: whatever arrived
+        # first should not also leave first, or the scene pivots around
+        # one end instead of dispersing.
+        if not rising:
+            k = (n_ranks - 1 - k) if order != "together" else 0
+        delays[idx] = (stagger + sub * k) if rising else (sub * k)
+    return station, delays
+
+
+def _local_t(elapsed, delay, span):
+    return _clamp((elapsed - delay) / span) if span > 0 else 1.0
+
+
+def arrivals(repeats=None):
+    """The full sequence: fade in, hold, fade out — once per spec.
+
+    Watch the OUT half as carefully as the IN half. A stagger that feels
+    considered on arrival can feel like the display falling over on the
+    way out, because the same order means something different when things
+    are disappearing."""
+    _header("how the whole scene arrives and leaves")
+    print("   station + %d trains. Ctrl+C to stop.\n" % len(_scene_trains()))
+    trains = _scene_trains()
+    n = 0
+    try:
+        while repeats is None or n < repeats:
+            for spec in ARRIVALS:
+                label, st_curve, tr_curve, stagger, _order = spec
+                print("   %s" % label)
+                for rising in (True, False):
+                    st_delay, delays = _delays(spec, rising, trains, FADE_MS)
+                    span = FADE_MS
+                    total = span + max([st_delay] + list(delays.values()))
+                    start = time.ticks_ms()
+                    while True:
+                        el = time.ticks_diff(time.ticks_ms(), start)
+                        if el >= total:
+                            break
+                        frame = [None] * NUM_LEDS
+                        sv = st_curve(_local_t(el, st_delay, span)
+                                      if rising else
+                                      1.0 - _local_t(el, st_delay, span))
+                        if sv > 0.001:
+                            frame[ANCHOR] = (ANCHOR_COLOR, _clamp(sv))
+                        for idx, _rank in trains:
+                            lt = _local_t(el, delays[idx], span)
+                            tv = tr_curve(lt if rising else 1.0 - lt)
+                            if tv > 0.001:
+                                frame[idx] = (LINE_COLOR, _clamp(tv))
+                        leds._write_frame(frame)
+                        time.sleep_ms(16)
+                    if rising:
+                        time.sleep_ms(SCENE_HOLD_MS)
+                leds.clear()
+                time.sleep_ms(REST_MS)
+            print("")
+            n += 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        leds.clear()
+        print("  cleared — bye")
+
+
 # ── Runners ──────────────────────────────────────────────────────
 
 
@@ -280,6 +413,7 @@ def demo(repeats=None):
         while repeats is None or n < repeats:
             fades(repeats=1)
             hops(repeats=1)
+            arrivals(repeats=1)
             n += 1
     except KeyboardInterrupt:
         pass
@@ -287,7 +421,7 @@ def demo(repeats=None):
         leds.clear()
 
 
-ACTIVE = demo   # ← swap for hops / fades, or call either from the REPL
+ACTIVE = arrivals   # ← or demo / hops / fades, or call from the REPL
 
 if __name__ == "__main__":
     ACTIVE()
