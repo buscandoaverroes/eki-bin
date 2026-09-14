@@ -19,32 +19,42 @@ in `docs/insights.md`._
    colour, motion) matters more than exact times. Detail is for when you lean in.
 4. **Answer "when do I leave," not "when does it depart."** The walk to the
    platform is part of the question.
-5. 🔲 **Colour should feel native to the jar, not like a gadget.** _(stub: amber
+5. **A bottle has no sharp edges; the language is curves.** _(Field-decided
+   2026-09-14, `insights.md` §19.)_ Six train-movement styles and five
+   station fades were compared on real glass, and the smooth ones won
+   every time — crossfade over a cut, `slow_out` over a flicker. The ones
+   that read as **alive** (a firefly hop, a guttering fade) turned out to
+   read as *"something needs your attention"*, which is the opposite of
+   ambient. **A thing with intent wants something from you; physics is
+   indifferent, and indifference is what lets an object be ambient.**
+   Corollary worth keeping: GUIs are boxes, straight lines and furniture.
+   This is a break from that, and the break is the point.
+6. 🔲 **Colour should feel native to the jar, not like a gadget.** _(stub: amber
    reads "natural" in brown glass, red reads "artificial" — formalise what this
    means for palette design per enclosure.)_
 
 ## Architecture
 
-6. **Two-stage pipeline.** Abstract signal (what's the urgency?) is decoupled
+7. **Two-stage pipeline.** Abstract signal (what's the urgency?) is decoupled
    from rendering (how do we show it?). Inputs attach to Stage 1, outputs to
    Stage 2.
-7. **Config is intent; firmware is logic.** `config.py` holds per-device,
+8. **Config is intent; firmware is logic.** `config.py` holds per-device,
    per-person settings; the code holds behaviour. Hardware specifics belong
    behind an abstraction, not sprinkled through logic.
-8. **Composable rendering.** Prefer small reusable primitives (colour helpers,
+9. **Composable rendering.** Prefer small reusable primitives (colour helpers,
    animation curves) assembled by contracts over bespoke per-contract code.
-9. **Backward-compatible configuration.** New settings are optional with
+10. **Backward-compatible configuration.** New settings are optional with
    defaults (`getattr` pattern), so an existing device keeps working untouched.
-10. **MicroPython V1 validates; Rust V2 is the goal.** Don't let V1 ergonomics
+11. **MicroPython V1 validates; Rust V2 is the goal.** Don't let V1 ergonomics
     block the logic; don't let V1 shortcuts become V2 debt.
 
 ## Hardware / enclosure  🔲 (stubs — fill together)
 
-11. 🔲 **Preferred jar:** thick, translucent, coloured. _(stub: quantify — wall
+12. 🔲 **Preferred jar:** thick, translucent, coloured. _(stub: quantify — wall
     thickness, opacity, colour range that works.)_
-12. 🔲 **Orientation/mounting:** the arc's logical origin should map to a physical
+13. 🔲 **Orientation/mounting:** the arc's logical origin should map to a physical
     "fills up = relax / drains = go." _(stub: define once the mount is chosen.)_
-13. 🔲 **Brightness baseline is per-enclosure.** _(stub: thick jars need a higher
+14. 🔲 **Brightness baseline is per-enclosure.** _(stub: thick jars need a higher
     floor; clear jars need a ceiling to avoid glare.)_
 
 ## Open questions to refine 🔲

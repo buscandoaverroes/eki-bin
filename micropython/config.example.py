@@ -142,7 +142,16 @@ COLOR_SCHEME = "default"  # "default" | "sunset" | "mono"
 #   classifies the LEVEL shown in console output, nothing more.
 MINUTES_PER_LED = 1  # arc: minutes-to-leave each LED represents
 URGENCY_THRESHOLDS = (2, 5)  # minutes-to-leave band edges → LEVEL_1 / 2 / 3
-GAMMA = 2.2  # perceptual brightness curve (higher = smoother dim-end fades)
+GAMMA = 2.2
+# ⚠ DITHER earns its keep the moment anything FADES. It buys intermediate
+# levels where there are few output codes left — the last second of a fade
+# — and _write_frame's static/animated split means static pixels skip it
+# entirely, so the idle LEDs pay nothing. If a fade steps, check this
+# before blaming the curve. insights.md §19.
+# TRANSITION_STYLE = "chase"   # or "crossfade" — crossfade won on brown
+#                              #   glass, but read the note in settings.py:
+#                              #   it is a choice about the VESSEL, not a
+#                              #   general improvement.  # perceptual brightness curve (higher = smoother dim-end fades)
 BREATHE_PERIOD_MS = 8000  # length of one breath, ms (breathing contracts)
 BREATHE_FLOOR = 0.2  # dim end of the breath, 0..1 (raise if gamma makes it vanish)
 DITHER = True  # temporal dithering — smooths low-end brightness steps (set False to A/B)
@@ -406,6 +415,9 @@ DAY_END_HOUR = 17       # exclusive. Equal start/end = always night;
 # is indistinguishable from a power loss. ONE wave, not three: you stopped
 # looking, which is a smaller fact than the day ending.
 SLEEP_UNWIND_ENABLED = True
+# SLEEP_STATION_FADE_MS = 3200   # the station fades out FIRST, then the
+#                                #   unwind travels outward. ⚠ wants
+#                                #   DITHER = True or the last second steps.
 # SLEEP_UNWIND_MS = 2200
 # SLEEP_UNWIND_COLOR = (150, 70, 20)
 

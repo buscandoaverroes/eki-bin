@@ -1871,3 +1871,74 @@ Separating pick-up from tilt. §17's spurious-tap fix (suppress the tap
 trigger while a tilt session is engaged) addresses taps-during-tilt, not
 handling-that-looks-like-tilt. That one is the ESN thread, and it stays
 parked.
+
+
+---
+
+## 19. Physics won, and it is a design principle (2026-09-14)
+
+`crawl_sandbox.py` put six train-movement styles and five station fades on
+real glass — the two animations the light language never specified, because
+every other word was derived from what glass does when struck and **there
+is no bottle-equivalent for a light moving inside glass.** The fork was
+genuine: PHYSICS (the light has mass — slides, eases, settles) versus
+AGENCY (the light is alive — hops, blinks, vanishes and reappears).
+
+**Physics won, and not narrowly.**
+
+| | winner | runner-up |
+|---|---|---|
+| station fade | **`slow_out`** — "natural, interesting, nice to look at" | `slow_in` |
+| train movement | **`crossfade`** — more fluid, less "sticky" | `ease_slide` |
+
+The interesting part is *why the agency styles lost*. They did not look
+bad. They read as **"something needs your attention"** — a firefly hop and
+a guttering fade both produce a small alarm. Which yields the principle,
+now promoted to `design-principles.md` #5:
+
+> **A thing with intent wants something from you. Physics is indifferent,
+> and indifference is what lets an object be ambient.**
+
+That is the missing half of principle #1 ("ambient, not demanding"). #1 says
+not to *notify*; this says the motion itself can notify even when nothing is
+being announced. An object can demand attention purely by seeming alive.
+
+And the framing that generalises furthest: **a bottle has no sharp edges,
+so the language is curves.** GUIs are boxes, straight lines, furniture.
+This is a break from that, and the break is the point.
+
+### ⚠ Crossfade reverses a standing decision, and the reason it looks fine
+### is the vessel
+
+`CHASE` exists *because* a brightness-blend crossfade was removed: it
+necessarily passes through low-brightness intermediates, and at
+`BRIGHTNESS = 0.15` those fell below the low-PWM floor where channels stop
+matching (§6, §12).
+
+That premise has only **partly** changed. Brightness is 0.5–0.62 now and
+dithering exists, but with `LINE_COLOR (34,139,34)` a half-faded train puts
+R and B near raw 4, and a quarter-faded one puts them **under the floor
+while G stays above it** — so the train shifts hue in transit.
+
+It looked fine anyway, and the reason is the finding: **§12 measured this
+brown glass as collapsing hue onto the red-green axis, so the vessel hides
+the very artefact crossfade creates.** Crossfade is therefore a choice
+about *this bottle*, not a general improvement — a clear one may show what
+the brown one conceals. Shipped as `TRANSITION_STYLE`, defaulting to
+`chase`, with the arithmetic written next to it.
+
+Third time the same shape has appeared: the vessel is not a container for
+the design, it is a *parameter of* it (§12 hue count, §14 brightness, §18
+markers, now this).
+
+### Smoothness at the bottom of a fade is a dithering question
+
+"As slow as a smooth LED fade will allow, without stepping" has an existing
+answer that was switched off: `DITHER`. Temporal dithering exists precisely
+to buy intermediate levels where there are few output codes left, which is
+exactly the last second of a fade — and `_write_frame`'s static/animated
+split means enabling it costs the idle LEDs nothing, since static pixels
+skip dithering entirely.
+
+Worth stating plainly because it was nearly re-solved in the curve instead:
+**if a fade steps, check `DITHER` before blaming the shape.**

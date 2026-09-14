@@ -20,7 +20,7 @@ from settings import (ANCHOR_BRIGHTNESS, ANCHOR_COLOR, ANCHOR_INDEX,
     CONTRACT_NAME, FRAME_MS, LINE_COLOR, LINE_SATURATION,
     MARKER_BRIGHTNESS, MARKER_COLOR, MINUTES_PER_LED, NUM_LEDS, N_TRAINS,
     POSITION_MINUTES_PER_LED, SECONDARY_BREATHE_FLOOR,
-    SECONDARY_BREATHE_PERIOD_MS, TRANSITION_MS)
+    SECONDARY_BREATHE_PERIOD_MS, TRANSITION_MS, TRANSITION_STYLE)
 from signals import (HIDDEN, LEVEL_1, LEVEL_2, LEVEL_3)
 # `import *` skips underscore names; contracts needs these by name.
 
@@ -313,15 +313,26 @@ def _advance_train(frame, train, target, color, phase_ms):
         #   breathing envelopes use — see render_for_interval().
         progress = min(1.0, max(0.0, elapsed / TRANSITION_MS))
 
-    # Divide the sweep into `distance` equal LED-to-LED steps (distance=1 for
-    # the common one-LED-per-tick hop → a single sharp switch at the
-    # halfway point; larger jumps sweep through every LED in between, each
-    # getting an equal time-slice). `min(distance, ...)` clamps the final
-    # step to land exactly on `train.index` at progress=1.0.
-    distance = abs(train.index - train.sweep_from)
-    sign = 1 if train.index > train.sweep_from else -1
-    step = min(distance, int(progress * (distance + 1)))
-    frame[train.sweep_from + sign * step] = (train.color, 1.0, "static")
+    if TRANSITION_STYLE == "crossfade":
+        # Both ends lit at once, one rising as the other falls. Chosen on
+        # glass over the sweep — it reads as more fluid and less "sticky".
+        # ⚠ ANIMATED path (no "static"), unlike every other train render,
+        # because intermediate values are the entire point here and they
+        # need gamma and dithering to survive. See TRANSITION_STYLE for
+        # what this trades away.
+        frame[train.sweep_from] = (train.color, 1.0 - progress)
+        frame[train.index] = (train.color, progress)
+    else:
+        # Divide the sweep into `distance` equal LED-to-LED steps
+        # (distance=1 for the common one-LED-per-tick hop → a single sharp
+        # switch at the halfway point; larger jumps sweep through every LED
+        # in between, each getting an equal time-slice). `min(distance,
+        # ...)` clamps the final step to land exactly on `train.index` at
+        # progress=1.0.
+        distance = abs(train.index - train.sweep_from)
+        sign = 1 if train.index > train.sweep_from else -1
+        step = min(distance, int(progress * (distance + 1)))
+        frame[train.sweep_from + sign * step] = (train.color, 1.0, "static")
 
     if progress >= 1.0:
         train.sweep_from = None  # sweep finished — future frames render settled

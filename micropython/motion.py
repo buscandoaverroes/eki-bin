@@ -162,6 +162,45 @@ WORDS = {"inward": inward, "outward": outward, "around": around,
          "shake": shake, "breathe": breathe}
 
 
+def slow_out(t):
+    """The station's curve, chosen on glass 2026-09-14 (insights §19).
+
+    Lingers near the top and leaves quickly at the end. For a fade-OUT
+    that is a station holding on rather than a dimmer being turned down —
+    which is the whole difference between an object settling and a switch
+    being thrown.
+
+    ⚠ Already perceptually shaped. The animated path applies gamma, so
+    output ∝ mult**2.2 and perception ∝ mult — a LINEAR mult ramp is
+    perceptually even, and this deliberately bends away from even."""
+    return t ** 0.55
+
+
+def fade(color, ms, index=None, rising=False, curve=None, frame_ms=16):
+    """Fade ONE LED — by default the station — in or out. BLOCKING.
+
+    Animated path (a 2-tuple, not "static"), which is gamma-corrected and
+    dithered. **Both matter here**: gamma is what makes the ramp
+    perceptually even, and dithering is what keeps it from stepping at the
+    bottom, where there are few output codes left. If this looks like a
+    staircase on hardware, DITHER is off."""
+    index = ANCHOR if index is None else index
+    curve = slow_out if curve is None else curve
+    start = time.ticks_ms()
+    while True:
+        phase = time.ticks_diff(time.ticks_ms(), start)
+        if phase >= ms:
+            break
+        t = phase / ms
+        v = curve(t if rising else 1.0 - t)
+        frame = [None] * NUM_LEDS
+        if v > 0.001:
+            frame[index] = (color, min(1.0, max(0.0, v)))
+        leds._write_frame(frame)
+        time.sleep_ms(frame_ms)
+    leds.clear()
+
+
 def recoil(color, ms=140, depth=0.35, frame_ms=15):
     """A brief dip and return, whole strip. **NOT a sixth word.**
 

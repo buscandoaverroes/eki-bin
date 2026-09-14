@@ -142,6 +142,25 @@ LOW_PWM_FLOOR = getattr(config, "LOW_PWM_FLOOR", 3)
 MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
 #   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
 TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
+# How a train MOVES between two positions. Judged on real glass
+# (`make crawl-sandbox`, insights §19) and **crossfade won** — it reads as
+# more fluid and less "sticky" than an eased slide, and both beat a cut.
+#
+# ⚠ THIS REVERSES A STANDING DECISION, so read before switching. CHASE
+# exists BECAUSE an earlier brightness-blend crossfade was removed: it
+# necessarily passes through low-brightness intermediates, and at
+# BRIGHTNESS 0.15 those fell below the low-PWM floor where channels stop
+# matching. That premise has partly changed (BRIGHTNESS is 0.5-0.62 now,
+# and DITHER exists) but it has NOT gone away — with LINE_COLOR (34,139,34)
+# a half-faded train puts R and B near raw 4, and a quarter-faded one puts
+# them under the floor while G stays above it. The train shifts hue in
+# transit.
+#
+# Why it looked fine anyway: §12 measured this brown glass as collapsing
+# hue onto the red-green axis, so it HIDES the very artefact crossfade
+# causes. That makes crossfade a choice about THIS VESSEL, not a general
+# improvement — a clear bottle may show what the brown one conceals.
+TRANSITION_STYLE = getattr(config, "TRANSITION_STYLE", "chase")  # or "crossfade"
 
 # Boot ceremony — see docs/contracts/startup-sequence.md. Runs once at power-on,
 # before the main loop starts; never recurs during normal operation.
@@ -519,6 +538,13 @@ SLEEP_UNWIND_ENABLED = getattr(config, "SLEEP_UNWIND_ENABLED", False)
 SLEEP_UNWIND_MS = getattr(config, "SLEEP_UNWIND_MS", 2200)  # slow; nothing
 #   is waiting on it
 SLEEP_UNWIND_COLOR = getattr(config, "SLEEP_UNWIND_COLOR", (150, 70, 20))
+# The station fades FIRST, then the unwind travels out — "the station
+# flickers out, then the lights unwind from in to out". 3200ms, chosen on
+# glass: long enough to read as an object settling rather than a switch
+# being thrown, with `slow_out` as the curve that won (insights §19).
+# ⚠ WANTS DITHER = True. At the bottom of a fade there are few output codes
+# left, and without dithering the last second visibly steps.
+SLEEP_STATION_FADE_MS = getattr(config, "SLEEP_STATION_FADE_MS", 3200)
 
 GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
 
