@@ -17,7 +17,7 @@ measured:
 | gesture thresholds | cross-bottle position accuracy measured **0%** — worse than random (`insights.md` §9). Amplitude features do not survive a change of enclosure. |
 | low-PWM floor | a property of *that* strip. Measured 3 on the 8-LED bench stick; different batch, possibly different number. |
 | usable line count | a property of *that* vessel. Thick opaque brown 2-3, mid 4-5, clear 5+ (`insights.md` §12). |
-| DS3231 drift | a property of *that* crystal. −0.61 ppm on the bench unit, and the campaign needs its own baseline per chip. |
+| DS3231 drift | a property of *that* crystal. −0.52 ppm on bottle-01 (26 days, 2026-09-29), and the campaign needs its own baseline per chip. Its use is a **"reseed by" date** (when accumulated error reaches ~1 min), not a firmware correction — `rtc-drift-theory.md` § Guarantee over correction. |
 | absolute clock offset | inherited from the host clock **at the moment of seeding** (`rtc-drift-theory.md` §1). |
 | schedule staleness | that unit was given a timetable on a date, and Japanese timetables change around March/April. |
 

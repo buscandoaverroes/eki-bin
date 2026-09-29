@@ -806,6 +806,8 @@ def main():
         #   below only ever runs after a successful connect + burst.
 
         try:
+            print("  loading %s…" % SCHEDULE_FILE)   # a slow load must not
+            #   look like a hang — see schedule.load_schedule
             schedule_data = load_schedule(SCHEDULE_FILE)
             # The parked multi-line question in concrete terms: this delta
             # IS the schedule's real cost, object graph included, rather

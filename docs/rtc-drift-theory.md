@@ -224,6 +224,19 @@ worth doing: it means writing the chip, for a gain measured in seconds a year,
 and the sign convention is the kind of thing this project has been wrong about.
 Reseed at the next battery change instead, which resets the error for free.
 
+### Guarantee over correction (2026-09-29)
+
+A stable, linear drift is best used as a **guarantee interval, not a
+correction.** Correcting it in firmware would be open loop — with no radio
+there is no reference to notice a wrong ppm — and the gain is seconds a year
+against a 2-minute-per-LED display. What linearity buys is being able to *say
+something true about each unit*: 60 s of error at −0.045 s/day is ~3.6 years
+out, so a unit can carry a **"reseed by" date**. That belongs in the per-unit
+record (`docs/gift-registry.md`), where a `make units` check can flag a unit
+whose age or measured drift has left its budget. Linearity itself is only
+established once three or more samples spread over weeks fit a line within the
+tool's scatter check; two samples always fit perfectly and prove nothing.
+
 For a one-minute-granularity display, −19 s/year is invisible. The chip would
 take **roughly three years** to accumulate a single minute of error, which is
 comparable to the CR1220's own life.
