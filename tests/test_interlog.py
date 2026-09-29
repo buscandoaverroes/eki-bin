@@ -95,7 +95,7 @@ def test_label_keys_sit_under_the_right_hand_in_rows():
     # tap on the number row, tilt and grab on the home-row/top-row of the right
     # hand — the left is holding the bottle. Nothing may collide with quit.
     assert [k for k in host.LABELS if k.isdigit()] == ["7", "8", "9"]
-    assert set(host.LABELS) == set("789uiopjkl")
+    assert set(host.LABELS) == set("789uiopjklm")
     assert "q" not in host.LABELS
     for row_name, keys in host.LEGEND:
         for k in keys:
@@ -266,3 +266,19 @@ def test_tilt_events_only_on_change(capsys):
     s.tilt(2, "up", ctl)
     lines = [l for l in capsys.readouterr().out.splitlines() if l]
     assert len(lines) == 2
+
+
+def test_loop_rate_is_measured_independently_of_the_logging_decimator(capsys):
+    s = interlog.Stream(FakeI2C(), 0x6A)
+    for t in range(0, 6000, 5):                      # a 200 Hz loop, 6 s
+        s.sample(t, (0, 0, -16384))
+    recs = [host.parse_line(l, 0) for l in capsys.readouterr().out.splitlines()]
+    rate = [r for r in recs if r["k"] == "e" and r["e"] == "rate"]
+    assert len(rate) == 1
+    assert 190 <= rate[0]["hz"] <= 210               # not the ~5 Hz idle log rate
+
+
+def test_ambient_is_a_label_and_is_described():
+    assert host.LABELS["m"] == "ambient"
+    assert host.label_record("m", 1.0, seq=1)["label"] == "ambient"
+    assert "Hz" in host.describe_event({"e": "rate", "hz": 38.6})

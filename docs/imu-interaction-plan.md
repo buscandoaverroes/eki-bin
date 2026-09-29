@@ -178,14 +178,50 @@ hypothesis) forbids tuning against anecdotes.**
     ≈ (−62, +3, +40) LSB — under 1 dps at the assumed 8.75 mdps/LSB — with
     ~10 LSB (~0.1 dps) of noise; peak 10.5 k LSB ≈ 92 dps during handling,
     a plausible hand rotation. **Still unverified:** the LSB→dps scale (a known
-    90° turn), so treat degrees-per-second as approximate until then. Loop
-    samples arrived at ~40 Hz (26 ms median), i.e. the main loop, not the 50 Hz
-    cap, sets the rate. **Capture rows were ~5 ms apart, not the recognizer's
+    90° turn), so treat degrees-per-second as approximate until then. (Correction, same day:
+    an earlier note here said the loop runs at ~40 Hz. That was the *logging*
+    cap — the Decimator holds ACTIVE_HZ to 50 — and says nothing about the
+    loop. The recorder now emits a `rate` event every 5 s; the loop rate is a
+    candidate cause of missed taps and is unmeasured until that is read.) **Capture rows were ~5 ms apart, not the recognizer's
     4 ms**: the extra gyro read shifts its cadence slightly — noted, and part
     of why the recorder is not neutral.
   - ⚠ The recorder is not neutral: it adds a gyro read per capture sample and
     prints continuously. If the recognizer behaves differently under it, that
     is a finding, not noise.
+- **First look at real data (2026-09-29, one session, 17 triggers — a
+  hypothesis, not a finding; §8's bar is n≥30 across sessions):**
+  - *Handling separates on gyro.* Mean rotation rate over the second half of
+    the capture window: true taps 0.8–0.9 °/s; the triggers that fired during
+    a tilt or grab 3.6–84 °/s.
+  - *Ambient separates on nothing we measured yet.* Three `false_tap`s were
+    quiet in the gyro (0.8–0.9 °/s, i.e. indistinguishable from a real tap) —
+    one was a tap on the table. All three had their impulse energy
+    **z-dominant (53–79 %)**, against 7–31 % for most true taps (one true tap
+    was 50 %). Physically plausible with the IMU on the base: a knock on the
+    surface arrives vertically, a touch on the glass arrives sideways. If it
+    holds, taps *at the top of the glass* may be legitimately z-heavy — which
+    is exactly why position variety is on the collection list below.
+  - *The trigger floor is ~50 mg*, and 10 of 17 triggers had `dev` 50–68.
+    Energy alone accepted nearly all of them.
+- **Collection targets — the holes** (per `insights.md` §8: n≥30 per class,
+  ≥2 sessions, before believing anything). Label each as it happens:
+  1. **Ambient (`m`)** — deliberate knocks on the table/shelf at several
+     distances and on more than one surface, plus real life (door, footsteps).
+     Also press `8` if the bottle responded. *Zero rows today.*
+  2. **True taps by position and strength** — top/neck, side, near the base;
+     fingertip vs nail; soft to hard. *Needed to know whether z-share is a
+     safe discriminator or would reject legitimate top taps.*
+  3. **Soft taps that do not trigger (`9` missed)** — the trigger floor is
+     ~50 mg; how many real, soft taps sit below it? Read `rate` first: a slow
+     loop can miss a short impulse outright.
+  4. **The reach (failure B)** — approach, touch, grab, tilt, as one motion,
+     ×30. Press `8` if it tapped and `j` for the grab.
+  5. **Stuck tilt (`p`)** — one instance today. Set the bottle down at
+     different angles on different surfaces.
+  6. **Tap during tilt, tilt after tap** — the interleavings; today there are
+     two.
+  7. **Asleep vs awake** — only four wakes recorded; and quiet hours.
+  8. **A second session on another day.**
 - **Exit:** ≥30 labelled examples of failure B and ≥30 of true taps, across
   at least two sessions (§8's bar), stored under `data/` (gitignored, like
   `rtc-drift.jsonl`), with the unit recorded from the start (see the

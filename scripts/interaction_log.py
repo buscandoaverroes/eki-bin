@@ -13,12 +13,19 @@ under data/. While it runs, single keypresses label what just happened:
       tap    7 true     8 FALSE    9 missed
       tilt   u true     i FALSE    o missed    p stuck
       grab   j grabbed  k false    l missed
+      env    m ambient  — a knock on the TABLE / shelf / room, not the bottle
       ⌫      undo the last label  (Backspace, or 0)
       q      quit  (Ctrl-C also works)
 
     "true"   = it did what I meant.  "FALSE" = it responded and I meant
     nothing (the failure to catch).  "missed" = I meant it and nothing
     happened.  "stuck" = tilt still engaged when it should have let go.
+    `m` ambient is for vibration that did not come from touching the bottle
+    (a tap on the table, a door, footsteps). Press it whether you did it on
+    purpose — a deliberate negative control, the bottle SHOULD ignore it — or
+    it just happened; then ALSO press 8 (false tap) if the bottle responded.
+    Ambient events look exactly like taps to every feature but their source,
+    so they are the class the recogniser has least evidence about.
     Grab labels are ground truth for a HANDLING state the arbiter does not
     have yet (docs/imu-interaction-plan.md §5, Phase 2): today only `j`
     means anything, but `k`/`l` cost nothing to record now.
@@ -70,12 +77,14 @@ LABELS = {
     "7": "true_tap", "8": "false_tap", "9": "missed_tap",
     "u": "true_tilt", "i": "false_tilt", "o": "missed_tilt", "p": "stuck_tilt",
     "j": "grabbed", "k": "false_grab", "l": "missed_grab",
+    "m": "ambient",
 }
 # Rows for the legend, in the order they sit under the right hand.
 LEGEND = (
     ("tap ", ("7", "8", "9")),
     ("tilt", ("u", "i", "o", "p")),
     ("grab", ("j", "k", "l")),
+    ("env ", ("m",)),
 )
 LABEL_MAP_VERSION = 2   # v1 had t/f/m/u/k/g and "unwanted_tilt"
 
@@ -126,6 +135,8 @@ def describe_event(rec):
     if e == "tilt":
         return "tilt          %s%s" % (rec.get("state"),
                                         "  (engaged)" if rec.get("engaged") else "")
+    if e == "rate":
+        return "loop rate     %.0f Hz" % (rec.get("hz") or 0)
     if e == "trigger":
         return "trigger       dev=%s%s" % (int(rec.get("dev") or 0),
                                             "  (quiet hours)" if rec.get("quiet") else "")
@@ -141,7 +152,7 @@ def legend_lines():
         cells = []
         for k in keys:
             label = LABELS[k]
-            word = "grabbed" if label == "grabbed" else label.split("_")[0]
+            word = label if label in ("grabbed", "ambient") else label.split("_")[0]
             cells.append("%s %s" % (k, word))
         out.append("    %s   %s" % (name, "   ".join(cells)))
     out.append("    ⌫      undo last label   (Backspace or 0)")

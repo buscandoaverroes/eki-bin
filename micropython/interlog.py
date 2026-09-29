@@ -52,6 +52,7 @@ HOLD_MS = 2000
 ACTIVE_ACCEL_DELTA = 100    # raw LSB change vs the last LOGGED sample (~6 mg)
 ACTIVE_GYRO_ABS = 500       # raw LSB (~4 dps at the default range)
 _CHUNK_ROWS = 20
+RATE_EVERY_MS = 5000
 
 
 # ── pure: formatting ─────────────────────────────────────────────────────
@@ -174,6 +175,8 @@ class Stream:
         self._dec = Decimator()
         self._cap_g = []
         self._tilt_last = None
+        self._rate_t = None     # loop-rate meter: see sample()
+        self._rate_n = 0
         enable_gyro(i2c, addr)
 
     def start(self, t, knobs):
@@ -186,6 +189,18 @@ class Stream:
             return None
 
     def sample(self, t, a):
+        # Loop-rate meter. The LOGGED rate is capped by the Decimator, so the
+        # gaps between logged samples say nothing about how fast the main
+        # loop actually turns — and a slow loop is a candidate cause of missed
+        # taps (an impulse a few ms wide can fall between two samples).
+        # Emitted every RATE_EVERY_MS as an event so it can be compared with
+        # the recognizer's designed 4 ms tick.
+        self._rate_n += 1
+        if self._rate_t is None:
+            self._rate_t = t
+        elif t - self._rate_t >= RATE_EVERY_MS:
+            self.event(t, "rate", hz=self._rate_n * 1000.0 / (t - self._rate_t))
+            self._rate_t, self._rate_n = t, 0
         g = self._gyro()
         if self._dec.keep(t, a, g):
             print(fmt_sample(t, a, g))
