@@ -171,3 +171,47 @@ has not come up yet.
    here — a warm/cool axis needs less hue headroom than a multi-line
    palette does, so a *more* opaque bottle may become viable rather than
    less.
+
+---
+
+## Addendum (2026-09-29) — the lamp reframe, and a bird's nest
+
+Two things said in conversation that belong here.
+
+**The costume change solves the power and harness walls instead of
+engineering around them.** A bottle is expected to be wireless and to sleep;
+that expectation is what makes the battery build (load switch, `AWAKE_MINUTES`,
+wake windows — `shopping-battery-power.md`) and the Qi flat-bottom constraint
+necessary. A **lamp** is expected to be on a cord and always on. Reframe the
+object and the wall moves: **USB power enters through the top**, into a
+custom **neck/lid unit** that carries the MCU, IMU, RTC and the filament
+drivers as one assembly — built outside the vessel and lowered in, which is
+also the wiring-harness answer (`dev-status.md`). Being "a light that is
+always on" is also more forgiving of the parts of the display that are
+currently wrestling with idle states (the anchor/markers promise, the horizon
+ceremonies): an always-lit lamp does not owe the viewer a sleep/wake story.
+
+**A trade with the IMU wall.** Always-on power is what makes always-on
+inference (`on-board-detection.md`) reachable — models that a battery build
+could never afford. So the two walls trade off: engineering discipline
+(load switches, short wake windows) saves you on battery, ML saves you on wall
+power. Caveats that do not go away: per-unit calibration (§8 of `insights.md`,
+0% cross-bottle), and a **lid-mounted IMU is a different signal** from the
+base-mounted one every recorded dataset was collected on. Fix the
+*arbiter* first (`docs/imu-interaction-plan.md`) — it transfers; thresholds do
+not.
+
+**A bird's nest as an alternative to a designed chandelier.** Instead of
+three to eight filaments deliberately twisted into a form, an irregular tangle
+of filament wire, with the logical→physical mapping deliberately arbitrary.
+This is the strongest possible reading of design principle #6 and of the
+`scatter` ordering already shipped (`insights.md` §20): if the data has no
+order and the object has no front, the mapping *should* look like it. Cost:
+the count/temperature channels (§3) are all that survive, so the display
+vocabulary must be built on those rather than on position — same constraint as
+the chandelier, taken further. Untested; the cheap test is a tangle of
+addressable-LED pigtails before any filaments are bought.
+
+**Input vocabulary may shrink.** Tilting a corded, hanging lamp is odd; tap on
+the vessel probably survives. If tilt goes, the IMU plan shrinks to "make tap
+robust to being nudged" — still the same arbiter and replay harness.

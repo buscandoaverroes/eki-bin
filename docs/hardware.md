@@ -147,7 +147,7 @@ full-white-ish 120-LED frame, across the three sources:
 ## Bring-up log — 21-LED gift-jar strip, brightness (2026-07-23)
 
 New XIAO ESP32-C3 + WS2812B tape cut to **21 LEDs** for the friend gift build
-(v1.4, `ApproachContract` — see `dev-status.md` § V1.4). `make led-test`
+(v1.4, `ApproachContract` — see `docs/archive/dev-status-history.md` § V1.4). `make led-test`
 confirmed all 21 light on `DATA_PIN=2`. `led_test.py`'s `BRIGHTNESS` is a flat
 linear scale with no gamma correction, so these readings are directly
 comparable to what `main.py`'s global `BRIGHTNESS` produces at `mult=1.0`:
@@ -170,7 +170,7 @@ still expect live retuning once mounted in the actual jar (diffusion changes
 perception).
 
 **LED orientation (2026-07-23 follow-up):** originally planned downward-facing
-(max refraction off the counter/base — see `dev-status.md` § V1.4). Tested
+(max refraction off the counter/base — see `docs/archive/dev-status-history.md` § V1.4). Tested
 both ways in the actual **brown glass bottle**; **face-up reads better** —
 the opposite of the original plan. Noted here since it's a plan reversal, not
 just a confirmation.

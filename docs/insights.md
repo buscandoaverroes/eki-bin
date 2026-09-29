@@ -198,7 +198,7 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
   never recurs during normal operation, and a real clock *does* have an
   analogous moment (setting it after a power cut) — it's the "always visible
   countdown timer" framing that would've broken the clock illusion, not a
-  one-time boot cue. See `dev-status.md` § V1.4 for the implementation status.
+  one-time boot cue. See `docs/archive/dev-status-history.md` § V1.4 for the implementation status.
 
 ### Form factor / hardware size
 - Pico 2W was the right call for dev ergonomics. But it **won't fit most bottle

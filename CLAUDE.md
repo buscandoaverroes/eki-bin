@@ -50,7 +50,9 @@ When writing Rust code in this repo, take a teaching role:
 |---|---|
 | Overview, quick start, every `make` target, workflows | `README.md` |
 | Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
-| What's done / next / open decisions | `dev-status.md` |
+| What's true now / next / open decisions (current only) | `dev-status.md` |
+| Build-by-build history through V1.6 (frozen 2026-09-29) | `docs/archive/dev-status-history.md` |
+| **The plan: making tap + tilt coexist** — record → replay → arbiter → gyro; ML gated. *Draft; iterate before building* | `docs/imu-interaction-plan.md` |
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
 | **Form-factor proposal: the chandelier** — filaments suspended in 3D, the culmination of "the object has no front". *A proposal; nothing scheduled* | `docs/chandelier-concept.md` |
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
@@ -92,71 +94,47 @@ When writing Rust code in this repo, take a teaching role:
 | Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
 | IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
+| **Security posture** — public repo about a private commute; the local leak check (`make leakcheck`), open GitHub-side items | `docs/security.md` |
 
 ---
 
 ## Current focus
 
-V1 firmware is **feature-complete**: the full `time → LeaveSignal →
-DisplayContract → LEDs` pipeline (six contracts including `approach`, gamma +
-temporal dithering, seamless clock, config-driven throughout), guarded by a
-host test suite. The **v1.2 board-portability checkpoint passed**: the XIAO
-ESP32-C3 runs the identical firmware via a `config.py` swap only — proof the
-board abstraction (`LED_PIN`, `HEARTBEAT_PIN`) holds up on real hardware.
+**The production unit runs and has been lived with.** XIAO RP2350 (no radio)
++ DS3231 + LSM6DSV16X IMU + 21-LED strip in a brown glass bottle, USB-powered:
+correct time across power cycles, tap wakes/cycles **line**, tilt adjusts
+brightness, `ApproachContract` with per-line colour, day/night brightness,
+goodnight/morning ceremonies, and the motion vocabulary (`docs/contracts/
+light-language.md`). Firmware is eleven modules, no radio code. `make test`
+runs lint + 418 host tests before every `make upload`; keep it green.
+`make doctor` before trusting a board — **a XIAO RP2350 needs firmware newer
+than 2026-04-06** (`docs/insights.md` §13). Wiring is self-contained in
+`pinouts/v1.6-rp2350-production-unit.md`.
 
-**Merged to `dev`:** the gesture envelope (IMU tap recognition + two-phase
-ACK/CONFIRM LED jolt) and its integration into `main.py`'s real loop — a
-tap now wakes the display and cycles which **line** is shown. Multi-line
-schedules (`lines[]`, optional, backward-compatible) and per-line colour
-rendering shipped with it. Full state: `docs/contracts/gesture-envelope.md`
-§11; provisioning a unit end-to-end: `docs/provisioning-runbook.md`.
+**Colour is measured, not guessed** (`docs/insights.md` §12): low-PWM floor is
+3; the glass sets the line count (thick brown = 2–3 hues); a neutral marker is
+impossible in brown glass. `make low-pwm-test` runs **out** of the bottle,
+`make hue-test` **in** it.
 
-**The production unit runs.** XIAO RP2350 (no radio) + DS3231 + IMU +
-21-LED strip: correct time from the RTC, surviving a power cycle, tap-to-cycle
-working, rendering `ApproachContract`. Wiring is **self-contained** in
-`pinouts/v1.6-rp2350-production-unit.md` — that file is authoritative for this
-build; the `v1.4-*` system files are the record of earlier ones.
+**Three walls from givable** (`dev-status.md`):
+1. **Tap + tilt fight each other.** A composition problem, not a
+   classification one — including the *approach* to a tilt firing a tap, where
+   the disambiguating evidence arrives after the false tap. Plan (draft):
+   `docs/imu-interaction-plan.md`. **No ML yet, no new sensor yet** — record
+   with the gyro on, build a replay harness, then one arbiter with a look-back
+   veto. Ranking of the ML options: `docs/on-board-detection.md`.
+2. **A wiring harness** — leaning to a lid-mounted unit assembled outside the
+   vessel.
+3. **Power** — a battery needs a strip load switch; the chandelier/lamp form
+   (USB from the top) would dissolve it.
 
-**Merged since:** DS3231 integration (`TIME_SOURCE = "ds3231"`), the **V1.6
-single-target split** (`main.py` 3,127 → ~620 lines across eleven modules; the
-radio-less board carries no radio code — `docs/v1.6-refactor.md`), provisioning
-docs, and the colour measurements below.
-
-**Colour is measured, not guessed** (`docs/insights.md` §12):
-
-- **Low-PWM floor is 3** on the bench strip. Below it WS2812B channels stop
-  matching and equal values give an *unpredictable* hue. `MARKER_BRIGHTNESS`
-  default is now `0.25` (= raw 3); the old `0.15` produced raw 1, which is
-  exactly why ticks read red and why `= 0` had been set to hide them.
-- **The glass sets the line count.** Amber glass is a blue-cut filter, so it
-  collapses the hue wheel onto the red-green axis: thick opaque brown supports
-  **2-3** hues, mid brown 4-5, clear brown 5+. **Brightness does not help** —
-  scaling preserves channel ratios and cannot restore one the glass removes.
-- A **neutral marker is impossible in brown glass at any value.** In there the
-  criterion is "does the tick recede behind the train", answered by brightness
-  and position, not hue.
-
-**Two bench tools, and they need different rigs:** `make low-pwm-test` (strip
-property — run it **out** of the bottle) and `make hue-test` (glass property —
-run it **in**, and try several vessels).
-
-**⚠ Two things need discussing before more features, both forced by the
-second unit, both written up in `dev-status.md` § "Two outstanding
-discussions" and at the top of `docs/roadmap.md`'s priority list:** a
-**wiring harness / casing** (mounting the IMU took 20 minutes of chopstick
-work through the bottle mouth, and the battery build sends a pack, a load
-switch and a gated rail through the same hole), and a **provisioning
-manifest** (multiple DS3231s now exist with nothing to tell them apart —
-and `data/rtc-drift.jsonl` has no unit field, so one `make rtc-drift`
-against the wrong chip silently pollutes bottle-01's fit).
-
-**Open:** the vessel decision — thick brown is the best-looking and the most
-limiting. `docs/roadmap.md` v1.1 (Qi + soldering) is the next hardware step.
-When touching board-specific pins, update `pinouts/<board>.md` alongside
-`config.py`. `make test` runs lint + 309 host tests before every `make upload`;
-keep it green. `make doctor` before trusting a board — and **a XIAO RP2350
-needs firmware newer than 2026-04-06**, or its filesystem is sized past the
-physical flash (`docs/insights.md` §13).
+**The form-factor fork is open and unscheduled:** strip-in-bottle now, but the
+intended end state is the **chandelier** (`docs/chandelier-concept.md`), also
+open to a bird's-nest tangle. Don't tune per-mount constants as if permanent
+— fix the *state machine* (transfers) before *thresholds* (don't; 0%
+cross-bottle). NFC / sticker-book input is real but **2–3 versions out** and not
+required for first givability. A provisioning manifest (a record per unit) is
+needed by the second unit: `docs/gift-registry.md`.
 
 ---
 

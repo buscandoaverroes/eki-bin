@@ -38,7 +38,7 @@ the actual bottle is the next validation step before merge. See
 
 **Next:** v1.1 — move everything inside the bottle, Qi-powered (see
 [docs/roadmap.md](docs/roadmap.md)). **V2** rewrites the firmware in Rust (Embassy)
-with a DS3231 RTC and NFC station cards. Running log: [dev-status.md](dev-status.md).
+with a DS3231 RTC and NFC station cards. Current state: [dev-status.md](dev-status.md); history: [docs/archive/dev-status-history.md](docs/archive/dev-status-history.md).
 
 ---
 
@@ -48,7 +48,7 @@ with a DS3231 RTC and NFC station cards. Running log: [dev-status.md](dev-status
 eki-bin/
 ├── README.md                     ← you are here
 ├── CLAUDE.md                     ← guidance for Claude Code (Rust teaching directive)
-├── dev-status.md                 ← running log: done / next / open decisions
+├── dev-status.md                 ← what's true now / next / open decisions (current only)
 ├── Makefile                      ← setup, flash, schedule, led-test, imu-test, upload
 ├── requirements.txt              ← host Python tools (mpremote, pyyaml)
 │
@@ -62,6 +62,10 @@ eki-bin/
 │   ├── nfc-provisioning.md       ← NFC provisioning workstream (bench record + current path)
 │   ├── rust-migration.md         ← V1 → V2 (MicroPython → Embassy) map
 │   ├── reflections/              ← periodic "how's it going" write-ups
+│   ├── archive/                  ← frozen history (dev-status-history.md)
+│   ├── imu-interaction-plan.md   ← DRAFT plan: tap + tilt coexistence
+│   ├── on-board-detection.md     ← ESN / MLC / piezo / gyro — ranking (analysis)
+│   ├── chandelier-concept.md     ← proposal: suspended-filament, lamp-form successor
 │   │
 │   │   ── proposals / research (not decided, not scheduled) ──
 │   ├── glass-stone-concept.md    ← eki-ishi: alternate "glass stone on a stand" form factor
@@ -84,13 +88,14 @@ eki-bin/
 │   └── xiao_rp2350.md             ← ✅ verified — LED + IMU + DS3231; the V2 target board
 │
 ├── schedules/
-│   ├── mystation.example.yaml    ← committed sample (copy → mystation.yaml)
+│   ├── mystation.example.yaml    ← committed SYNTHETIC sample — `make example-schedule` regenerates it; copy → mystation.yaml
 │   ├── mystation.yaml            ← gitignored; your real timetable
 │   └── mystation.json            ← generated; gitignored
 │
 ├── scripts/
 │   ├── convert_schedule.py       ← YAML → minutes-since-midnight arrays
 │   ├── select_port.sh            ← USB device picker for `make screen`
+│   ├── pr.sh                     ← `make pr`: push branch + gh pr create against dev
 │   ├── flash_firmware.sh         ← board-select MicroPython flashing (all 3 boards)
 │   ├── make_test_schedule.py     ← synthetic multi-line timetable generator
 │   ├── analyze_taps.py           ← gesture capture → tap/position feature analysis
@@ -134,6 +139,8 @@ cp micropython/config.example.py micropython/config.py         # fill in WiFi cr
 make test               # host-side logic tests (also runs automatically on upload)
 make upload             # push main.py + config.py + schedule.json to the Pico
 make screen             # open the REPL to watch it run
+make leakcheck          # scan what's about to be published (also runs in `make pr` + the pre-push hook)
+make pr                 # push this branch + open its PR against dev (body: .pr-body.md, else the commit list)
 ```
 
 ### Hardware wiring

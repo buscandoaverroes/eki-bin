@@ -197,6 +197,22 @@ FIRMWARE_MODULES="settings diag primitives signals leds contracts schedule clock
 # line and does not need the file. Include it with:  make upload WIFI=1
 [ "${WIFI:-0}" = "1" ] && FIRMWARE_MODULES="$FIRMWARE_MODULES net"
 
+# config.py goes onto the board's flash as PLAINTEXT. On a radio-less unit
+# (no WIFI=1) a real WiFi password in it is dead weight that travels with the
+# object — and this object is meant to be GIVEN AWAY. Warn, never print the
+# value, never block: a dev bench may want it. (Only the shape is checked
+# here — the value is never read into a variable or echoed.)
+if [ "${WIFI:-0}" != "1" ] && grep -Eq \
+    '^[[:space:]]*WIFI_PASS[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']+["'"'"']' \
+    "$SRC_DIR/config.py" \
+  && ! grep -Eq '^[[:space:]]*WIFI_PASS[[:space:]]*=[[:space:]]*["'"'"']your_network_password' \
+    "$SRC_DIR/config.py"; then
+    echo "⚠ $SRC_DIR/config.py appears to hold a real WIFI_PASS, and this is not" >&2
+    echo "  a WiFi unit (WIFI=1 not set). It will be stored on the board in" >&2
+    echo "  plaintext and go wherever the board goes. For a unit that will be" >&2
+    echo "  gifted, blank WIFI_SSID / WIFI_PASS first. Continuing…" >&2
+fi
+
 cp_verified "$SRC_DIR/config.py"        config.py
 cp_verified "schedules/$STATION.json"   schedule.json
 for _mod in $FIRMWARE_MODULES; do

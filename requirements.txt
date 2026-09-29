@@ -5,11 +5,16 @@
 # mpremote: MicroPython file management and REPL over USB serial (all boards)
 # esptool:  ESP32-family firmware flashing (e.g. XIAO ESP32-C3; not needed for
 #           the Pico, which uses picotool instead — see `make flash-esp32-c3`)
+#
+# EXACT pins, on purpose: `make setup` runs pip as you, and mpremote/esptool
+# talk to hardware over serial. An open `>=` range means a compromised or
+# broken new release installs itself on the next setup. Bump deliberately:
+#   .venv/bin/pip install -U <pkg> && make test  →  edit the pin.
 
 mpremote==1.28.0
-pyyaml>=6.0
-pytest>=7  # host-side logic tests (make test); device fakes live in tests/conftest.py
-esptool>=5.3
+esptool==5.3.1
+PyYAML==6.0.3
+pytest==9.1.1
 # Lint: catches used-but-never-imported names, the bug class the
 # V1.6 split surfaced. See ruff.toml for why the selection is narrow.
-ruff
+ruff==0.16.4
