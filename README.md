@@ -38,7 +38,7 @@ the actual bottle is the next validation step before merge. See
 
 **Next:** v1.1 — move everything inside the bottle, Qi-powered (see
 [docs/roadmap.md](docs/roadmap.md)). **V2** rewrites the firmware in Rust (Embassy)
-with a DS3231 RTC and NFC station cards. Running log: [dev-status.md](dev-status.md).
+with a DS3231 RTC and NFC station cards. Current state: [dev-status.md](dev-status.md); history: [docs/archive/dev-status-history.md](docs/archive/dev-status-history.md).
 
 ---
 
@@ -48,7 +48,7 @@ with a DS3231 RTC and NFC station cards. Running log: [dev-status.md](dev-status
 eki-bin/
 ├── README.md                     ← you are here
 ├── CLAUDE.md                     ← guidance for Claude Code (Rust teaching directive)
-├── dev-status.md                 ← running log: done / next / open decisions
+├── dev-status.md                 ← what's true now / next / open decisions (current only)
 ├── Makefile                      ← setup, flash, schedule, led-test, imu-test, upload
 ├── requirements.txt              ← host Python tools (mpremote, pyyaml)
 │
@@ -62,6 +62,10 @@ eki-bin/
 │   ├── nfc-provisioning.md       ← NFC provisioning workstream (bench record + current path)
 │   ├── rust-migration.md         ← V1 → V2 (MicroPython → Embassy) map
 │   ├── reflections/              ← periodic "how's it going" write-ups
+│   ├── archive/                  ← frozen history (dev-status-history.md)
+│   ├── imu-interaction-plan.md   ← DRAFT plan: tap + tilt coexistence
+│   ├── on-board-detection.md     ← ESN / MLC / piezo / gyro — ranking (analysis)
+│   ├── chandelier-concept.md     ← proposal: suspended-filament, lamp-form successor
 │   │
 │   │   ── proposals / research (not decided, not scheduled) ──
 │   ├── glass-stone-concept.md    ← eki-ishi: alternate "glass stone on a stand" form factor

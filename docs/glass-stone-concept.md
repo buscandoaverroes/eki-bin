@@ -85,7 +85,7 @@ small. Two implications:
   full) rather than a continuous multiplier. This also sidesteps, by
   construction, the entire recurring bug class this project has hit four
   separate times — gamma/dither flicker at low brightness
-  (`docs/insights.md` §6, `dev-status.md` § V1.4 passes 1–2, § CHASE
+  (`docs/insights.md` §6, `docs/archive/dev-status-history.md` § V1.4 passes 1–2, § CHASE
   transition, § LED status messages' "never blend between states" rule).
   Those bugs only bite when rendering smooth continuous ramps at low values.
   A three-level enum cannot express one.
