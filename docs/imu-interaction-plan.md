@@ -146,8 +146,12 @@ hypothesis) forbids tuning against anecdotes.**
   the real firmware runs from the Mac with recording on and **streams** every
   record as a tagged console line to `data/interaction-<unit>-<time>.jsonl` —
   nothing is written to the board's flash (`insights.md` §13). One keypress
-  labels a moment: `t` true tap, `f` false tap, `m` missed, `u` unwanted tilt,
-  `k` stuck tilt, `g` grabbed. `--unit` is required and `--mount base|lid` is
+  labels a moment, **right hand only** (the left holds the bottle), one row per
+  theme: `7 8 9` tap true/false/missed; `u i o p` tilt true/false/missed/stuck;
+  `j k l` grabbed/false/missed (grab labels are ground truth for the arbiter's
+  future HANDLING state — only `j` means anything today). Console lines are
+  marked `▶` for something the bottle *did* (label it) and `·` for information.
+  Files carry `label_map: 2`. `--unit` is required and `--mount base|lid` is
   recorded, because both are facts nobody can recover later.
   - **The capture window is recorded too**, gyro included. `_handle_tap`
     blocks ~1.2 s sampling accel at 240 Hz, and that window is exactly where a
@@ -162,6 +166,17 @@ hypothesis) forbids tuning against anecdotes.**
     known 90° turn integrates to ≈ 90° (the ODR/register encoding is assumed
     to mirror the accelerometer's; the range/sensitivity is the datasheet
     default, unverified here).
+  - **Bench check, from a 5-minute dry run on bottle-01 (2026-09-29; the
+    recording itself was discarded as sandbox data):** accel is sound
+    (|a| = 1.000 g at rest, sd 0.002). The gyro is alive and sane: rest offset
+    ≈ (−62, +3, +40) LSB — under 1 dps at the assumed 8.75 mdps/LSB — with
+    ~10 LSB (~0.1 dps) of noise; peak 10.5 k LSB ≈ 92 dps during handling,
+    a plausible hand rotation. **Still unverified:** the LSB→dps scale (a known
+    90° turn), so treat degrees-per-second as approximate until then. Loop
+    samples arrived at ~40 Hz (26 ms median), i.e. the main loop, not the 50 Hz
+    cap, sets the rate. **Capture rows were ~5 ms apart, not the recognizer's
+    4 ms**: the extra gyro read shifts its cadence slightly — noted, and part
+    of why the recorder is not neutral.
   - ⚠ The recorder is not neutral: it adds a gyro read per capture sample and
     prints continuously. If the recognizer behaves differently under it, that
     is a finding, not noise.

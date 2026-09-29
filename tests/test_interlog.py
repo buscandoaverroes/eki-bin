@@ -91,9 +91,46 @@ def test_every_documented_key_makes_a_label_and_others_do_not():
     assert host.label_record("z", 5.0) is None
 
 
+def test_label_keys_sit_under_the_right_hand_in_rows():
+    # tap on the number row, tilt and grab on the home-row/top-row of the right
+    # hand — the left is holding the bottle. Nothing may collide with quit.
+    assert [k for k in host.LABELS if k.isdigit()] == ["7", "8", "9"]
+    assert set(host.LABELS) == set("789uiopjkl")
+    assert "q" not in host.LABELS
+    for row_name, keys in host.LEGEND:
+        for k in keys:
+            assert k in host.LABELS
+    assert {k for _, ks in host.LEGEND for k in ks} == set(host.LABELS)
+
+
+def test_each_theme_has_true_false_missed():
+    names = set(host.LABELS.values())
+    for theme in ("tap", "tilt"):
+        for word in ("true", "false", "missed"):
+            assert f"{word}_{theme}" in names
+    assert "stuck_tilt" in names
+
+
+def test_actions_are_marked_and_information_is_not():
+    assert host.event_symbol({"e": "tap_response", "response": "cycle"}) == "▶"
+    assert host.event_symbol({"e": "tilt", "state": "up"}) == "▶"
+    assert host.event_symbol({"e": "tilt", "state": "released"}) == "▶"
+    assert host.event_symbol({"e": "asleep"}) == "▶"
+    assert host.event_symbol({"e": "tilt", "state": "idle"}) == "·"
+    assert host.event_symbol({"e": "trigger", "dev": 500}) == "·"
+    assert host.event_symbol({"e": "capture_end", "energy": 9}) == "·"
+
+
+def test_events_describe_themselves_without_crashing_on_missing_fields():
+    for rec in ({"e": "tap_response"}, {"e": "tilt"}, {"e": "trigger"},
+                {"e": "capture_end"}, {"e": "whatever"}, {}):
+        assert isinstance(host.describe_event(rec), str)
+
+
 def test_header_names_the_unit_and_mount():
     h = host.header_record("bottle-01", "base", None, "abc123", 0)
     assert h["unit"] == "bottle-01" and h["mount"] == "base" and h["note"] == ""
+    assert h["label_map"] == host.LABEL_MAP_VERSION == 2   # v1 keys were different
 
 
 def test_output_filename_carries_the_unit():

@@ -8,13 +8,21 @@ recording on (micropython/interlog_run.py, mounted from this Mac — nothing is
 written to the board's flash) and tees everything it prints to a JSONL file
 under data/. While it runs, single keypresses label what just happened:
 
-    t  true tap      — I tapped and it responded correctly
-    f  FALSE tap     — it responded and I did not tap (the failure to catch)
-    m  missed tap    — I tapped and nothing happened
-    u  unwanted tilt — it started adjusting brightness and I was not tilting
-    k  stuck tilt    — it is still "engaged" and should not be
-    g  grabbed       — I grabbed/moved the bottle (context, not a failure)
-    q  quit  (Ctrl-C also works)
+    Right hand only (the left is holding the bottle), one row per theme:
+
+      tap    7 true     8 FALSE    9 missed
+      tilt   u true     i FALSE    o missed    p stuck
+      grab   j grabbed  k false    l missed
+      q      quit  (Ctrl-C also works)
+
+    "true"   = it did what I meant.  "FALSE" = it responded and I meant
+    nothing (the failure to catch).  "missed" = I meant it and nothing
+    happened.  "stuck" = tilt still engaged when it should have let go.
+    Grab labels are ground truth for a HANDLING state the arbiter does not
+    have yet (docs/imu-interaction-plan.md §5, Phase 2): today only `j`
+    means anything, but `k`/`l` cost nothing to record now.
+
+    Line markers:  ▶ something the bottle DID (label it)   · information
 
 Label the moment it happens, with one key. A label pressed AFTER the fact is
 still useful — it is stamped with the host clock and attached to whatever the
@@ -46,13 +54,17 @@ from rtc_drift import MPREMOTE, REPO  # noqa: E402  (worktree-stable paths)
 
 TAG = "~L "
 LABELS = {
-    "t": "true_tap",
-    "f": "false_tap",
-    "m": "missed_tap",
-    "u": "unwanted_tilt",
-    "k": "stuck_tilt",
-    "g": "grabbed",
+    "7": "true_tap", "8": "false_tap", "9": "missed_tap",
+    "u": "true_tilt", "i": "false_tilt", "o": "missed_tilt", "p": "stuck_tilt",
+    "j": "grabbed", "k": "false_grab", "l": "missed_grab",
 }
+# Rows for the legend, in the order they sit under the right hand.
+LEGEND = (
+    ("tap ", ("7", "8", "9")),
+    ("tilt", ("u", "i", "o", "p")),
+    ("grab", ("j", "k", "l")),
+)
+LABEL_MAP_VERSION = 2   # v1 had t/f/m/u/k/g and "unwanted_tilt"
 
 
 # ── pure: record shaping (host-tested in tests/test_interaction_log.py) ────
@@ -79,6 +91,50 @@ def parse_line(line, now):
     return {"k": "x", "h": now, "text": line}
 
 
+# Things the bottle DID — the ones worth a label. Everything else an event
+# stream carries (a trigger, a capture summary, tilt sitting idle) is context.
+_ACTION_TILT_STATES = ("up", "down", "released")
+
+
+def event_symbol(rec):
+    """▶ for a pipeline ACTION (label it), · for information."""
+    e = rec.get("e")
+    if e in ("tap_response", "asleep"):
+        return "▶"
+    if e == "tilt" and rec.get("state") in _ACTION_TILT_STATES:
+        return "▶"
+    return "·"
+
+
+def describe_event(rec):
+    e = rec.get("e", "?")
+    if e == "tap_response":
+        return "tap_response  %s" % rec.get("response")
+    if e == "tilt":
+        return "tilt          %s%s" % (rec.get("state"),
+                                        "  (engaged)" if rec.get("engaged") else "")
+    if e == "trigger":
+        return "trigger       dev=%s%s" % (int(rec.get("dev") or 0),
+                                            "  (quiet hours)" if rec.get("quiet") else "")
+    if e == "capture_end":
+        return "capture_end   energy=%s  %s" % (int(rec.get("energy") or 0),
+                                                 "tap" if rec.get("valid") else "handling")
+    return e
+
+
+def legend_lines():
+    out = []
+    for name, keys in LEGEND:
+        cells = []
+        for k in keys:
+            label = LABELS[k]
+            word = "grabbed" if label == "grabbed" else label.split("_")[0]
+            cells.append("%s %s" % (k, word))
+        out.append("    %s   %s" % (name, "   ".join(cells)))
+    out.append("    q      quit")
+    return out
+
+
 def label_record(key, now):
     name = LABELS.get(key)
     if name is None:
@@ -88,7 +144,7 @@ def label_record(key, now):
 
 def header_record(unit, mount, note, git, now):
     return {"k": "h", "h": now, "unit": unit, "mount": mount, "note": note or "",
-            "git": git, "started": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+            "label_map": LABEL_MAP_VERSION, "git": git, "started": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
             "format": 1}
 
 
@@ -160,8 +216,10 @@ def main():
     buf = b""
 
     print(f"● recording → {path}")
-    print(f"  unit={args.unit} mount={args.mount}   keys: "
-          + "  ".join(f"{k}={v}" for k, v in LABELS.items()) + "   q=quit\n")
+    print(f"  unit={args.unit} mount={args.mount}\n")
+    print("  keys (right hand):")
+    print("\n".join(legend_lines()))
+    print("\n  ▶ = the bottle did something (label it)     · = information\n")
 
     with open(path, "w") as f:
         f.write(json.dumps(header_record(args.unit, args.mount, args.note,
@@ -195,7 +253,7 @@ def main():
                             counts[rec["k"]] = counts.get(rec["k"], 0) + 1
                             if rec["k"] == "e":
                                 last_event = rec.get("e", "?")
-                                print(f"  · {last_event}")
+                                print(f"  {event_symbol(rec)} {describe_event(rec)}")
                             elif rec["k"] == "x":
                                 # Show every console line. The device prints
                                 # only a handful before the loop starts, and a
