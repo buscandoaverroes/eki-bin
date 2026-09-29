@@ -151,7 +151,13 @@ hypothesis) forbids tuning against anecdotes.**
   `j k l` grabbed/false/missed (grab labels are ground truth for the arbiter's
   future HANDLING state — only `j` means anything today). Console lines are
   marked `▶` for something the bottle *did* (label it) and `·` for information.
-  Files carry `label_map: 2`. `--unit` is required and `--mount base|lid` is
+  Files carry `label_map: 2`. **Backspace (or `0`) undoes the last label**:
+  append-only — an undo record voids an earlier label by id, never an edit, so
+  a mislabel and its correction are both visible; loaders use
+  `effective_labels()`. Each label records `near`, the events of the previous
+  few seconds, because a label pressed right after a tap is written *before*
+  that tap's `tap_response` (the device blocks ~1.2 s capturing): association
+  must be by time window, never "the last event". `--unit` is required and `--mount base|lid` is
   recorded, because both are facts nobody can recover later.
   - **The capture window is recorded too**, gyro included. `_handle_tap`
     blocks ~1.2 s sampling accel at 240 Hz, and that window is exactly where a

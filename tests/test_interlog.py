@@ -127,6 +127,36 @@ def test_events_describe_themselves_without_crashing_on_missing_fields():
         assert isinstance(host.describe_event(rec), str)
 
 
+def test_labels_carry_an_id_and_the_events_near_them():
+    rec = host.label_record("l", 10.0, seq=3, near=["trigger", "tap_response cycle"])
+    assert rec == {"k": "l", "h": 10.0, "label": "missed_grab", "id": 3,
+                   "near": ["trigger", "tap_response cycle"]}
+    assert "near" not in host.label_record("l", 10.0, seq=3)
+
+
+def test_undo_voids_a_label_without_editing_the_file():
+    recs = [host.label_record("j", 1.0, seq=1),          # the mislabel: grabbed
+            host.undo_record(1, 2.0),
+            host.label_record("l", 3.0, seq=2)]          # the intended: missed_grab
+    assert [r["label"] for r in host.effective_labels(recs)] == ["missed_grab"]
+    assert len(recs) == 3                                # append-only: nothing removed
+
+
+def test_only_the_undone_label_is_voided():
+    recs = [host.label_record("7", 1.0, seq=1), host.label_record("8", 2.0, seq=2),
+            host.undo_record(2, 3.0)]
+    assert [r["id"] for r in host.effective_labels(recs)] == [1]
+
+
+def test_undo_keys_do_not_collide_with_labels():
+    assert not set(host.UNDO_KEYS) & set(host.LABELS)
+
+
+def test_near_events_are_windowed_and_ordered():
+    recent = [(1.0, "old"), (8.0, "trigger"), (9.0, "tap_response cycle")]
+    assert host.near_events(recent, 10.0) == ["trigger", "tap_response cycle"]
+
+
 def test_header_names_the_unit_and_mount():
     h = host.header_record("bottle-01", "base", None, "abc123", 0)
     assert h["unit"] == "bottle-01" and h["mount"] == "base" and h["note"] == ""

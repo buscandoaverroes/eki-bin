@@ -13,6 +13,7 @@ under data/. While it runs, single keypresses label what just happened:
       tap    7 true     8 FALSE    9 missed
       tilt   u true     i FALSE    o missed    p stuck
       grab   j grabbed  k false    l missed
+      ⌫      undo the last label  (Backspace, or 0)
       q      quit  (Ctrl-C also works)
 
     "true"   = it did what I meant.  "FALSE" = it responded and I meant
@@ -21,6 +22,18 @@ under data/. While it runs, single keypresses label what just happened:
     Grab labels are ground truth for a HANDLING state the arbiter does not
     have yet (docs/imu-interaction-plan.md §5, Phase 2): today only `j`
     means anything, but `k`/`l` cost nothing to record now.
+
+    A wrong key is not a lost cause: Backspace (or 0) UNDOES the last label,
+    then press the right one. The file is append-only — an undo is a record
+    that voids an earlier label by id, never an edit — so a mislabel and its
+    correction are both visible later, and `effective_labels()` is what a
+    loader should use.
+
+    Labels arrive BEFORE the response they describe. A tap blocks the device
+    ~1.2 s while it captures, so a label pressed right after the tap is
+    written before that tap's `tap_response` record exists. That is not a
+    bug; association has to be by time window, never "the last event". Each
+    label therefore records `near`, the events of the previous few seconds.
 
     Line markers:  ▶ something the bottle DID (label it)   · information
 
@@ -131,15 +144,42 @@ def legend_lines():
             word = "grabbed" if label == "grabbed" else label.split("_")[0]
             cells.append("%s %s" % (k, word))
         out.append("    %s   %s" % (name, "   ".join(cells)))
+    out.append("    ⌫      undo last label   (Backspace or 0)")
     out.append("    q      quit")
     return out
 
 
-def label_record(key, now):
+UNDO_KEYS = ("\x7f", "\x08", "0")
+NEAR_WINDOW_S = 4.0
+
+
+def label_record(key, now, seq=None, near=None):
     name = LABELS.get(key)
     if name is None:
         return None
-    return {"k": "l", "h": now, "label": name}
+    rec = {"k": "l", "h": now, "label": name}
+    if seq is not None:
+        rec["id"] = seq
+    if near:
+        rec["near"] = list(near)
+    return rec
+
+
+def undo_record(target_id, now):
+    """Voids an earlier label. Never an edit: the mislabel stays in the file."""
+    return {"k": "l", "h": now, "undo": target_id}
+
+
+def effective_labels(records):
+    """The labels that stand: every label record minus the ones an undo voids."""
+    voided = {r["undo"] for r in records if r.get("k") == "l" and "undo" in r}
+    return [r for r in records
+            if r.get("k") == "l" and "label" in r and r.get("id") not in voided]
+
+
+def near_events(recent, now, window=NEAR_WINDOW_S):
+    """Descriptions of events in the last `window` seconds, oldest first."""
+    return [d for t, d in recent if now - t <= window]
 
 
 def header_record(unit, mount, note, git, now):
@@ -208,6 +248,9 @@ def main():
         ttymod.setcbreak(sys.stdin.fileno())
 
     counts = {"s": 0, "e": 0, "c": 0, "l": 0, "x": 0}
+    label_seq = 0
+    standing = []          # ids of labels not yet undone, newest last
+    recent = []            # (host time, description) of recent events
     last_event = "—"
     last_console = ""
     last_tagged = None
@@ -233,12 +276,28 @@ def main():
                         ch = sys.stdin.read(1)
                         if ch == "q":
                             raise KeyboardInterrupt
-                        rec = label_record(ch, time.time())
+                        t_now = time.time()
+                        if ch in UNDO_KEYS:
+                            if not standing:
+                                print("  (nothing to undo)")
+                                continue
+                            target = standing.pop()
+                            f.write(json.dumps(undo_record(target, t_now)) + "\n")
+                            f.flush()
+                            print(f"  ✖ undid label #{target} — press the right key")
+                            continue
+                        near = near_events(recent, t_now)
+                        label_seq += 1
+                        rec = label_record(ch, t_now, seq=label_seq, near=near)
                         if rec:
+                            standing.append(label_seq)
                             f.write(json.dumps(rec) + "\n")
                             f.flush()
                             counts["l"] += 1
-                            print(f"  ✎ {rec['label']:<14} (after: {last_event})")
+                            ctx = ", ".join(near[-3:]) if near else "nothing recent"
+                            print(f"  ✎ #{label_seq} {rec['label']:<13} (near: {ctx})")
+                        else:
+                            label_seq -= 1
                     else:
                         chunk = os.read(out_fd, 65536)
                         if not chunk:
@@ -254,6 +313,8 @@ def main():
                             if rec["k"] == "e":
                                 last_event = rec.get("e", "?")
                                 print(f"  {event_symbol(rec)} {describe_event(rec)}")
+                                recent.append((time.time(), " ".join(describe_event(rec).split())))
+                                del recent[:-20]
                             elif rec["k"] == "x":
                                 # Show every console line. The device prints
                                 # only a handful before the loop starts, and a
