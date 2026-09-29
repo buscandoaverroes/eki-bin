@@ -128,7 +128,7 @@ next. **Phase 0 comes first because every other phase needs ground truth,
 and the project's own methodology rule (§8: n<30 or single-session is a
 hypothesis) forbids tuning against anecdotes.**
 
-### Phase 0 — Record everything, unfiltered (no behaviour change)
+### Phase 0 — Record everything, unfiltered (no behaviour change) — **built 2026-09-29, not yet run on hardware**
 
 - Extend the freeform logger (`micropython/tilt_freeform.py` already logs
   every sample to JSONL and asks "how did it feel") into a **combined
@@ -141,6 +141,30 @@ hypothesis) forbids tuning against anecdotes.**
 - Sessions to collect: normal living (a day), deliberate grab-and-tilt ×N,
   reach-past-and-knock-shelf ×N, tap-only ×N, tilt-only ×N, table-flat-stuck
   repro. Gyro enable is the *only* firmware change in this phase.
+- **As built** (`micropython/interlog.py`, `interlog_run.py`,
+  `scripts/interaction_log.py`; `make interaction-log UNIT=bottle-01`):
+  the real firmware runs from the Mac with recording on and **streams** every
+  record as a tagged console line to `data/interaction-<unit>-<time>.jsonl` —
+  nothing is written to the board's flash (`insights.md` §13). One keypress
+  labels a moment: `t` true tap, `f` false tap, `m` missed, `u` unwanted tilt,
+  `k` stuck tilt, `g` grabbed. `--unit` is required and `--mount base|lid` is
+  recorded, because both are facts nobody can recover later.
+  - **The capture window is recorded too**, gyro included. `_handle_tap`
+    blocks ~1.2 s sampling accel at 240 Hz, and that window is exactly where a
+    tap's — and a grab's — signature lives; the main loop is blind during it.
+    A small observer hook in the capture loop (`gestures.capture_observer`)
+    rides along inside it.
+  - **Adaptive rate:** 5 Hz idle, 50 Hz on any motion and for 2 s after, so a
+    still bottle does not produce a gigabyte a day and the lead-in to an event
+    is never thinned.
+  - Raw int16 LSB are logged; unit conversion lives on the host.
+  - ⚠ **Bench checks before trusting it:** the gyro reads ≈ 0 at rest and a
+    known 90° turn integrates to ≈ 90° (the ODR/register encoding is assumed
+    to mirror the accelerometer's; the range/sensitivity is the datasheet
+    default, unverified here).
+  - ⚠ The recorder is not neutral: it adds a gyro read per capture sample and
+    prints continuously. If the recognizer behaves differently under it, that
+    is a finding, not noise.
 - **Exit:** ≥30 labelled examples of failure B and ≥30 of true taps, across
   at least two sessions (§8's bar), stored under `data/` (gitignored, like
   `rtc-drift.jsonl`), with the unit recorded from the start (see the

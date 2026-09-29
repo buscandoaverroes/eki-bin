@@ -345,6 +345,16 @@ hooks:
 pr:
 	@BASE="$(BASE)" TITLE="$(TITLE)" BODY="$(if $(BODY),$(BODY),.pr-body.md)" DRAFT="$(DRAFT)" YES="$(YES)" scripts/pr.sh
 
+# Phase 0 of docs/imu-interaction-plan.md: run the real firmware from the Mac
+# with recording on, and label failures with one keypress. Streams to
+# data/interaction-<unit>-<time>.jsonl — nothing is written to the board's
+# flash. UNIT is required: a recording of an unnamed bottle is unusable later.
+#   make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [NOTE="..."]
+.PHONY: interaction-log
+interaction-log: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/interaction_log.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(NOTE),--note "$(NOTE)",)
+
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.
 .PHONY: example-schedule

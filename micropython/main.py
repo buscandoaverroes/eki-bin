@@ -423,6 +423,16 @@ def _run_interactive_loop(schedule_data, led):
     #   the trains have gone out of reach again, which is once a night.
     tilt_ctl = TiltController() if TILT_ENABLED else None
     tilt_ms = time.ticks_ms()
+
+    # Phase 0 recording (docs/imu-interaction-plan.md). Observes only: every
+    # call below is guarded, and with INTERACTION_LOG off none of it exists.
+    ilog = None
+    if settings.INTERACTION_LOG and imu_addr is not None:
+        import gestures
+        import interlog
+        ilog = interlog.Stream(i2c, imu_addr)
+        gestures.capture_observer = ilog
+        ilog.start(time.ticks_ms(), interlog.snapshot(settings))
     signal = LeaveSignal([])
     signal_b = None
 
@@ -517,6 +527,8 @@ def _run_interactive_loop(schedule_data, led):
         phase_change = tap_state.advance(tick_now)
         if phase_change == "asleep":
             print("  [SLEEP] awake window expired")
+            if ilog is not None:
+                ilog.event(tick_now, "asleep")
 
         # Plugging a unit in IS handling, and handling is what the
         # recognizer's 98.4% is measured against — so a false trigger in
@@ -529,6 +541,8 @@ def _run_interactive_loop(schedule_data, led):
                 i2c, imu_addr, tick_now, last_error_print
             )
             if raw is not None:
+                if ilog is not None:
+                    ilog.sample(tick_now, raw)
                 # Tilt and taps share one sample, split by magnitude: taps
                 # want |a| >> 1g, tilt wants |a| ≈ 1g, and tilt.py's gate
                 # enforces its half. Neither needs to know about the other,
@@ -542,6 +556,8 @@ def _run_interactive_loop(schedule_data, led):
                     tilt_state = tilt_ctl.update(
                         raw, tick_now, time.ticks_diff(tick_now, tilt_ms))
                     tilt_ms = tick_now
+                    if ilog is not None:
+                        ilog.tilt(tick_now, tilt_state, tilt_ctl)
                     if tilt_state in ("up", "down"):
                         last_render = None   # repaint at the new brightness
                     if (tilt_ctl.rail_bounce is not None
@@ -560,6 +576,9 @@ def _run_interactive_loop(schedule_data, led):
 
                 if baseline is not None and abs(mag - baseline) >= TAP_TRIGGER_THRESHOLD_MG:
                     dev = abs(mag - baseline)
+                    if ilog is not None:
+                        ilog.event(tick_now, "trigger", dev=dev,
+                                   quiet=quiet_now)
                     # Quiet hours short-circuits BEFORE the ~1.2s capture —
                     # led-status-messages.md says quiet hours is checked
                     # first, and honouring that here also means quiet-hours
@@ -575,6 +594,9 @@ def _run_interactive_loop(schedule_data, led):
                             signal, signal_b, status_message,
                             can_cycle=len(lines) > 1,
                         )
+                        if ilog is not None:
+                            ilog.event(time.ticks_ms(), "tap_response",
+                                       response=response)
                         # No `len(lines) > 1` guard here any more: the
                         # response is now correct BY CONSTRUCTION, because
                         # _handle_tap was told whether the action exists

@@ -55,6 +55,12 @@ _IMU_CTRL1_POWER_DOWN = 0x00
 _IMU_OUTX_L_A = 0x28
 _IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
 
+# Optional recording observer (interlog.Stream) — None unless
+# INTERACTION_LOG is on. The capture window is where a tap's signature lives
+# and the main loop is not sampling during it, so the recorder has to ride
+# along INSIDE it. See interlog.py.
+capture_observer = None
+
 
 # Lazy singletons — _get_imu() declares these `global` and READS them
 # before assigning, so they must exist at module level. They were left
@@ -764,6 +770,10 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
         elapsed = time.ticks_diff(now, start_ms)
         try:
             samples.append((elapsed,) + _imu_read_accel_raw(i2c, addr))
+            if capture_observer is not None:
+                # Inside the try and AFTER the append, so the observer's rows
+                # stay in lockstep with `samples` when a read is dropped.
+                capture_observer.cap_sample(i2c, addr, elapsed)
         except OSError:
             pass  # one dropped sample of ~300 is negligible; see _safe_read_accel
         if elapsed < ACK_HOLD_MS:
@@ -843,6 +853,8 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     samples = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
     valid = classify_valid_input(features)
+    if capture_observer is not None:
+        capture_observer.cap_done(trigger_ms, samples, features, valid)
     samples = None
     gc.collect()  # ~300 tuples, roughly 8-10KB. Reclaimed at a KNOWN point
     #   rather than whenever the allocator notices: transient spikes are what

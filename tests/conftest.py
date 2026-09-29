@@ -123,7 +123,7 @@ def _firmware_module_names():
 _STANDALONE = {"config", "config_friend1", "led_test", "led_sandbox",
                "imu_test", "i2c_scan", "rtc_test", "gesture_sandbox",
                "vibration_sandbox", "handling_test", "orientation_test",
-               "low_pwm_test"}
+               "low_pwm_test", "interlog_run"}
 
 
 def _importable_firmware():

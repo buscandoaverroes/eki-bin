@@ -473,6 +473,12 @@ NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
 # behaves on upgrade (design-principle #9), and brightness is the one
 # setting a surprise change is most visible in.
 TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
+
+# Record raw accel + gyro and the pipeline's decisions as a text stream on the
+# USB console (interlog.py). Phase 0 of docs/imu-interaction-plan.md. OFF: it
+# powers the gyro and prints continuously. Normally flipped by
+# interlog_run.py (make interaction-log), not by editing config.py.
+INTERACTION_LOG = getattr(config, "INTERACTION_LOG", False)
 TILT_EXPO = getattr(config, "TILT_EXPO", 0.6)  # 0 = linear, 1 = pure cubic.
 #   0.6 chosen on hardware: linear acquired targets faster but landed an
 #   order of magnitude less precisely, and precision is what this control
