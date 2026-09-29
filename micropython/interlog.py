@@ -169,15 +169,23 @@ class Stream:
     firmware knows a recording exists, and with INTERACTION_LOG off none of it
     is constructed."""
 
-    def __init__(self, i2c, addr):
+    def __init__(self, i2c, addr, level="full"):
+        # level "rate": the loop-rate meter and events ONLY — no gyro, no
+        # per-sample prints, no capture rows. It exists to answer "how much
+        # of the slowness is the recorder itself?": compare its rate with
+        # "full" (make interaction-log LEVEL=rate).
+        self._level = level
         self._i2c = i2c
         self._addr = addr
+        self._last_t = None
+        self._max_gap = 0
         self._dec = Decimator()
         self._cap_g = []
         self._tilt_last = None
         self._rate_t = None     # loop-rate meter: see sample()
         self._rate_n = 0
-        enable_gyro(i2c, addr)
+        if level != "rate":
+            enable_gyro(i2c, addr)
 
     def start(self, t, knobs):
         print(fmt_meta(t, knobs))
@@ -195,12 +203,23 @@ class Stream:
         # taps (an impulse a few ms wide can fall between two samples).
         # Emitted every RATE_EVERY_MS as an event so it can be compared with
         # the recognizer's designed 4 ms tick.
+        #
+        # gap_ms is the longest gap between two calls in the window: a low
+        # hz with a huge gap is the loop being BLOCKED (a motion word, a tap
+        # capture), while a low hz with a small gap is the loop being SLOW.
+        # They have different cures.
         self._rate_n += 1
+        if self._last_t is not None and t - self._last_t > self._max_gap:
+            self._max_gap = t - self._last_t
+        self._last_t = t
         if self._rate_t is None:
             self._rate_t = t
         elif t - self._rate_t >= RATE_EVERY_MS:
-            self.event(t, "rate", hz=self._rate_n * 1000.0 / (t - self._rate_t))
-            self._rate_t, self._rate_n = t, 0
+            self.event(t, "rate", hz=self._rate_n * 1000.0 / (t - self._rate_t),
+                       gap_ms=self._max_gap, level=self._level)
+            self._rate_t, self._rate_n, self._max_gap = t, 0, 0
+        if self._level == "rate":
+            return
         g = self._gyro()
         if self._dec.keep(t, a, g):
             print(fmt_sample(t, a, g))

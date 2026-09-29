@@ -136,7 +136,8 @@ def describe_event(rec):
         return "tilt          %s%s" % (rec.get("state"),
                                         "  (engaged)" if rec.get("engaged") else "")
     if e == "rate":
-        return "loop rate     %.0f Hz" % (rec.get("hz") or 0)
+        return "loop rate     %.0f Hz   (longest gap %d ms)" % (rec.get("hz") or 0,
+                                                              rec.get("gap_ms") or 0)
     if e == "trigger":
         return "trigger       dev=%s%s" % (int(rec.get("dev") or 0),
                                             "  (quiet hours)" if rec.get("quiet") else "")
@@ -231,6 +232,9 @@ def main():
     ap.add_argument("--unit", required=True, help="which physical bottle, e.g. bottle-01")
     ap.add_argument("--mount", default="base", choices=("base", "lid", "other"),
                     help="where the IMU is mounted (default base)")
+    ap.add_argument("--level", default="full", choices=("full", "rate"),
+                    help="'rate' = loop-rate meter and events only (no gyro, no samples): "
+                         "compare with 'full' to see how much slowness is the recorder")
     ap.add_argument("--note", default="", help="free text stored in the header")
     ap.add_argument("--out-dir", type=Path, default=REPO / "data")
     args = ap.parse_args()
@@ -242,7 +246,12 @@ def main():
     path = out_path(args.out_dir, args.unit, now)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [str(MPREMOTE), "mount", "micropython", "run", "micropython/interlog_run.py"]
+    cmd = [str(MPREMOTE), "mount", "micropython"]
+    if args.level != "full":
+        # Runs on the device BEFORE the wrapper; `settings` stays imported, so
+        # the wrapper and main.py see the level without editing config.py.
+        cmd += ["exec", f"import settings; settings.INTERACTION_LOG_LEVEL = {args.level!r}"]
+    cmd += ["run", "micropython/interlog_run.py"]
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     # stdin=DEVNULL: this process reads the keypress labels from the terminal,
     # and a child inheriting the same tty can swallow them (or reset its modes).
@@ -276,7 +285,8 @@ def main():
     print("\n  ▶ = the bottle did something (label it)     · = information\n")
 
     with open(path, "w") as f:
-        f.write(json.dumps(header_record(args.unit, args.mount, args.note,
+        f.write(json.dumps(header_record(args.unit, args.mount,
+                                         (args.note + f" [level={args.level}]").strip(),
                                          _git_sha(), now)) + "\n")
         try:
             while proc.poll() is None:

@@ -479,6 +479,7 @@ TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
 # powers the gyro and prints continuously. Normally flipped by
 # interlog_run.py (make interaction-log), not by editing config.py.
 INTERACTION_LOG = getattr(config, "INTERACTION_LOG", False)
+INTERACTION_LOG_LEVEL = getattr(config, "INTERACTION_LOG_LEVEL", "full")  # or "rate"
 TILT_EXPO = getattr(config, "TILT_EXPO", 0.6)  # 0 = linear, 1 = pure cubic.
 #   0.6 chosen on hardware: linear acquired targets faster but landed an
 #   order of magnitude less precisely, and precision is what this control

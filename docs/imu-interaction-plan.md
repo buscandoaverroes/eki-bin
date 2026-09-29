@@ -203,6 +203,32 @@ hypothesis) forbids tuning against anecdotes.**
     is exactly why position variety is on the collection list below.
   - *The trigger floor is ~50 mg*, and 10 of 17 triggers had `dev` 50–68.
     Energy alone accepted nearly all of them.
+- **Second session (2026-09-29, 22 triggers, 4 min) — same pattern, and the
+  rate finding.**
+  - *Gyro separates handling again.* Every `true_tap` had late-window
+    rotation of 0.8–1.1 °/s. Every trigger near a tilt start, a set-down or a
+    grab had 2.7–67 °/s, and all of those were responded to. Across the two
+    sessions this is a clean split on the data so far — and it is a feature of
+    the **existing capture window**, so using it adds no latency. (Ambient
+    knocks are the exception: quiet in the gyro, 0.8 °/s, like a true tap.)
+  - *The owner's observation, in the data:* the first lean off the table and
+    the set-down are read as taps and then, correctly, as tilt — the trigger
+    fires on the lift/landing transient before any tilt state exists.
+  - *Loop rate is far below design:* `rate` events read 1–57 Hz, median ~35,
+    against the recognizer's designed 240 Hz (4 ms tick); ~20 Hz was seen on
+    the terminal. Windows near 1–2 Hz are the loop **blocked** by a motion
+    word or a tap capture; the ~55 Hz ceiling is the loop's real speed. So the
+    trigger sees a bottle sampled every ~18–25 ms, and a tap impulse is a few
+    ms wide — its measured `dev` depends on where the samples happened to fall,
+    which is a candidate explanation for the spread in `dev` and for missed
+    soft taps. **Unattributed:** how much of that is the recorder (a print per
+    logged sample over the mount, a gyro read). `make interaction-log
+    LEVEL=rate` runs the meter alone; compare its `hz` with `LEVEL=full`.
+  - *"Grab" is not a gesture and never was.* Nothing in the firmware
+    recognises a grab. `grab_and_tap` was a **data-collection class** in the
+    old sandboxes (tap while gripping) and was parked when its pilot reversed
+    at n=30 (`insights.md` §9). "Grab" in this plan is the arbiter's future
+    HANDLING state; the `j`/`k`/`l` labels are ground truth for it.
 - **Collection targets — the holes** (per `insights.md` §8: n≥30 per class,
   ≥2 sessions, before believing anything). Label each as it happens:
   1. **Ambient (`m`)** — deliberate knocks on the table/shelf at several

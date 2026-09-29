@@ -430,10 +430,12 @@ def _run_interactive_loop(schedule_data, led):
     if settings.INTERACTION_LOG and imu_addr is not None:
         import gestures
         import interlog
-        ilog = interlog.Stream(i2c, imu_addr)
-        gestures.capture_observer = ilog
+        ilog = interlog.Stream(i2c, imu_addr, settings.INTERACTION_LOG_LEVEL)
+        if settings.INTERACTION_LOG_LEVEL != "rate":
+            gestures.capture_observer = ilog
         ilog.start(time.ticks_ms(), interlog.snapshot(settings))
-        print("  [interlog] recording on — gyro enabled, streaming to the host")
+        print("  [interlog] recording on (%s) — streaming to the host"
+              % settings.INTERACTION_LOG_LEVEL)
     signal = LeaveSignal([])
     signal_b = None
 

@@ -282,3 +282,23 @@ def test_ambient_is_a_label_and_is_described():
     assert host.LABELS["m"] == "ambient"
     assert host.label_record("m", 1.0, seq=1)["label"] == "ambient"
     assert "Hz" in host.describe_event({"e": "rate", "hz": 38.6})
+
+
+def test_rate_level_meters_the_loop_without_touching_the_gyro(capsys):
+    i2c = FakeI2C()
+    s = interlog.Stream(i2c, 0x6A, level="rate")
+    assert i2c.written == []                          # gyro NOT powered
+    for t in range(0, 6000, 10):
+        s.sample(t, (0, 0, -16384))
+    recs = [host.parse_line(l, 0) for l in capsys.readouterr().out.splitlines()]
+    assert [r["k"] for r in recs] == ["e"]            # no sample lines at all
+    assert recs[0]["level"] == "rate" and 90 <= recs[0]["hz"] <= 110
+
+
+def test_rate_reports_a_blocked_loop_as_a_long_gap(capsys):
+    s = interlog.Stream(FakeI2C(), 0x6A, level="rate")
+    ts = list(range(0, 2000, 10)) + list(range(3500, 6100, 10))   # 1.5 s stall
+    for t in ts:
+        s.sample(t, (0, 0, -16384))
+    rate = [host.parse_line(l, 0) for l in capsys.readouterr().out.splitlines()][0]
+    assert rate["gap_ms"] >= 1500
