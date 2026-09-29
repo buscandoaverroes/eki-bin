@@ -108,10 +108,15 @@ def _git_sha():
 
 def _restore_device():
     """Drop the stale mount, as scripts/dev.sh does: a soft reset re-runs the
-    board's flashed main.py, so interrupt whatever auto-started afterwards."""
-    for args in (["soft-reset"], ["exec", "pass"]):
-        subprocess.run([str(MPREMOTE)] + args, capture_output=True)
-        time.sleep(0.5)
+    board's flashed main.py, so interrupt whatever auto-started afterwards.
+    Takes a few seconds; an impatient second Ctrl-C is fine (the recording is
+    already closed), it just skips the tidy-up."""
+    try:
+        for args in (["soft-reset"], ["exec", "pass"]):
+            subprocess.run([str(MPREMOTE)] + args, capture_output=True, timeout=15)
+            time.sleep(0.5)
+    except (KeyboardInterrupt, subprocess.TimeoutExpired):
+        print("  (device tidy-up skipped — press the board's reset if it looks stuck)")
 
 
 def main():
@@ -132,8 +137,10 @@ def main():
 
     cmd = [str(MPREMOTE), "mount", "micropython", "run", "micropython/interlog_run.py"]
     env = dict(os.environ, PYTHONUNBUFFERED="1")
-    proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
+    # stdin=DEVNULL: this process reads the keypress labels from the terminal,
+    # and a child inheriting the same tty can swallow them (or reset its modes).
+    proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out_fd = proc.stdout.fileno()
 
     tty = sys.stdin.isatty()
@@ -146,6 +153,9 @@ def main():
 
     counts = {"s": 0, "e": 0, "c": 0, "l": 0, "x": 0}
     last_event = "—"
+    last_console = ""
+    last_tagged = None
+    warned_silent = False
     last_status = time.time()
     buf = b""
 
@@ -186,13 +196,28 @@ def main():
                             if rec["k"] == "e":
                                 last_event = rec.get("e", "?")
                                 print(f"  · {last_event}")
-                            elif rec["k"] == "x" and rec["text"].lstrip().startswith(("✗", "⚠", "Traceback")):
-                                print("  " + rec["text"].strip())
+                            elif rec["k"] == "x":
+                                # Show every console line. The device prints
+                                # only a handful before the loop starts, and a
+                                # silent terminal reads exactly like a hung one.
+                                last_console = rec["text"].strip()
+                                print("  | " + rec["text"].rstrip())
+                            if rec["k"] in ("s", "e", "c"):
+                                last_tagged = time.time()
                 f.flush()
                 if time.time() - last_status >= 30:
                     last_status = time.time()
                     print(f"  … {counts['s']} samples, {counts['e']} events, "
                           f"{counts['c']} capture chunks, {counts['l']} labels")
+                if (last_tagged is None and not warned_silent
+                        and time.time() - now > 60):
+                    warned_silent = True
+                    print("  ⚠ 60 s and no samples. Last console line was:\n"
+                          f"      {last_console or '(nothing)'}\n"
+                          "    Expect '[interlog] recording on' once the loop starts. Nothing after\n"
+                          "    the startup lines means the loop is not running yet: slow imports over\n"
+                          "    the mount, or GESTURE_ENABLED is off in config.py. Try `make dev` and\n"
+                          "    compare when its `Station:` line appears.")
         except KeyboardInterrupt:
             pass
         finally:
@@ -205,6 +230,7 @@ def main():
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+            print("  stopping… (tidying the device, a few seconds)")
             _restore_device()
 
     print(f"\n■ {path}\n  {counts['s']} samples, {counts['e']} events, "

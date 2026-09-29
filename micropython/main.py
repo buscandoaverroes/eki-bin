@@ -433,6 +433,7 @@ def _run_interactive_loop(schedule_data, led):
         ilog = interlog.Stream(i2c, imu_addr)
         gestures.capture_observer = ilog
         ilog.start(time.ticks_ms(), interlog.snapshot(settings))
+        print("  [interlog] recording on — gyro enabled, streaming to the host")
     signal = LeaveSignal([])
     signal_b = None
 
