@@ -193,6 +193,37 @@ evidence that they do.
 check, so a third is needed before this is trustworthy — but it is the first
 figure here not dominated by the reference.
 
+### Update — 2026-09-29, 26 days on
+
+```
+  baseline (epoch 1 seed)  2026-09-03 19:54  offset −0.8517 s  (ntp)
+  now                      2026-09-29 21:47  offset −2.0140 s  (ntp, host +0.197 s off true)
+  ────────────────────────────────────────────────────────────────────
+  Δoffset  −1.162 s   over  625.9 h  (2.253 × 10⁶ s)
+
+  drift = −1.162 / 2.253e6 × 10⁶  =  −0.52 ppm
+        = −0.045 s/day  ≈  −16 s/year          DS3231 spec: ±2 ppm
+```
+
+**Consistent with the first figure.** −0.52 ppm now against −0.61 ± 0.35 ppm
+from 22.7 h in August: same sign, same size, and the short measurement's error
+bar contains the long one. That agreement across an epoch boundary (a re-seed
+in between) is better evidence that this is the crystal, and not the reference,
+than either number alone. Over 26 days the spec allows about ±4.5 s of drift;
+the chip used about a quarter of that.
+
+**Still only two samples** in the epoch, so no scatter check yet (the tool says
+so). The reference is now much smaller than the signal: a ~20 ms NTP error over
+626 h is ±0.01 ppm, against 0.52.
+
+**Practical:** a minute of accumulated error is about **3.6 years** away
+(60 s ÷ 0.045 s/day = 1,333 days), on top of the ~2 s the display already
+carries from the seed. The display resolves to 2 minutes per LED, so nothing is
+visible. The tool suggests an aging-register trim of about −5 LSB. It is not
+worth doing: it means writing the chip, for a gain measured in seconds a year,
+and the sign convention is the kind of thing this project has been wrong about.
+Reseed at the next battery change instead, which resets the error for free.
+
 For a one-minute-granularity display, −19 s/year is invisible. The chip would
 take **roughly three years** to accumulate a single minute of error, which is
 comparable to the CR1220's own life.
