@@ -3,6 +3,8 @@
 **Status: analysis. Nothing built.** Written 2026-09-14, after four days of
 adding gates to `tilt.py` and still hitting a stuck state on hardware.
 
+**The sequenced plan that follows from this analysis is `docs/imu-interaction-plan.md`.**
+
 Supersedes the one-paragraph ESN entry in `dev-status.md`, which said the
 right things about *what* ESN is for and nothing about whether it is the
 next thing to do.
@@ -134,3 +136,21 @@ a gadget, and the whole design exists to avoid being one.
 **The interesting middle survives**: listening to the *glass* rather than
 to a person. That is option ②, and it needs no model, no wake word, and
 nothing that could ever be mistaken for listening to a room.
+
+---
+
+## 5. Addendum (2026-09-29) — what changed, and what did not
+
+- **The order stands** (fix the state machine, then gyro, then MLC/piezo, then
+  ESN), and is now a concrete plan with a data-collection phase in front of it:
+  `imu-interaction-plan.md`.
+- **A new failure class sharpens §2.** It is not only "the state machine
+  deadlocks": *the approach to a tilt fires a tap* — the disambiguating
+  evidence arrives after the false tap. The answer is a settlement window and
+  look-back veto, not a better classifier; a model with the same causal
+  information would fail the same way.
+- **New argument for continuous inference:** if the unit is a USB-powered lamp
+  (`chandelier-concept.md` addendum), the "always-on ML is incompatible with
+  the battery" objection in §4 and in the ESN entry loses its force. It does
+  not make ML *necessary* — per-unit calibration and the lid-mount signal
+  change still apply — only affordable.
