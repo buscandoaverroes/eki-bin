@@ -345,6 +345,12 @@ hooks:
 pr:
 	@BASE="$(BASE)" TITLE="$(TITLE)" BODY="$(if $(BODY),$(BODY),.pr-body.md)" DRAFT="$(DRAFT)" YES="$(YES)" scripts/pr.sh
 
+# Regenerate the committed, SYNTHETIC schedule template (public repo — the
+# example must not be anyone's real timetable). Deterministic.
+.PHONY: example-schedule
+example-schedule:
+	@$(PYTHON) scripts/make_test_schedule.py --example
+
 .PHONY: screen
 screen: _check-mpremote
 	@MPREMOTE=$(MPREMOTE) bash scripts/select_port.sh

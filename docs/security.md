@@ -24,7 +24,7 @@ a unit that carries the giver's WiFi password to someone else's shelf.
 | Dev scripts | no `curl|sh`, no `sudo`, no `eval` of remote content | ✅ |
 | Credentials on a gifted device | `config.py` is copied to flash in plaintext | ⚠ mitigated: `make upload` warns; blank `WIFI_*` before gifting |
 | Device physical access | USB REPL is unauthenticated | accepted — it is a jar; no secrets should live on it |
-| Example schedule | `schedules/mystation.example.yaml` comments name a real corridor and use real-looking first/last-train times, which narrows a location | ⚠ owner's judgement: consider synthetic times/names |
+| Example schedule | had comments naming a real corridor and real-looking first/last trains, narrowing a location | ✅ fixed: generated, synthetic round-number times (`make example-schedule`; a test keeps the committed file identical to the generator's output). The old text remains in git history — a corridor, not an address; rewriting public history judged not worth it |
 
 ## The local leak check
 

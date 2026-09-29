@@ -88,7 +88,7 @@ eki-bin/
 │   └── xiao_rp2350.md             ← ✅ verified — LED + IMU + DS3231; the V2 target board
 │
 ├── schedules/
-│   ├── mystation.example.yaml    ← committed sample (copy → mystation.yaml)
+│   ├── mystation.example.yaml    ← committed SYNTHETIC sample — `make example-schedule` regenerates it; copy → mystation.yaml
 │   ├── mystation.yaml            ← gitignored; your real timetable
 │   └── mystation.json            ← generated; gitignored
 │
