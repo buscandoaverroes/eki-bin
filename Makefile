@@ -327,6 +327,12 @@ schedule:
 		$(PYTHON) scripts/convert_schedule.py $$f; \
 	done
 
+# Push this branch and open its PR against dev (see scripts/pr.sh header).
+#   make pr [BODY=file] [TITLE="..."] [BASE=main] [DRAFT=1] [YES=1]
+.PHONY: pr
+pr:
+	@BASE="$(BASE)" TITLE="$(TITLE)" BODY="$(if $(BODY),$(BODY),.pr-body.md)" DRAFT="$(DRAFT)" YES="$(YES)" scripts/pr.sh
+
 .PHONY: screen
 screen: _check-mpremote
 	@MPREMOTE=$(MPREMOTE) bash scripts/select_port.sh

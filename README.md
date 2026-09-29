@@ -95,6 +95,7 @@ eki-bin/
 ├── scripts/
 │   ├── convert_schedule.py       ← YAML → minutes-since-midnight arrays
 │   ├── select_port.sh            ← USB device picker for `make screen`
+│   ├── pr.sh                     ← `make pr`: push branch + gh pr create against dev
 │   ├── flash_firmware.sh         ← board-select MicroPython flashing (all 3 boards)
 │   ├── make_test_schedule.py     ← synthetic multi-line timetable generator
 │   ├── analyze_taps.py           ← gesture capture → tap/position feature analysis
@@ -138,6 +139,7 @@ cp micropython/config.example.py micropython/config.py         # fill in WiFi cr
 make test               # host-side logic tests (also runs automatically on upload)
 make upload             # push main.py + config.py + schedule.json to the Pico
 make screen             # open the REPL to watch it run
+make pr                 # push this branch + open its PR against dev (body: .pr-body.md, else the commit list)
 ```
 
 ### Hardware wiring
