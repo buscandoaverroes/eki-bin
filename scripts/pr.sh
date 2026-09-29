@@ -73,9 +73,21 @@ else
   echo " body    $body_note, $(wc -l < "$BODY" | tr -d ' ') lines — first 15:"
   sed -n '1,15p' "$BODY" | sed 's/^/           | /'
 fi
-echo " NOTE    the repo is PUBLIC — check the above for paths, station"
-echo "         names, or anything from config.py."
 echo "──────────────────────────────────────────────"
+
+# The repo is PUBLIC and a PR body is permanent. Scan what would be published
+# (outgoing diff + commit messages + this title/body) BEFORE asking for a yes.
+# LEAKCHECK_SKIP=1 exists for a reviewed false positive; prefer marking the
+# line `leakcheck:ok`.
+if [ -z "${LEAKCHECK_SKIP:-}" ]; then
+  if [ -n "$existing" ]; then
+    scripts/leakcheck.sh --range "origin/$BASE..HEAD" || exit 1
+  else
+    scripts/leakcheck.sh --range "origin/$BASE..HEAD" --title "$TITLE" --body "$BODY" || exit 1
+  fi
+else
+  echo "⚠ LEAKCHECK_SKIP set — scan skipped." >&2
+fi
 
 if [ -z "$YES" ]; then
   if [ ! -t 0 ]; then

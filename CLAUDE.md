@@ -94,6 +94,7 @@ When writing Rust code in this repo, take a teaching role:
 | Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
 | IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
+| **Security posture** — public repo about a private commute; the local leak check (`make leakcheck`), open GitHub-side items | `docs/security.md` |
 
 ---
 

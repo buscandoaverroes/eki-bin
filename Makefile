@@ -55,6 +55,7 @@ setup: requirements.txt
 	python3 -m venv $(VENV)
 	$(PYTHON) -m pip install --quiet --upgrade pip
 	$(PYTHON) -m pip install --quiet -r requirements.txt
+	@git config core.hooksPath .githooks && echo "✓ pre-push leak check enabled (.githooks)"
 	@echo "✓ .venv ready — mpremote at $(MPREMOTE)"
 
 # ── Firmware ──────────────────────────────────────────────────────
@@ -326,6 +327,17 @@ schedule:
 	@for f in $(SCHEDULE_SOURCES); do \
 		$(PYTHON) scripts/convert_schedule.py $$f; \
 	done
+
+# Scan what is about to be published (diff + commit messages) for credentials
+# and personal details. The repo is PUBLIC. Personal terms live in the
+# gitignored .leakcheck-terms — see scripts/leakcheck.sh.
+.PHONY: leakcheck hooks
+leakcheck:
+	@scripts/leakcheck.sh $(if $(RANGE),--range $(RANGE),)
+
+# Enable the pre-push leak check for this clone (make setup does this too).
+hooks:
+	@git config core.hooksPath .githooks && echo "✓ core.hooksPath = .githooks"
 
 # Push this branch and open its PR against dev (see scripts/pr.sh header).
 #   make pr [BODY=file] [TITLE="..."] [BASE=main] [DRAFT=1] [YES=1]

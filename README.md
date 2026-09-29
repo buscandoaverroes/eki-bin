@@ -139,6 +139,7 @@ cp micropython/config.example.py micropython/config.py         # fill in WiFi cr
 make test               # host-side logic tests (also runs automatically on upload)
 make upload             # push main.py + config.py + schedule.json to the Pico
 make screen             # open the REPL to watch it run
+make leakcheck          # scan what's about to be published (also runs in `make pr` + the pre-push hook)
 make pr                 # push this branch + open its PR against dev (body: .pr-body.md, else the commit list)
 ```
 

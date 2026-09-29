@@ -1,7 +1,19 @@
 # ── Secrets / credentials — never commit ──────────────────────────
 config.py
 micropython/config.py
-micropython/config_friend1.py
+# Any per-unit config (config_friend1.py, config_friend2.py, ...) — the old
+# rule named ONE file, so the second gift unit's WiFi creds would have been
+# tracked. Only the example template is committed.
+micropython/config_*.py
+!micropython/config.example.py
+# Credentials / signing material, by extension — defensive, none exist today.
+*.pem
+*.key
+*.p12
+*.mobileprovision
+# Local personal-terms list for scripts/leakcheck.sh — MUST never be committed
+# (it is the list of the things being protected).
+.leakcheck-terms
 
 # `make dev` stages the schedule here for mpremote mount.
 micropython/schedule.json
