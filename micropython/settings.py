@@ -362,9 +362,15 @@ GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
 # replacement — see that section for why. TAP_ENERGY_THRESHOLD is the one
 # threshold this path needs; the timing knobs below drive the two-phase
 # ACK/CONFIRM state machine (_TapCycleState).
-TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
+TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 1_000_000)  #
 #   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
-#   (chianti bottle), see §11
+#   (chianti bottle), see §11.
+#   ⚠ RAISED 138k -> 1M on 2026-10-04. Replay of the raw recordings found the
+#   old value rejecting real taps (10-14 of 62 when every impulse is judged,
+#   9 of 20 near the top of the bottle) once table knocks had their own check
+#   below. It is now a coarse guard against gross handling, not the tap test;
+#   the mid-window gyro check does that job. A config.py that sets 138000
+#   explicitly keeps the old behaviour — remove or raise it there.
 # Reject a contact whose first 150 ms of impulse is mostly ALONG GRAVITY: a
 # knock on the table (or on a cup standing on it) reaches the bottle through
 # its base, vertically, while a finger on the glass pushes sideways. Replay of
@@ -374,6 +380,20 @@ TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
 # gravity vector the capture settles to, NOT the sensor's z axis, so it does
 # not depend on how the IMU is mounted. None disables it.
 TAP_VERTICAL_SHARE_MAX = getattr(config, "TAP_VERTICAL_SHARE_MAX", 0.5)
+# Reject a contact if the bottle is still ROTATING 150-400 ms after the
+# trigger: after the impact has rung down, before the next thing a person
+# does. A finger on the glass leaves it still; a grab, a lift, a set-down or
+# a tilt keeps it turning. Replay, 2026-10-04: no real tap lost at any energy
+# setting, handling accepted 93 -> 31 of 169 with the energy guard off
+# (docs/imu-interaction-plan.md; the feature came from
+# docs/classifier-approach.md). Degrees/s with the gyro's zero-rate offset
+# removed by a running baseline (gestures.GyroBias). None disables the check
+# AND leaves the gyro powered down.
+TAP_GYRO_MID_MAX_DPS = getattr(config, "TAP_GYRO_MID_MAX_DPS", 1.15)
+GYRO_BIAS_TAU_MS = getattr(config, "GYRO_BIAS_TAU_MS", 2000)   # how fast the
+#   resting baseline follows (temperature drift is minutes; 2 s is plenty)
+GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn
+#   from samples within this of the current baseline — i.e. only at rest
 ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
 #   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
 #   hardware allow

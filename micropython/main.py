@@ -39,6 +39,7 @@ from diag import (_mem_checkpoint, _mem_report)
 from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
     _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
     _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+import gestures as _gestures  # GYRO_BIAS, gyro_check_enabled, _safe_read_gyro
 import leds
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
@@ -423,6 +424,7 @@ def _run_interactive_loop(schedule_data, led):
     #   the trains have gone out of reach again, which is once a night.
     tilt_ctl = TiltController() if TILT_ENABLED else None
     tilt_ms = time.ticks_ms()
+    gyro_ms = time.ticks_ms()
 
     # Phase 0 recording (docs/imu-interaction-plan.md). Observes only: every
     # call below is guarded, and with INTERACTION_LOG off none of it exists.
@@ -546,6 +548,14 @@ def _run_interactive_loop(schedule_data, led):
             if raw is not None:
                 if ilog is not None:
                     ilog.sample(tick_now, raw)
+                if _gestures.gyro_check_enabled():
+                    # Keep the gyro's resting baseline current, so the tap
+                    # check can measure rotation against it (GyroBias).
+                    _g = _gestures._safe_read_gyro(i2c, imu_addr)
+                    if _g is not None:
+                        _gestures.GYRO_BIAS.update(
+                            _g, time.ticks_diff(tick_now, gyro_ms))
+                        gyro_ms = tick_now
                 # Tilt and taps share one sample, split by magnitude: taps
                 # want |a| >> 1g, tilt wants |a| ≈ 1g, and tilt.py's gate
                 # enforces its half. Neither needs to know about the other,

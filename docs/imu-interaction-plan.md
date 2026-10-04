@@ -445,6 +445,26 @@ hypothesis) forbids tuning against anecdotes.**
   guard, not the tap test).** Needs the gyro on in production and a gyro bias
   estimate that does not come from a pre-trigger buffer the loop does not keep.
 
+- **Shipped: the mid-window gyro check, with a running baseline, and the
+  energy guard raised to 1M (2026-10-04).** `TAP_GYRO_MID_MAX_DPS = 1.15`
+  (None disables it and leaves the gyro off); `gestures.GyroBias` learns the
+  zero-rate offset only while at rest (gated at 5 °/s, τ = 2 s, re-seeds after
+  10 s gated out) because the firmware keeps no pre-trigger history; the
+  capture reads gyro rows for the first 450 ms only. Replay through the
+  firmware's own code path, before (138k, no gyro) → after:
+
+  | | loop 57 | loop 240 | ideal 57 | ideal 240 |
+  |---|---|---|---|---|
+  | taps hit /62 | 18 → 19 | 21 → 21 | 29 → **38** | 35 → **48** |
+  | handling accepted /169 | 12 → 14 | 17 → 19 | 25 → 17 | 37 → 28 |
+  | stray taps between actions | 12 → **2** | 13 → **2** | 15 → 2 | 20 → 3 |
+  | knocks /54 | 1 → 1 | 1 → 1 | 1 → 1 | 1 → 1 |
+
+  The loop-mode tap numbers barely move because ~half the tap labels sit in
+  busy windows (protocol confound); ideal mode is the classifier's real gain.
+  Not yet run on the bottle. ⚠ A `config.py` that sets
+  `TAP_ENERGY_THRESHOLD = 138000` explicitly keeps the old rejection.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

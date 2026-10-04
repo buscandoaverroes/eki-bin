@@ -662,3 +662,57 @@ def test_the_vertical_check_rejects_and_can_be_disabled(load_main):
     assert m.classify_valid_input({"energy": 10, "vert_share": 0.1}) is True
     m = load_main(TAP_ENERGY_THRESHOLD=138000, TAP_VERTICAL_SHARE_MAX=None)
     assert m.classify_valid_input({"energy": 10, "vert_share": 0.9}) is True
+
+
+# ── GyroBias + gyro_mid_dps: "still turning after the impact" ────────────
+
+def test_gyro_bias_learns_the_resting_offset_with_a_time_constant(load_main):
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0)
+    b.update((0, 0, 0), 0)                       # first sample seeds
+    for _ in range(1000):                        # 10 s (5 tau) of rest at a constant offset
+        b.update((-9, 1, 6), 10)
+    assert abs(b.bias[0] + 9) < 1 and abs(b.bias[2] - 6) < 1
+    # the same 10 s at a different rate learns the same amount
+    b2 = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0)
+    b2.update((0, 0, 0), 0)
+    for _ in range(100):
+        b2.update((-9, 1, 6), 100)
+    assert abs(b2.bias[0] - b.bias[0]) < 0.5
+
+
+def test_gyro_bias_ignores_motion_but_reseeds_if_stuck(load_main):
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0)
+    b.update((0, 0, 0), 0)
+    for _ in range(50):                          # 0.5 s of 70 dps rotation: not learned
+        b.update((2000, 0, 0), 10)
+    assert b.bias[0] == 0.0
+    for _ in range(1100):                        # 11 s gated out: the seed was wrong
+        b.update((2000, 0, 0), 10)
+    assert b.bias[0] == 2000.0
+
+
+def test_gyro_mid_dps_measures_only_its_window_against_the_bias(load_main):
+    m = load_main()
+    rows = [(t, 100 if 150 <= t < 400 else 9999, 0, 0) for t in range(0, 450, 5)]
+    assert abs(m.gyro_mid_dps(rows, [0, 0, 0], 35.0) - 3.5) < 1e-9   # 100 LSB = 3.5 dps
+    assert m.gyro_mid_dps(rows, [100, 0, 0], 35.0) == 0.0
+    assert m.gyro_mid_dps(rows, None, 35.0) is None
+    assert m.gyro_mid_dps([(10, 1, 1, 1)], [0, 0, 0], 35.0) is None
+
+
+def test_the_gyro_check_rejects_rotation_and_none_is_no_evidence(load_main):
+    m = load_main(TAP_ENERGY_THRESHOLD=1_000_000, TAP_VERTICAL_SHARE_MAX=0.5,
+                  TAP_GYRO_MID_MAX_DPS=1.15)
+    assert m.classify_valid_input({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": 0.4})
+    assert not m.classify_valid_input({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": 3.0})
+    assert m.classify_valid_input({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": None})
+    m = load_main(TAP_ENERGY_THRESHOLD=1_000_000, TAP_GYRO_MID_MAX_DPS=None)
+    assert not m.gyro_check_enabled()
+    assert m.classify_valid_input({"energy": 10, "gyro_mid_dps": 3.0})
+
+
+def test_energy_default_is_now_a_coarse_guard(load_main):
+    m = load_main()
+    assert m.TAP_ENERGY_THRESHOLD == 1_000_000

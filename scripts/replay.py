@@ -129,7 +129,7 @@ def load_recording(path, entry=None):
 
 
 # ── the replay ────────────────────────────────────────────────────────────
-def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps):
+def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps, bias=None):
     """The capture window, as the firmware would see it, plus candidate
     features the firmware does not use yet (for analysis only):
 
@@ -146,6 +146,13 @@ def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps):
         cap.append((int(s.t - t0), s.ax, s.ay, s.az))
         j += 1
     feats = fw.gestures.extract_gesture_features(cap) if len(cap) >= 2 else {"energy": 0}
+    # The FIRMWARE's gyro check, exactly as _handle_tap runs it: rows from the
+    # first 450 ms, against the running baseline the loop has been feeding.
+    if gyro_mdps:
+        rows = [(int(samples[k].t - t0), samples[k].gx, samples[k].gy, samples[k].gz)
+                for k in range(i0, j) if samples[k].t - t0 < 450]
+        feats["gyro_mid_dps"] = fw.gestures.gyro_mid_dps(
+            rows, bias.bias if bias is not None else None, gyro_mdps)
     pre = [samples[k] for k in range(max(0, i0 - 200), i0) if t0 - 600 <= samples[k].t <= t0 - 100]
     late = [samples[k] for k in range(i0, j) if samples[k].t - t0 >= 400]
     mid = [samples[k] for k in range(i0, j) if 150 <= samples[k].t - t0 < 400]
@@ -167,7 +174,7 @@ def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps):
         # found this window, not the late one, is what a tree picks — the
         # late window also catches the NEXT event when events are ~1.3 s apart.
         if mid:
-            feats["gyro_mid_dps"] = rot(mid)
+            feats["gyro_mid_pre_dps"] = rot(mid)    # bias from the pre-trigger 0.5 s
     if pre:
         base = [_median([p.ax for p in pre]), _median([p.ay for p in pre]), _median([p.az for p in pre])]
         e = [0.0, 0.0, 0.0]
@@ -204,6 +211,8 @@ def replay(fw, samples, loop_hz=57.0, blind_ms=BLIND_MS, gyro_mdps=None,
     buf_len = g._GESTURE_TRIGGER_BUFFER_LEN
     threshold = st.TAP_TRIGGER_THRESHOLD_MG
     ctl = fw.tilt.TiltController() if st.TILT_ENABLED else None
+    bias = fw.gestures.GyroBias(mdps=gyro_mdps) if gyro_mdps else None
+    last_bias_t = None
     period = 1000.0 / loop_hz
     events, trig = [], []
     next_t = samples[0].t if samples else 0
@@ -222,6 +231,9 @@ def replay(fw, samples, loop_hz=57.0, blind_ms=BLIND_MS, gyro_mdps=None,
         while next_t <= s.t:
             next_t += period
         raw = (s.ax, s.ay, s.az)
+        if bias is not None:
+            bias.update((s.gx, s.gy, s.gz), 0 if last_bias_t is None else s.t - last_bias_t)
+            last_bias_t = s.t
         if ctl is not None:
             dt = 0 if last_tilt_t is None else int(s.t - last_tilt_t)
             state = ctl.update(raw, int(s.t), dt)
@@ -236,7 +248,7 @@ def replay(fw, samples, loop_hz=57.0, blind_ms=BLIND_MS, gyro_mdps=None,
         if len(trig) > buf_len:
             trig.pop(0)
         if baseline is not None and abs(mag - baseline) >= threshold:
-            feats, j = capture_features(fw, samples, i, s.t, window_ms, gyro_mdps)
+            feats, j = capture_features(fw, samples, i, s.t, window_ms, gyro_mdps, bias)
             valid = bool(g.classify_valid_input(feats))
             cand = {name: bool(fn(feats)) for name, fn in (candidates or {}).items()}
             blind_until = s.t + (300 if ideal else window_ms + (blind_ms if valid else 0))
@@ -355,7 +367,7 @@ def candidate_rules(gyro_late_max_dps=1.5, z_share_max=0.5):
         return f.get("z_share", 0.0) < z_share_max
 
     def gyro_mid_ok(f):
-        return f.get("gyro_mid_dps", 0.0) < 1.15        # docs/classifier-approach.md
+        return f.get("gyro_mid_pre_dps", 0.0) < 1.15    # docs/classifier-approach.md
 
     return {"gyro_veto": gyro_ok, "gyro_mid": gyro_mid_ok, "z_veto": z_ok,
             "both": lambda f: gyro_ok(f) and z_ok(f)}

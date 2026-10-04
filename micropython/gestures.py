@@ -38,7 +38,8 @@ from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     NO_DATA_COLOR, NO_DATA_DURATION_MS, NUM_LEDS, ORIENTATION_MAP,
     ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
     SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
-    TAP_VERTICAL_SHARE_MAX,
+    TAP_VERTICAL_SHARE_MAX, TAP_GYRO_MID_MAX_DPS, GYRO_BIAS_TAU_MS,
+    GYRO_BIAS_GATE_DPS,
     STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
     TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
     WAKE_JOLT_BRIGHTNESS_MULT, WAKE_JOLT_MS, WAKE_SETTLE_MS)
@@ -54,6 +55,12 @@ _IMU_CTRL1_REG = 0x10
 _IMU_CTRL1_240HZ_HIGH_PERF = 0x07
 _IMU_CTRL1_POWER_DOWN = 0x00
 _IMU_OUTX_L_A = 0x28
+_IMU_CTRL2_REG = 0x11            # gyro ODR / mode
+_IMU_CTRL6_REG = 0x15            # gyro full scale, FS_G in bits 3:0
+_IMU_GYRO_FS_1000 = 0x03         # ±1000 dps — verified on bottle-01 against the
+#                                  gravity vector: 33-35 mdps/LSB measured
+GYRO_MDPS_PER_LSB = 35.0
+_IMU_OUTX_L_G = 0x22
 _IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
 
 # Optional recording observer (interlog.Stream) — None unless
@@ -115,8 +122,94 @@ def _get_imu():
         if addr is None:
             return None, None
         i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        if gyro_check_enabled():
+            # The gyro is only powered when something reads it: the
+            # mid-window rotation check (TAP_GYRO_MID_MAX_DPS).
+            i2c.writeto_mem(addr, _IMU_CTRL2_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+            i2c.writeto_mem(addr, _IMU_CTRL6_REG, bytes([_IMU_GYRO_FS_1000]))
         _imu_i2c, _imu_addr = i2c, addr
     return _imu_i2c, _imu_addr
+
+
+def gyro_check_enabled():
+    return TAP_GYRO_MID_MAX_DPS is not None
+
+
+def _imu_read_gyro_raw(i2c, addr):
+    """Signed int16 gyro LSB, same shape as _imu_read_accel_raw."""
+    data = i2c.readfrom_mem(addr, _IMU_OUTX_L_G, 6)
+    x = int.from_bytes(data[0:2], "little")
+    y = int.from_bytes(data[2:4], "little")
+    z = int.from_bytes(data[4:6], "little")
+    return tuple(v - 65536 if v > 32767 else v for v in (x, y, z))
+
+
+class GyroBias:
+    """The gyro's zero-rate offset, learned while the bottle is at rest.
+
+    A gyro reads a small non-zero rate when nothing is turning (on bottle-01
+    about (-0.3, 0, +0.2) dps) and that offset drifts with temperature. The
+    mid-window rotation check compares against ~1 dps, so the offset has to
+    be removed — and the firmware keeps no pre-trigger history to take it
+    from, so it is tracked continuously instead: an exponential follower that
+    learns ONLY from samples within GYRO_BIAS_GATE_DPS of the current
+    estimate (i.e. at rest), with a time constant, not a per-sample alpha
+    (the lesson tilt.py just learned).
+
+    If it is gated out for longer than _RESEED_MS — a first estimate taken
+    while the bottle was moving, say — it re-seeds from the current reading
+    rather than stay wrong forever.
+    """
+
+    _RESEED_MS = 10_000
+
+    def __init__(self, tau_ms=None, gate_dps=None, mdps=GYRO_MDPS_PER_LSB):
+        self.tau_ms = float(GYRO_BIAS_TAU_MS if tau_ms is None else tau_ms)
+        gate = GYRO_BIAS_GATE_DPS if gate_dps is None else gate_dps
+        self.gate_lsb = gate * 1000.0 / mdps
+        self.bias = None
+        self._gated_ms = 0
+
+    def update(self, g, dt_ms):
+        if self.bias is None:
+            self.bias = [float(g[0]), float(g[1]), float(g[2])]
+            return
+        dev = max(abs(g[0] - self.bias[0]), abs(g[1] - self.bias[1]),
+                  abs(g[2] - self.bias[2]))
+        if dev > self.gate_lsb:
+            self._gated_ms += max(0, dt_ms)
+            if self._gated_ms >= self._RESEED_MS:
+                self.bias = [float(g[0]), float(g[1]), float(g[2])]
+                self._gated_ms = 0
+            return
+        self._gated_ms = 0
+        if dt_ms <= 0:
+            return
+        a = 1.0 - math.exp(-min(dt_ms, 1000) / self.tau_ms)
+        for i in range(3):
+            self.bias[i] += (g[i] - self.bias[i]) * a
+
+
+GYRO_BIAS = GyroBias()      # the one the firmware loop feeds
+
+
+def gyro_mid_dps(gyro_rows, bias, mdps=GYRO_MDPS_PER_LSB, start_ms=150, end_ms=400):
+    """PURE: mean rotation rate, dps, between start_ms and end_ms after the
+    trigger, with `bias` removed. gyro_rows: (elapsed_ms, gx, gy, gz).
+    None when there is no bias yet or no row in the window — the caller treats
+    None as "no evidence", never as a rejection."""
+    if bias is None:
+        return None
+    total = 0.0
+    n = 0
+    for t, gx, gy, gz in gyro_rows:
+        if start_ms <= t < end_ms:
+            dx, dy, dz = gx - bias[0], gy - bias[1], gz - bias[2]
+            total += math.sqrt(dx * dx + dy * dy + dz * dz)
+            n += 1
+    if n == 0:
+        return None
+    return total / n * mdps / 1000.0
 
 
 def _imu_read_accel_raw(i2c, addr):
@@ -365,6 +458,11 @@ def classify_valid_input(features):
     vs = features.get("vert_share")
     if TAP_VERTICAL_SHARE_MAX is not None and vs is not None and vs >= TAP_VERTICAL_SHARE_MAX:
         return False
+    # Still turning after the impact: handling, not a touch (see GyroBias,
+    # gyro_mid_dps). Added 2026-10-04 from replay; None never rejects.
+    gm = features.get("gyro_mid_dps")
+    if TAP_GYRO_MID_MAX_DPS is not None and gm is not None and gm >= TAP_GYRO_MID_MAX_DPS:
+        return False
     return True
 
 
@@ -579,6 +677,14 @@ _GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
 #   super-loop, not a second loop.
 
 I2C_ERROR_PRINT_INTERVAL_MS = 1000
+
+
+def _safe_read_gyro(i2c, addr):
+    """One gyro sample, or None on a dropped read — never raises."""
+    try:
+        return _imu_read_gyro_raw(i2c, addr)
+    except OSError:
+        return None
 
 
 def _safe_read_accel(i2c, addr, now_ms, last_error_print):
@@ -809,6 +915,8 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
     before it reaches the shelf's linear value, which was the real "dive
     underground to 0, then back up to a plateau" bug."""
     samples = []
+    gyro_rows = []
+    read_gyro = gyro_check_enabled()
     last_paint = start_ms
     shelf_written = False
     while True:
@@ -816,6 +924,13 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
         elapsed = time.ticks_diff(now, start_ms)
         try:
             samples.append((elapsed,) + _imu_read_accel_raw(i2c, addr))
+            if read_gyro and elapsed < 450:
+                # Only the window the check reads (150-400 ms) and a margin:
+                # the rest of the capture stays the 240 Hz accel loop it was.
+                try:
+                    gyro_rows.append((elapsed,) + _imu_read_gyro_raw(i2c, addr))
+                except OSError:
+                    pass
             if capture_observer is not None:
                 # Inside the try and AFTER the append, so the observer's rows
                 # stay in lockstep with `samples` when a read is dropped.
@@ -833,7 +948,7 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
         if elapsed >= _GESTURE_WINDOW_MS:
             break
         time.sleep_ms(GESTURE_POLL_MS)
-    return samples
+    return samples, gyro_rows
 
 
 def _play_confirm_jolt(shelf_mult):
@@ -896,8 +1011,9 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     shelf_mult = SHELF_FLOOR + strength * (SHELF_CEIL - SHELF_FLOOR)
 
     tap_state.acknowledge()
-    samples = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
+    samples, gyro_rows = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
+    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.bias)
     valid = classify_valid_input(features)
     if capture_observer is not None:
         capture_observer.cap_done(trigger_ms, samples, features, valid)
