@@ -22,9 +22,18 @@
 # header carries CTRL1..CTRL10 as read so full-scale settings can be decoded
 # against the datasheet on the host rather than trusted here.
 #
-# Burst read from 0x1E, 16 bytes:
-#   [0] STATUS_REG (bit0 XLDA accel ready, bit1 GDA gyro ready)  [1] reserved
-#   [2:4] temperature   [4:10] gyro X,Y,Z   [10:16] accel X,Y,Z   (int16 LE)
+# HOW IT READS — and why, because the obvious way loses most of the samples.
+# Poll the 1-byte STATUS_REG (0x1E; bit0 XLDA accel ready, bit1 GDA gyro
+# ready) and only when it says "new", read the 12 data bytes from 0x22
+# (gyro X,Y,Z then accel X,Y,Z, int16 LE). Then leave the bus alone for 85 % of
+# a sample period.
+#
+# The first version burst-read STATUS + data together on every poll. Reading
+# the output registers clears the data-ready flag, so a sample that landed
+# between the status byte and the data bytes of one burst was consumed
+# without ever being seen — the faster it polled, the more it lost.
+# make imu-bench, 2026-10-04: burst polling 39-78 Hz; status-only 235 Hz
+# (at 310 polls/s when paced). See docs/imu-interaction-plan.md.
 
 import struct
 import time
@@ -36,6 +45,7 @@ _CTRL1 = 0x10          # accel ODR / mode   (0 = high-performance in bits 6:4)
 _CTRL2 = 0x11          # gyro  ODR / mode
 _CTRL6 = 0x15          # gyro full scale FS_G[3:0] (+ LPF1 bandwidth in 7:4)
 _STATUS = 0x1E
+_DATA = 0x22           # gyro XYZ then accel XYZ, 12 bytes
 _BATCH = 20            # samples per printed line: ~83 ms at 240 Hz
 
 
@@ -62,7 +72,8 @@ def run(odr_hz=240):
     print("  [imu_stream] %d Hz requested — streaming, Ctrl-C to stop" % odr_hz)
 
     time.sleep_ms(120)                                  # first samples after an ODR change are junk
-    buf = bytearray(16)
+    sbuf = bytearray(1)
+    dbuf = bytearray(12)
     rows = []
     t_acc = 0                                           # us since start, wrap-safe
     t_last = time.ticks_us()
@@ -71,26 +82,24 @@ def run(odr_hz=240):
     max_gap = 0
     win_start = t_acc
     last_sample = None
-
-    # After a good sample, leave the bus alone for 60 % of the sample period.
-    # Hammering the status register in a tight loop produced ~140 failed reads
-    # a second in the first hardware run (err in the `stat` record) and
-    # nothing is gained: the next sample cannot exist yet.
-    settle_us = int(1_000_000 / odr_hz * 0.6)
+    quiet_us = int(1_000_000 / odr_hz * 0.85)
 
     while True:
         try:
-            i2c.readfrom_mem_into(addr, _STATUS, buf)
+            i2c.readfrom_mem_into(addr, _STATUS, sbuf)
+            st = sbuf[0]
+            if st & 1:
+                i2c.readfrom_mem_into(addr, _DATA, dbuf)
         except OSError:
             errors += 1
             continue
         now = time.ticks_us()
         t_acc += time.ticks_diff(now, t_last)
         t_last = now
-        st = buf[0]
         if not (st & 1):
+            _spin_us(150)                               # not yet: check again shortly
             continue
-        gx, gy, gz, ax, ay, az = struct.unpack_from("<hhhhhh", buf, 4)
+        gx, gy, gz, ax, ay, az = struct.unpack_from("<hhhhhh", dbuf, 0)
         if rows and t_acc - (t_batch0 + rows[-1][0]) > interlog.MAX_DELTA_US:
             # A stall longer than the packed time stamp can express (65 ms):
             # close this batch and start another, so the gap is carried by the
@@ -113,14 +122,15 @@ def run(odr_hz=240):
             print(interlog.fmt_batch_b64(t_batch0, rows))
             rows = []
         else:
-            # SPIN, don't sleep. time.sleep_us() lets the port service USB and
-            # the mount protocol, and on 2026-10-04 ~20 % of sample intervals
-            # came back as ~26 ms instead of ~4 ms — spread evenly across the
-            # batch, so not the print. A spin costs only CPU, which nothing
-            # else here wants, and keeps the bus quiet just the same.
-            deadline = time.ticks_add(time.ticks_us(), settle_us)
-            while time.ticks_diff(deadline, time.ticks_us()) > 0:
-                pass
+            _spin_us(quiet_us)                          # the next sample cannot exist yet
+
+
+def _spin_us(us):
+    # Spin rather than sleep: sleep_us lets the port service USB and the mount,
+    # which is not what a sample clock wants.
+    deadline = time.ticks_add(time.ticks_us(), us)
+    while time.ticks_diff(deadline, time.ticks_us()) > 0:
+        pass
 
 
 def main():

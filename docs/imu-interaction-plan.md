@@ -342,6 +342,16 @@ hypothesis) forbids tuning against anecdotes.**
     polling interferes — every poll burst-read the output registers, with
     block-data-update on (`CTRL3 = 0x44`). Round 2 compares burst vs.
     status-only reads, tight vs. paced, before the recorder is changed again.
+  - **`make imu-bench`, round 2 — found it.** Burst polls (STATUS + data in one
+    16-byte read): 78 Hz tight, 39 Hz paced. **Status-only polls (1 byte, then
+    the 12 data bytes only when ready): 235 Hz** — tight (6,400 polls/s) and
+    paced (310 polls/s) alike. Mechanism: reading the output registers clears
+    the data-ready flag, so a sample landing between the status byte and the
+    data bytes of one burst was consumed unseen; polling harder lost more.
+    The sensor's settings were not at fault — the read pattern was. The
+    streamer now polls status-only and paced; expected ~225–235 Hz (one sample
+    per batch is still overwritten during the ~8.5 ms print). The FIFO is no
+    longer needed at 240 Hz; it would be for 480+.
   - States need an end: `/` ends whichever is open, and quitting closes it, so
     every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
     traceback (`stop_child` escalates INT → TERM → KILL).
