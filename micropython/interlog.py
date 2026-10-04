@@ -179,6 +179,9 @@ class Stream:
         self._addr = addr
         self._last_t = None
         self._max_gap = 0
+        self._render_n = 0       # render-cost meter: see render_cost()
+        self._render_sum = 0
+        self._render_max = 0
         self._dec = Decimator()
         self._cap_g = []
         self._tilt_last = None
@@ -215,14 +218,29 @@ class Stream:
         if self._rate_t is None:
             self._rate_t = t
         elif t - self._rate_t >= RATE_EVERY_MS:
+            n = self._render_n
             self.event(t, "rate", hz=self._rate_n * 1000.0 / (t - self._rate_t),
-                       gap_ms=self._max_gap, level=self._level)
+                       gap_ms=self._max_gap, level=self._level,
+                       render_n=n,
+                       render_ms=(self._render_sum / n / 1000.0) if n else None,
+                       render_max_ms=self._render_max / 1000.0)
             self._rate_t, self._rate_n, self._max_gap = t, 0, 0
+            self._render_n = self._render_sum = self._render_max = 0
         if self._level == "rate":
             return
         g = self._gyro()
         if self._dec.keep(t, a, g):
             print(fmt_sample(t, a, g))
+
+    def render_cost(self, us):
+        """Microseconds one render pass took. Reported with the next `rate`
+        event. The loop's rate is ~17 ms per iteration while lit and ~7 ms
+        dark; if render is the difference, this says so directly rather than
+        by inference from two rates."""
+        self._render_n += 1
+        self._render_sum += us
+        if us > self._render_max:
+            self._render_max = us
 
     def event(self, t, name, **fields):
         print(fmt_event(t, name, **fields))

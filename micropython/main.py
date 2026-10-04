@@ -700,7 +700,12 @@ def _run_interactive_loop(schedule_data, led):
         elif quiet_now or not tap_state.awake:
             clear()
         else:
-            _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+            if ilog is not None:
+                _r0 = time.ticks_us()
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+                ilog.render_cost(time.ticks_diff(time.ticks_us(), _r0))
+            else:
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
 
         time.sleep_ms(GESTURE_POLL_MS)
 

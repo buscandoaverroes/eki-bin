@@ -136,8 +136,10 @@ def describe_event(rec):
         return "tilt          %s%s" % (rec.get("state"),
                                         "  (engaged)" if rec.get("engaged") else "")
     if e == "rate":
-        return "loop rate     %.0f Hz   (longest gap %d ms)" % (rec.get("hz") or 0,
-                                                              rec.get("gap_ms") or 0)
+        r = rec.get("render_ms")
+        return "loop rate     %.0f Hz   (longest gap %d ms%s)" % (
+            rec.get("hz") or 0, rec.get("gap_ms") or 0,
+            ", render %.1f ms" % r if r is not None else "")
     if e == "trigger":
         return "trigger       dev=%s%s" % (int(rec.get("dev") or 0),
                                             "  (quiet hours)" if rec.get("quiet") else "")

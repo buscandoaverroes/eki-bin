@@ -302,3 +302,19 @@ def test_rate_reports_a_blocked_loop_as_a_long_gap(capsys):
         s.sample(t, (0, 0, -16384))
     rate = [host.parse_line(l, 0) for l in capsys.readouterr().out.splitlines()][0]
     assert rate["gap_ms"] >= 1500
+
+
+def test_render_cost_is_reported_with_the_rate_and_reset(capsys):
+    s = interlog.Stream(FakeI2C(), 0x6A, level="rate")
+    for t in range(0, 5000, 10):
+        s.sample(t, (0, 0, -16384))
+        if t % 20 == 0:
+            s.render_cost(13_000)                       # 13 ms
+    s.sample(5000, (0, 0, -16384))                      # closes window one
+    s.render_cost(40_000)                               # the only one in window two
+    for t in range(5010, 10100, 10):
+        s.sample(t, (0, 0, -16384))                     # closes window two at 10000
+    recs = [host.parse_line(l, 0) for l in capsys.readouterr().out.splitlines()]
+    first, second = [r for r in recs if r["e"] == "rate"]
+    assert first["render_ms"] == pytest.approx(13.0) and first["render_max_ms"] == 13.0
+    assert second["render_n"] == 1 and second["render_ms"] == pytest.approx(40.0)
