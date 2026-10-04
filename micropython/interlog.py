@@ -53,6 +53,13 @@ _OUTX_L_G = 0x22
 # wrong code shows up as a wrong number rather than as silently wrong data.
 ODR_CODES = {60: 0x05, 120: 0x06, 240: 0x07, 480: 0x08, 960: 0x09}
 
+# Gyro full scale -> FS_G code in CTRL6[3:0]. FROM MEMORY OF THE DATASHEET, NOT
+# VERIFIED ON THIS SILICON: the first hardware run read CTRL6 = 0 (the default,
+# believed to be +/-125 dps) and the gyro CLIPPED at the int16 limit on all
+# three axes during ordinary handling, so a wider range is needed. The register
+# is read back into the header, so what was actually set is on record.
+GYRO_FS_CODES = {125: 0, 250: 1, 500: 2, 1000: 3, 2000: 4}
+STREAM_GYRO_FS = 1000
 STREAM_ODR = 240            # imu_stream.py; the host overrides it before running
 
 ACTIVE_HZ = 50
@@ -105,6 +112,55 @@ def fmt_batch(t0, rows):
     the first row, in us since the stream started."""
     body = ",".join("[%d,%d,%d,%d,%d,%d,%d,%d]" % tuple(r) for r in rows)
     return '%s{"k":"b","t0":%d,"d":[%s]}' % (TAG, t0, body)
+
+
+# Compact batch, base64 of packed rows. Printing text cost ~8.5 ms per batch of
+# 10 over the mount — a stall in which the poller misses ~2 samples, ~20 % of
+# the stream. Packed rows are 15 bytes (20 base64 characters) against ~35-42
+# characters of text. The time stamp is stored as the DELTA from the previous
+# row (uint16, so up to 65 ms): the streamer starts a new batch rather than
+# send a larger gap. The Mac expands a batch back to the readable form
+# (dt from batch start) before writing the file, so nothing downstream ever
+# sees base64 or deltas.
+_ROW = "<HhhhhhhB"            # dt_us since previous row, gx gy gz ax ay az, status
+ROW_BYTES = 15
+MAX_DELTA_US = 65535
+
+
+def pack_rows(rows):
+    """rows: (dt_us FROM BATCH START, gx..az, status) -> packed deltas."""
+    import struct
+    buf = bytearray(ROW_BYTES * len(rows))
+    prev = 0
+    for i, r in enumerate(rows):
+        delta = r[0] - prev
+        if delta < 0 or delta > MAX_DELTA_US:
+            raise ValueError("row gap %d us does not fit a uint16 delta" % delta)
+        struct.pack_into(_ROW, buf, i * ROW_BYTES, delta, *r[1:])
+        prev = r[0]
+    return buf
+
+
+def fmt_batch_b64(t0, rows):
+    import binascii
+    b64 = binascii.b2a_base64(pack_rows(rows)).strip().decode()
+    return '%s{"k":"B","t0":%d,"n":%d,"b":"%s"}' % (TAG, t0, len(rows), b64)
+
+
+def decode_batch_b64(b64, n):
+    """Inverse of fmt_batch_b64 — HOST side. Returns the readable row list,
+    dt measured from the batch start."""
+    import binascii
+    import struct
+    raw = binascii.a2b_base64(b64)
+    if len(raw) != ROW_BYTES * n:
+        raise ValueError("batch is %d bytes, expected %d" % (len(raw), ROW_BYTES * n))
+    out, t = [], 0
+    for i in range(n):
+        delta, *rest = struct.unpack_from(_ROW, raw, i * ROW_BYTES)
+        t += delta
+        out.append([t] + list(rest))
+    return out
 
 
 def fmt_stat(t_us, n, hz, max_gap_us, errors):

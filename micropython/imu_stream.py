@@ -34,8 +34,9 @@ import interlog
 
 _CTRL1 = 0x10          # accel ODR / mode   (0 = high-performance in bits 6:4)
 _CTRL2 = 0x11          # gyro  ODR / mode
+_CTRL6 = 0x15          # gyro full scale FS_G[3:0] (+ LPF1 bandwidth in 7:4)
 _STATUS = 0x1E
-_BATCH = 10            # samples per printed line: ~40 ms at 240 Hz
+_BATCH = 20            # samples per printed line: ~83 ms at 240 Hz
 
 
 def run(odr_hz=240):
@@ -50,8 +51,11 @@ def run(odr_hz=240):
     code = interlog.ODR_CODES[odr_hz]
     i2c.writeto_mem(addr, _CTRL1, bytes([code]))
     i2c.writeto_mem(addr, _CTRL2, bytes([code]))
+    fs = getattr(interlog, "STREAM_GYRO_FS", 1000)
+    i2c.writeto_mem(addr, _CTRL6, bytes([interlog.GYRO_FS_CODES[fs]]))
     regs = i2c.readfrom_mem(addr, _CTRL1, 10)          # CTRL1..CTRL10, as read
-    knobs = {"kind": "imu_stream", "odr_hz": odr_hz, "addr": addr}
+    knobs = {"kind": "imu_stream", "odr_hz": odr_hz, "addr": addr,
+             "gyro_fs_requested": fs}
     for i in range(10):
         knobs["CTRL%d" % (i + 1)] = regs[i]
     print(interlog.fmt_meta(0, knobs))
@@ -68,6 +72,12 @@ def run(odr_hz=240):
     win_start = t_acc
     last_sample = None
 
+    # After a good sample, leave the bus alone for 60 % of the sample period.
+    # Hammering the status register in a tight loop produced ~140 failed reads
+    # a second in the first hardware run (err in the `stat` record) and
+    # nothing is gained: the next sample cannot exist yet.
+    settle_us = int(1_000_000 / odr_hz * 0.6)
+
     while True:
         try:
             i2c.readfrom_mem_into(addr, _STATUS, buf)
@@ -81,6 +91,12 @@ def run(odr_hz=240):
         if not (st & 1):
             continue
         gx, gy, gz, ax, ay, az = struct.unpack_from("<hhhhhh", buf, 4)
+        if rows and t_acc - (t_batch0 + rows[-1][0]) > interlog.MAX_DELTA_US:
+            # A stall longer than the packed time stamp can express (65 ms):
+            # close this batch and start another, so the gap is carried by the
+            # new batch's own absolute start rather than being squeezed.
+            print(interlog.fmt_batch_b64(t_batch0, rows))
+            rows = []
         if not rows:
             t_batch0 = t_acc
         rows.append((t_acc - t_batch0, gx, gy, gz, ax, ay, az, st))
@@ -89,13 +105,15 @@ def run(odr_hz=240):
         if last_sample is not None and t_acc - last_sample > max_gap:
             max_gap = t_acc - last_sample
         last_sample = t_acc
-        if len(rows) >= _BATCH:
-            print(interlog.fmt_batch(t_batch0, rows))
-            rows = []
         if t_acc - win_start >= 1_000_000:
             print(interlog.fmt_stat(t_acc, n, n_win * 1e6 / (t_acc - win_start),
                                     max_gap, errors))
             win_start, n_win, max_gap = t_acc, 0, 0
+        if len(rows) >= _BATCH:
+            print(interlog.fmt_batch_b64(t_batch0, rows))
+            rows = []
+        else:
+            time.sleep_us(settle_us)
 
 
 def main():
@@ -110,6 +128,7 @@ def main():
             if addr is not None:
                 i2c.writeto_mem(addr, _CTRL1, bytes([0x07]))
                 i2c.writeto_mem(addr, _CTRL2, bytes([0x00]))   # gyro off again
+                i2c.writeto_mem(addr, _CTRL6, bytes([0x00]))   # default range again
         except Exception:
             pass
         print("  [imu_stream] stopped")

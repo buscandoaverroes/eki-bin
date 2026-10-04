@@ -362,7 +362,7 @@ interaction-log: _check-mpremote
 .PHONY: imu-record
 imu-record: _check-mpremote
 	@test -n "$(UNIT)" || (echo "✗ usage: make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=...] [NOTE=...]" && exit 1)
-	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",)
+	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(GYRO_FS),--gyro-fs $(GYRO_FS),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",)
 
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.

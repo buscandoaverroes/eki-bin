@@ -20,8 +20,9 @@ tapped". Right hand only; the left holds the bottle.
       handling            j lift off   k set down   l grab (touch/grip, no lift)
       p  mark — "something odd just happened"
 
-  STATES (a stretch of time; press once to START, again to END, or press a
-  different state key to switch)
+  STATES (a stretch of time; press once to START, again to END, press /
+  to end whichever is open, or press a different state key to switch.
+  An open state is closed automatically when you quit.)
       n  rest_flat   upright on a surface, untouched
       m  rest_lean   resting at a slight lean (4-12 deg, the deadzone edge) — this is
                      how to CAUSE a stuck tilt on purpose: put it down tilted
@@ -43,7 +44,6 @@ import argparse
 import json
 import os
 import select
-import signal
 import subprocess
 import sys
 import time
@@ -51,7 +51,8 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from interaction_log import MPREMOTE, REPO, UNDO_KEYS, _git_sha, parse_line  # noqa: E402
+from interaction_log import (MPREMOTE, REPO, UNDO_KEYS, _git_sha, parse_line,  # noqa: E402
+                             stop_child)
 
 POINTS = {
     "7": "tap_top", "8": "tap_body", "9": "tap_base",
@@ -62,12 +63,14 @@ POINTS = {
 STATES = {
     "n": "rest_flat", "m": "rest_lean", ",": "hand_hold", ".": "tilting", ";": "carry",
 }
+END_STATE_KEY = "/"      # ends whatever state is open, without remembering its key
 LABEL_MAP = "intent-1"
 LEGEND = (
     ("glass ", "7 top   8 body   9 base"),
     ("other ", "u table   i shelf   o bump"),
     ("hands ", "j lift   k set down   l grab   p mark"),
     ("state ", "n flat   m lean   , hold   . tilt   ; carry   (press again to end)"),
+    ("end   ", "/  ends whatever state is open — quitting also ends it"),
 )
 ODRS = (60, 120, 240, 480, 960)
 
@@ -90,6 +93,13 @@ def state_toggle(key, now, seq, current):
     if current == name:
         return {"k": "l", "h": now, "id": seq, "state": name, "edge": "end"}, None
     return {"k": "l", "h": now, "id": seq, "state": name, "edge": "start"}, name
+
+
+def end_current(now, seq, current):
+    """The record that ends `current`, or None if nothing is open."""
+    if current is None:
+        return None
+    return {"k": "l", "h": now, "id": seq, "state": current, "edge": "end"}
 
 
 def effective(records):
@@ -117,7 +127,7 @@ def segments(records, end_h):
 
 def header_record(args, git, now):
     return {"k": "h", "h": now, "kind": "imu_stream", "unit": args.unit,
-            "mount": args.mount, "odr_hz": args.odr, "surface": args.surface,
+            "mount": args.mount, "odr_hz": args.odr, "gyro_fs_dps": args.gyro_fs, "surface": args.surface,
             "note": args.note, "label_map": LABEL_MAP, "git": git, "format": 2,
             "started": datetime.fromtimestamp(now).isoformat(timespec="seconds")}
 
@@ -142,6 +152,9 @@ def main():
     ap.add_argument("--mount", default="base", choices=("base", "lid", "other"))
     ap.add_argument("--odr", type=int, default=240, choices=ODRS,
                     help="sensor output rate; >240 is untested here — read the achieved Hz")
+    ap.add_argument("--gyro-fs", type=int, default=1000, choices=(125, 250, 500, 1000, 2000),
+                    help="gyro full scale, dps (default 1000: the default range clipped on "
+                         "ordinary handling). The CTRL6 value actually set is in the header")
     ap.add_argument("--surface", default="", help="what it sits on (wood, stone, felt…)")
     ap.add_argument("--note", default="")
     ap.add_argument("--out-dir", type=Path, default=REPO / "data")
@@ -154,7 +167,8 @@ def main():
     path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [str(MPREMOTE), "mount", "micropython",
-           "exec", f"import interlog; interlog.STREAM_ODR = {args.odr}",
+           "exec", (f"import interlog; interlog.STREAM_ODR = {args.odr}; "
+                    f"interlog.STREAM_GYRO_FS = {args.gyro_fs}"),
            "run", "micropython/imu_stream.py"]
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdin=subprocess.DEVNULL,
@@ -206,7 +220,15 @@ def main():
                             f.flush()
                             print(f"  ✖ undid label #{target}")
                             continue
-                        if ch in POINTS:
+                        if ch == END_STATE_KEY:
+                            if current is None:
+                                print("  (no state is open)")
+                                continue
+                            seq += 1
+                            rec = end_current(t_now, seq, current)
+                            msg = f"▌#{seq} {current} end"
+                            current = None
+                        elif ch in POINTS:
                             seq += 1
                             rec = point_record(ch, t_now, seq)
                             msg = f"✎ #{seq} {rec['label']}"
@@ -251,16 +273,18 @@ def main():
         except KeyboardInterrupt:
             pass
         finally:
+            if current is not None:
+                # A recording that ends mid-state would leave a segment with no
+                # end; close it here so every state in the file is a closed
+                # interval, and say so.
+                seq += 1
+                f.write(json.dumps(end_current(time.time(), seq, current)) + "\n")
+                print(f"  (closed open state: {current})")
             if old_term is not None:
                 import termios
                 termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_term)
-            if proc.poll() is None:
-                proc.send_signal(signal.SIGINT)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
             print("  stopping… (tidying the device, a few seconds)")
+            stop_child(proc)
             _restore_device()
 
     print(f"\n■ {path}\n  {n_batches * 10} samples, {n_labels} labels")

@@ -70,6 +70,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 from rtc_drift import MPREMOTE, REPO  # noqa: E402  (worktree-stable paths)
 
 TAG = "~L "
@@ -109,6 +110,8 @@ def parse_line(line, now):
         except ValueError:
             return {"k": "x", "h": now, "text": line, "bad": True}
         rec["h"] = now
+        if rec.get("k") == "B":
+            rec = expand_batch(rec)
         return rec
     return {"k": "x", "h": now, "text": line}
 
@@ -167,6 +170,18 @@ UNDO_KEYS = ("\x7f", "\x08", "0")
 NEAR_WINDOW_S = 4.0
 
 
+def expand_batch(rec):
+    """Compact on the wire (base64 of packed rows), readable in the file: a
+    "B" record becomes the "b" form the analysis side expects. A batch that
+    does not decode (a truncated line) is kept as text, never lost."""
+    try:
+        from interlog import decode_batch_b64
+        rows = decode_batch_b64(rec["b"], rec["n"])
+    except Exception:
+        return {"k": "x", "h": rec["h"], "text": "undecodable batch", "bad": True}
+    return {"k": "b", "h": rec["h"], "t0": rec["t0"], "d": rows}
+
+
 def label_record(key, now, seq=None, near=None):
     name = LABELS.get(key)
     if name is None:
@@ -214,6 +229,24 @@ def _git_sha():
                               capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception:
         return ""
+
+
+def stop_child(proc, patience=(3, 3, 2)):
+    """Stop mpremote without ever surfacing a traceback. SIGINT first (it is
+    what a Ctrl-C does, and lets mpremote interrupt the device), then SIGTERM,
+    then SIGKILL; an impatient second Ctrl-C during the wait just skips ahead
+    to the kill. The recording file is already closed by the time this runs."""
+    for sig, wait in zip((signal.SIGINT, signal.SIGTERM, signal.SIGKILL), patience):
+        if proc.poll() is not None:
+            return
+        try:
+            proc.send_signal(sig)
+            proc.wait(timeout=wait)
+        except subprocess.TimeoutExpired:
+            continue
+        except KeyboardInterrupt:
+            proc.kill()
+            return
 
 
 def _restore_device():
@@ -366,13 +399,8 @@ def main():
             if old_term is not None:
                 import termios
                 termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_term)
-            if proc.poll() is None:
-                proc.send_signal(signal.SIGINT)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
             print("  stopping… (tidying the device, a few seconds)")
+            stop_child(proc)
             _restore_device()
 
     print(f"\n■ {path}\n  {counts['s']} samples, {counts['e']} events, "

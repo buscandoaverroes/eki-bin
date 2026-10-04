@@ -302,7 +302,25 @@ hypothesis) forbids tuning against anecdotes.**
     4–12° lean, on a few surfaces, for 30–60 s each**, plus `,` hand_hold and
     `.` tilting around the deadzone edge. Replay then finds the stuck state
     offline, reproducibly, and the regression test is made from the recording.
-  - *Rich-data checklist for a session:* taps at three heights × soft/hard;
+  - *First dry run of the sandbox (2026-10-04) — and what it fixed.*
+  - **Gyro clipped.** `CTRL6` read back as 0 (the default, believed ±125 dps)
+    and all three axes hit the int16 limit (32764) during ordinary handling.
+    ⚠ **Every gyro figure in this document in °/s was computed at 8.75 mdps/LSB
+    and is probably ~2× too high** (4.375 mdps/LSB at ±125 dps); the *ratios and
+    separations* are unaffected. The scale is still to be verified with a known
+    90° turn. The streamer now sets a wider range (`GYRO_FS=1000` default) and
+    the value actually set is read back into the header.
+  - **Rate: 165–170 Hz achieved, not 240**, with ~140 failed I2C reads a second
+    and a ~8.5 ms stall after every printed batch (~2 samples lost per batch).
+    Fixes: a compact 15-byte row, base64-packed (≈30–40 % smaller than text),
+    and the bus left alone for 60 % of a sample period after each good read.
+    **Not yet re-measured.** The lossless fix is the IMU's own FIFO (it buffers
+    through a print stall); its register map has to be checked against the
+    datasheet first, so it is not done blind.
+  - States need an end: `/` ends whichever is open, and quitting closes it, so
+    every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
+    traceback (`stop_child` escalates INT → TERM → KILL).
+- *Rich-data checklist for a session:* taps at three heights × soft/hard;
     knocks on the table and a shelf at several distances; lifts and set-downs ×
     30; grabs without lifting; long rests flat and leaned; hand-held still;
     tilting; carrying. Note the surface and whether the bottle is empty or

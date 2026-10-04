@@ -98,3 +98,79 @@ def test_effective_drops_undone_points():
     recs = [rec.point_record("7", 1.0, 1), rec.point_record("8", 2.0, 2),
             {"k": "l", "h": 3.0, "undo": 1}]
     assert [r["label"] for r in rec.effective(recs)] == ["tap_body"]
+
+
+# ── compact batch codec ───────────────────────────────────────────────────
+def test_packed_rows_are_15_bytes_and_roundtrip():
+    rows = [(0, 1, -2, 3, 4, -5, 6, 3), (4166, -32768, 32767, 0, 100, -100, 7, 255)]
+    assert len(interlog.pack_rows(rows)) == 2 * interlog.ROW_BYTES == 30
+    line = interlog.fmt_batch_b64(777, rows)
+    assert interlog.decode_batch_b64(
+        host.parse_line.__globals__["json"].loads(line[len(interlog.TAG):])["b"], 2) \
+        == [list(r) for r in rows]
+
+
+def test_the_host_expands_a_compact_batch_into_the_readable_form():
+    rows = [(0, 1, 2, 3, 4, 5, 6, 3), (4000, 7, 8, 9, 10, 11, 12, 3)]
+    out = host.parse_line(interlog.fmt_batch_b64(123, rows), now=4.5)
+    assert out == {"k": "b", "h": 4.5, "t0": 123, "d": [list(r) for r in rows]}
+
+
+def test_an_undecodable_batch_is_kept_not_fatal():
+    bad = interlog.TAG + '{"k":"B","t0":1,"n":3,"b":"AAAA"}'
+    out = host.parse_line(bad, 1.0)
+    assert out["k"] == "x" and out["bad"] is True
+
+
+def test_compact_is_meaningfully_smaller_than_text():
+    # realistic magnitudes: gyro near zero, accel near 1 g
+    rows = [(i * 4166, -62, 3, 40, -250, 20, 16000, 3) for i in range(20)]
+    ratio = len(interlog.fmt_batch_b64(0, rows)) / len(interlog.fmt_batch(0, rows))
+    assert ratio < 0.7, ratio
+
+
+def test_time_is_stored_as_deltas_and_restored_as_offsets_from_batch_start():
+    rows = [(0, 1, 1, 1, 1, 1, 1, 3), (4166, 2, 2, 2, 2, 2, 2, 3), (8400, 3, 3, 3, 3, 3, 3, 3)]
+    out = host.parse_line(interlog.fmt_batch_b64(0, rows), 0)
+    assert [r[0] for r in out["d"]] == [0, 4166, 8400]
+
+
+def test_a_gap_too_big_for_a_uint16_delta_is_refused_not_wrapped():
+    with pytest.raises(ValueError):
+        interlog.pack_rows([(0, 0, 0, 0, 0, 0, 0, 3), (70000, 0, 0, 0, 0, 0, 0, 3)])
+
+
+# ── ending states, and stopping cleanly ───────────────────────────────────
+def test_end_current_closes_whatever_is_open_and_is_a_noop_otherwise():
+    assert rec.end_current(5.0, 9, None) is None
+    r = rec.end_current(5.0, 9, "rest_lean")
+    assert (r["state"], r["edge"], r["id"]) == ("rest_lean", "end", 9)
+    assert rec.segments([_stream(("m", 1.0))[0], r], end_h=99.0) == [("rest_lean", 1.0, 5.0)]
+
+
+def test_end_key_does_not_collide():
+    assert rec.END_STATE_KEY not in rec.POINTS and rec.END_STATE_KEY not in rec.STATES
+    assert rec.END_STATE_KEY not in host.UNDO_KEYS and rec.END_STATE_KEY != "q"
+
+
+def test_stop_child_stops_a_cooperative_process_without_a_traceback():
+    import subprocess
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    host.stop_child(p, patience=(2, 1, 1))
+    assert p.poll() is not None
+
+
+def test_stop_child_escalates_past_a_process_that_ignores_sigint():
+    import subprocess
+    code = "import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(30)"
+    p = subprocess.Popen([sys.executable, "-c", code])
+    import time as _t
+    _t.sleep(0.3)                                      # let it install the handler
+    host.stop_child(p, patience=(0.3, 2, 1))
+    assert p.poll() is not None
+
+
+def test_gyro_full_scale_codes_are_ordered_and_default_is_wide():
+    codes = interlog.GYRO_FS_CODES
+    assert [codes[k] for k in sorted(codes)] == sorted(codes.values())   # monotonic
+    assert interlog.STREAM_GYRO_FS in codes and interlog.STREAM_GYRO_FS >= 500
