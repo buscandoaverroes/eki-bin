@@ -371,6 +371,14 @@ imu-record: _check-mpremote
 imu-bench: _check-mpremote
 	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/imu_bench.py
 
+# Phase 1: replay raw recordings through the REAL tap/tilt code on the Mac and
+# score its decisions against the labels. Every data/imu-*.jsonl marked
+# use:true in data/imu-sessions.json, unless FILES= is given.
+#   make replay [LOOP_HZ=57,139,240] [CSV=features.csv] [FILES="data/imu-....jsonl ..."]
+.PHONY: replay
+replay:
+	$(PYTHON) scripts/replay.py $(FILES) --loop-hz $(if $(LOOP_HZ),$(LOOP_HZ),57) $(if $(CSV),--csv $(CSV),)
+
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.
 .PHONY: example-schedule

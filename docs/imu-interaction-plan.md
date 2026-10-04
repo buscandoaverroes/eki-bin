@@ -384,6 +384,37 @@ hypothesis) forbids tuning against anecdotes.**
 - **Exit:** the current pipeline's failure rates on the recorded corpus
   reproduce A, B and C. If they do not, the logger is wrong; fix that first.
 
+- **Built 2026-10-04: `scripts/replay.py` (`make replay`).** Replays
+  `data/imu-*.jsonl` through the real `tilt.TiltController`, trigger maths,
+  `extract_gesture_features` and `classify_valid_input` at a simulated loop
+  rate (`LOOP_HZ=57,240`); the loop's blindness after a trigger is simulated,
+  or removed with `--ideal` to score the classifier alone. Labels are matched
+  one-to-one, nearest first, in a window of −1.0/+0.2 s (measured label lag:
+  median ~330 ms). `--csv` writes one row of features per trigger. Knobs come
+  from `data/knobs-bottle-01.json` (the firmware's own recorded snapshot).
+- **First results (5 recordings, one bottle, one table, one day):**
+  - *Table knocks are the biggest false-tap class, and the z-share veto
+    removes them.* Knocks on the table or an object on it were accepted as taps
+    17/54 times at 57 Hz and 25/54 at 240; with `z_share < 0.5` it was 1 and 2,
+    with **no true tap lost**. Floor footsteps / sitting down: 0/11 already.
+  - *The gyro veto removes most handling taps between labelled actions* (the
+    unexplained accepted taps in the states session: 23 → 2–3), at a cost of
+    1–3 true taps — the threshold (1.5 °/s, bias removed) is a first guess.
+  - *Grabs remain hard*: 10–12/39 accepted even with both vetoes. A grab IS a
+    touch on the glass; what separates it is what follows (a lift), which is
+    the arbiter's settlement window, not a feature.
+  - *Faster loop: more real taps triggered (untriggered 13 → 7), and more
+    knocks too* — the loop-rate fix and the z veto have to land together.
+  - *The tilt constants ARE rate-dependent, confirmed by replay*: deliberate
+    tilts engaged in 9/10 segments at 57 Hz but 2/10 at 240 Hz; a lean stuck in
+    2/10 at 57 Hz, 0/10 at 240. **Converting tilt to milliseconds must come
+    before any loop-rate fix**, or the fix breaks tilt.
+  - *Protocol confound:* labels were ~1.3 s apart, but the firmware is busy
+    ≥1.2 s after any trigger (2.7 s after an accepted one), so about half the
+    tap labels fell in busy windows. Tap-rate numbers from that file are weak;
+    future tap sessions want ≥4 s between events, taps and knocks in separate
+    files.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing
