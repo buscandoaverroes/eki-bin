@@ -430,6 +430,21 @@ hypothesis) forbids tuning against anecdotes.**
      and 2 → 4: a rejected knock no longer blinds the loop, so the next event
      is seen — the busy window, not the check.
 
+- **The energy rule, loosened (replay, 2026-10-04).** With the vertical check
+  shipped, `energy < 138k` mostly rejects real taps: in `--ideal` mode (every
+  impulse judged) it rejected 10 taps at 57 Hz and 14 at 240. Raising it alone
+  trades those back for handling (240 Hz ideal: taps 35 → 48 → 49 of 62 at
+  138k / 1M / off; handling accepted 37 → 49 → 93 of 169). **With the
+  mid-window gyro check** (rotation 150–400 ms after the trigger < 1.15 °/s,
+  bias removed — the feature `docs/classifier-approach.md` found) the trade
+  disappears: same tap hits as no check at every setting, and handling at
+  1M is 26/169 (off: 31) with stray taps between actions ~0–1. The late-window
+  (≥400 ms) version cost 10+ taps — it catches the *next* event when events are
+  ~1.3 s apart. Knocks stay at 1/54 throughout. **Next change: the mid-window
+  gyro check in firmware, and `TAP_ENERGY_THRESHOLD` ~1M (a gross-handling
+  guard, not the tap test).** Needs the gyro on in production and a gyro bias
+  estimate that does not come from a pre-trigger buffer the loop does not keep.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

@@ -148,16 +148,26 @@ def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps):
     feats = fw.gestures.extract_gesture_features(cap) if len(cap) >= 2 else {"energy": 0}
     pre = [samples[k] for k in range(max(0, i0 - 200), i0) if t0 - 600 <= samples[k].t <= t0 - 100]
     late = [samples[k] for k in range(i0, j) if samples[k].t - t0 >= 400]
-    if late and gyro_mdps:
+    mid = [samples[k] for k in range(i0, j) if 150 <= samples[k].t - t0 < 400]
+    if gyro_mdps and (late or mid):
         if pre:
             bx = _median([p.gx for p in pre])
             by = _median([p.gy for p in pre])
             bz = _median([p.gz for p in pre])
         else:
             bx = by = bz = 0
-        feats["gyro_late_dps"] = sum(
-            math.sqrt((s.gx - bx) ** 2 + (s.gy - by) ** 2 + (s.gz - bz) ** 2) for s in late
-        ) / len(late) * gyro_mdps / 1000.0
+
+        def rot(ss):
+            return sum(math.sqrt((s.gx - bx) ** 2 + (s.gy - by) ** 2 + (s.gz - bz) ** 2)
+                       for s in ss) / len(ss) * gyro_mdps / 1000.0
+        if late:
+            feats["gyro_late_dps"] = rot(late)
+        # 150-400 ms: after the impact's own ring-down, before the next thing
+        # a person does. The classifier memo (docs/classifier-approach.md)
+        # found this window, not the late one, is what a tree picks — the
+        # late window also catches the NEXT event when events are ~1.3 s apart.
+        if mid:
+            feats["gyro_mid_dps"] = rot(mid)
     if pre:
         base = [_median([p.ax for p in pre]), _median([p.ay for p in pre]), _median([p.az for p in pre])]
         e = [0.0, 0.0, 0.0]
@@ -344,7 +354,10 @@ def candidate_rules(gyro_late_max_dps=1.5, z_share_max=0.5):
     def z_ok(f):
         return f.get("z_share", 0.0) < z_share_max
 
-    return {"gyro_veto": gyro_ok, "z_veto": z_ok,
+    def gyro_mid_ok(f):
+        return f.get("gyro_mid_dps", 0.0) < 1.15        # docs/classifier-approach.md
+
+    return {"gyro_veto": gyro_ok, "gyro_mid": gyro_mid_ok, "z_veto": z_ok,
             "both": lambda f: gyro_ok(f) and z_ok(f)}
 
 
