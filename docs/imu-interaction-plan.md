@@ -334,6 +334,14 @@ hypothesis) forbids tuning against anecdotes.**
     service USB/the mount); replaced with a spin-wait. Expected ceiling after
     that is ~215–220 Hz (20 samples per ~92 ms); **lossless 240 needs the
     sensor FIFO.**
+  - **`make imu-bench`, round 1 — the bottleneck is not output.** With no
+    output at all the poll loop still got ~23 Hz (gaps 38–46 ms); garbage
+    collection off: no change; printing b64 or text: no change. Reads took
+    <0.7 ms and the loop spent <0.07 ms outside them, so it was polling at
+    ~1.5 kHz and *not seeing* the data-ready flag. Leading hypothesis: the
+    polling interferes — every poll burst-read the output registers, with
+    block-data-update on (`CTRL3 = 0x44`). Round 2 compares burst vs.
+    status-only reads, tight vs. paced, before the recorder is changed again.
   - States need an end: `/` ends whichever is open, and quitting closes it, so
     every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
     traceback (`stop_child` escalates INT → TERM → KILL).

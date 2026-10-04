@@ -2,27 +2,27 @@
 #
 # WHERE DO THE MISSING SAMPLES GO? A diagnostic, not a recorder.
 #
-# imu_stream.py asks for 240 Hz and gets 80-120. Two stalls were found and
-# fixed (per-batch imports, ~82 ms; then tried sleep -> spin), but on
-# 2026-10-04 ~30 % of intervals INSIDE a batch were still ~26 ms, where no
-# print happens. Rather than guess again, this runs the same poll loop for
-# 8 s at a time under five conditions and prints ONE summary line per phase:
+# Round 1 (2026-10-04) ruled out the obvious: with NO output at all the loop
+# still got ~23 Hz, gaps clustered at 38-46 ms, garbage collection off changed
+# nothing, and printing (b64 or text) changed nothing either. Each read took
+# <0.7 ms and the loop spent <0.07 ms outside it — so the poller was spinning
+# at ~1.5 kHz and the sensor's data-ready flag simply was not being SEEN set.
 #
-#   1 baseline      poll + unpack + keep rows, no output at all
-#   2 gc off        same, garbage collector disabled for the phase
-#   3 no alloc      poll only, nothing kept (allocation-free)
-#   4 print b64     baseline + print a compact batch every 20 (what the stream does)
-#   5 print text    baseline + print a text batch every 20
+# Leading hypothesis: polling itself interferes. Every poll was a 16-byte
+# burst that reads the OUTPUT registers too, and with block-data-update on
+# (CTRL3 = 0x44) the sensor may defer or skip updating registers that are
+# being read — so the harder we poll, the fewer samples land. Round 1's tight
+# loop (23 Hz) vs. the throttled stream (~100-165 Hz) fits.
 #
-# Each line: achieved Hz, the worst I2C read, the worst time spent OUTSIDE the
-# read, and a histogram of sample-to-sample gaps in ms. If phase 1 already
-# shows 26 ms gaps, output is not the cause; if phase 2 removes them it is GC;
-# if phase 3 removes them it is allocation; if only 4/5 show them it is USB.
+# Round 2, four phases:
+#   1 burst tight    16-byte burst every poll, no pacing      (round 1's loop)
+#   2 burst paced    burst, but quiet for 85 % of a period after each sample
+#   3 status tight   read ONLY the 1-byte STATUS until ready, then the data
+#   4 status paced   status-only, and quiet for 85 % of a period after each sample
 #
 #   make imu-bench        (mounted from the Mac; nothing written to flash)
 
 import gc
-import struct
 import time
 
 import gestures
@@ -43,69 +43,62 @@ def _setup():
     return i2c, addr
 
 
-def phase(name, i2c, addr, keep=True, gc_off=False, out=None):
+def _spin_us(us):
+    deadline = time.ticks_add(time.ticks_us(), us)
+    while time.ticks_diff(deadline, time.ticks_us()) > 0:
+        pass
+
+
+def phase(name, i2c, addr, status_only=False, paced=False, odr=240):
     gc.collect()
-    if gc_off:
-        gc.disable()
-    buf = bytearray(16)
+    burst = bytearray(16)
+    sbuf = bytearray(1)
+    dbuf = bytearray(12)
+    quiet_us = int(1_000_000 / odr * 0.85)
     hist = {}
-    rows = []
-    n = 0
-    read_max = other_max = 0
+    n = polls = 0
     last = None
     t_end = time.ticks_add(time.ticks_ms(), _PHASE_S * 1000)
-    t_prev_end = time.ticks_us()
-    try:
-        while time.ticks_diff(t_end, time.ticks_ms()) > 0:
-            t0 = time.ticks_us()
-            gap_outside = time.ticks_diff(t0, t_prev_end)
-            if gap_outside > other_max:
-                other_max = gap_outside
-            try:
-                i2c.readfrom_mem_into(addr, 0x1E, buf)
-            except OSError:
-                pass
-            t1 = time.ticks_us()
-            t_prev_end = t1
-            rd = time.ticks_diff(t1, t0)
-            if rd > read_max:
-                read_max = rd
-            if not (buf[0] & 1):
-                continue
-            if last is not None:
-                g = time.ticks_diff(t1, last) // 1000
-                hist[g] = hist.get(g, 0) + 1
-            last = t1
-            n += 1
-            if keep:
-                v = struct.unpack_from("<hhhhhh", buf, 4)
-                rows.append((0,) + v + (buf[0],))
-                if len(rows) >= 20:
-                    if out == "b64":
-                        print(interlog.fmt_batch_b64(0, rows))
-                    elif out == "text":
-                        print(interlog.fmt_batch(0, rows))
-                    rows = []
-            t_prev_end = time.ticks_us()
-    finally:
-        if gc_off:
-            gc.enable()
-    print("  %-11s %5.0f Hz   read_max %5d us   outside_max %6d us   gaps ms %s"
-          % (name, n / _PHASE_S, read_max, other_max, sorted(hist.items())))
+    while time.ticks_diff(t_end, time.ticks_ms()) > 0:
+        polls += 1
+        try:
+            if status_only:
+                i2c.readfrom_mem_into(addr, 0x1E, sbuf)
+                ready = sbuf[0] & 1
+                if ready:
+                    i2c.readfrom_mem_into(addr, 0x22, dbuf)
+            else:
+                i2c.readfrom_mem_into(addr, 0x1E, burst)
+                ready = burst[0] & 1
+        except OSError:
+            continue
+        if not ready:
+            if paced:
+                _spin_us(150)
+            continue
+        t = time.ticks_us()
+        if last is not None:
+            g = time.ticks_diff(t, last) // 1000
+            hist[g] = hist.get(g, 0) + 1
+        last = t
+        n += 1
+        if paced:
+            _spin_us(quiet_us)
+    print("  %-14s %5.0f Hz   %6.0f polls/s   gaps ms %s"
+          % (name, n / _PHASE_S, polls / _PHASE_S, sorted(hist.items())))
 
 
 def main():
     i2c, addr = _setup()
     if addr is None:
         return
-    print("  [imu_bench] 5 phases x %d s, 240 Hz requested — keep still or move, either works"
+    print("  [imu_bench] 4 phases x %d s, 240 Hz requested — keep still or move, either works"
           % _PHASE_S)
     try:
-        phase("1 baseline", i2c, addr)
-        phase("2 gc off", i2c, addr, gc_off=True)
-        phase("3 no alloc", i2c, addr, keep=False)
-        phase("4 print b64", i2c, addr, out="b64")
-        phase("5 print txt", i2c, addr, out="text")
+        phase("1 burst tight", i2c, addr)
+        phase("2 burst paced", i2c, addr, paced=True)
+        phase("3 status tight", i2c, addr, status_only=True)
+        phase("4 status paced", i2c, addr, status_only=True, paced=True)
     finally:
         i2c.writeto_mem(addr, 0x11, bytes([0x00]))
         i2c.writeto_mem(addr, 0x15, bytes([0x00]))
