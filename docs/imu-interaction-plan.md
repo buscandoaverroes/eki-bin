@@ -465,6 +465,20 @@ hypothesis) forbids tuning against anecdotes.**
   Not yet run on the bottle. ⚠ A `config.py` that sets
   `TAP_ENERGY_THRESHOLD = 138000` explicitly keeps the old rejection.
 
+- **First feel on the bottle (2026-10-04, `make dev`), after the vertical +
+  gyro checks and the 1M energy guard:** weak taps and table noise ignored
+  (the owner's preference: err toward ignoring noise — tapping harder is
+  easy). A clean pickup is ignored; **a pickup with a "jitter" — a finger
+  touch or two, then the lift — still reads as a tap.** Accepted for now;
+  it is exactly the arbiter's look-forward case.
+- **⚠ Watch: once, asleep, it could not be woken at all** — not by taps, not
+  by a hard shake; the next attempt woke on the first tap. Not reproduced.
+  Suspects, unverified: `make dev`'s mount, or a `GyroBias` seeded while the
+  bottle was being handled — every tap would then read as rotation until the
+  10 s re-seed. Cheap guard if it recurs: have the gyro check abstain (None)
+  until the baseline has learned for ~2 s at rest. Log any recurrence with
+  `make interaction-log`.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

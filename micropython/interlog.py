@@ -189,6 +189,7 @@ def snapshot(mod, names=None):
     """The knobs a recording depends on, so a file says what produced it."""
     if names is None:
         names = ("TAP_TRIGGER_THRESHOLD_MG", "TAP_ENERGY_THRESHOLD",
+                 "TAP_VERTICAL_SHARE_MAX", "TAP_GYRO_MID_MAX_DPS",
                  "GESTURE_BOOT_IGNORE_MS", "TILT_ENABLED", "TILT_EXPO",
                  "TILT_DEADZONE_DEG", "TILT_FULL_DEG", "TILT_ENGAGE_SAMPLES",
                  "TILT_STILL_MS", "TILT_G_TOLERANCE", "TILT_BASELINE_ALPHA",
