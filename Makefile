@@ -364,6 +364,13 @@ imu-record: _check-mpremote
 	@test -n "$(UNIT)" || (echo "✗ usage: make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=...] [NOTE=...]" && exit 1)
 	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(GYRO_FS),--gyro-fs $(GYRO_FS),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",)
 
+# Where do the stream's missing samples go? Five 8 s phases of the same poll
+# loop (no output / gc off / no allocation / printing b64 / printing text),
+# one summary line each. Diagnostic only; nothing recorded or flashed.
+.PHONY: imu-bench
+imu-bench: _check-mpremote
+	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/imu_bench.py
+
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.
 .PHONY: example-schedule
