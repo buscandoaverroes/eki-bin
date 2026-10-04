@@ -174,3 +174,16 @@ def test_gyro_full_scale_codes_are_ordered_and_default_is_wide():
     codes = interlog.GYRO_FS_CODES
     assert [codes[k] for k in sorted(codes)] == sorted(codes.values())   # monotonic
     assert interlog.STREAM_GYRO_FS in codes and interlog.STREAM_GYRO_FS >= 500
+
+
+def test_hot_path_functions_do_not_import():
+    """Per-call imports cost a serial round trip each under `mpremote mount`
+    (a same-named .py is searched for on the mounted path first) and halved
+    the stream rate on 2026-10-04. Applies to anything called per batch."""
+    import ast
+    tree = ast.parse((ROOT / "micropython" / "interlog.py").read_text())
+    hot = {"pack_rows", "fmt_batch_b64", "fmt_stat", "fmt_sample", "fmt_event"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in hot:
+            imports = [n for n in ast.walk(node) if isinstance(n, (ast.Import, ast.ImportFrom))]
+            assert not imports, f"{node.name} imports inside the function"

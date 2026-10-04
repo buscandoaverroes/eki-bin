@@ -33,6 +33,8 @@
 # The formatters and the Decimator are pure and host-tested. The I2C reads
 # are not — same split gestures.py draws.
 
+import binascii
+import struct
 import time
 
 TAG = "~L "
@@ -122,6 +124,12 @@ def fmt_batch(t0, rows):
 # send a larger gap. The Mac expands a batch back to the readable form
 # (dt from batch start) before writing the file, so nothing downstream ever
 # sees base64 or deltas.
+#
+# ⚠ NO IMPORTS INSIDE THESE FUNCTIONS. struct/binascii are imported at module
+# top. Imported per call, they cost ~80 ms a batch under `mpremote mount`
+# (2026-10-04: the stream fell from 165 to 77 Hz) — MicroPython looks for a
+# same-named .py on sys.path before using a built-in, and over the mount every
+# such look is a serial round trip to the Mac. tests/test_imu_record.py pins it.
 _ROW = "<HhhhhhhB"            # dt_us since previous row, gx gy gz ax ay az, status
 ROW_BYTES = 15
 MAX_DELTA_US = 65535
@@ -129,7 +137,6 @@ MAX_DELTA_US = 65535
 
 def pack_rows(rows):
     """rows: (dt_us FROM BATCH START, gx..az, status) -> packed deltas."""
-    import struct
     buf = bytearray(ROW_BYTES * len(rows))
     prev = 0
     for i, r in enumerate(rows):
@@ -142,7 +149,6 @@ def pack_rows(rows):
 
 
 def fmt_batch_b64(t0, rows):
-    import binascii
     b64 = binascii.b2a_base64(pack_rows(rows)).strip().decode()
     return '%s{"k":"B","t0":%d,"n":%d,"b":"%s"}' % (TAG, t0, len(rows), b64)
 
@@ -150,8 +156,6 @@ def fmt_batch_b64(t0, rows):
 def decode_batch_b64(b64, n):
     """Inverse of fmt_batch_b64 — HOST side. Returns the readable row list,
     dt measured from the batch start."""
-    import binascii
-    import struct
     raw = binascii.a2b_base64(b64)
     if len(raw) != ROW_BYTES * n:
         raise ValueError("batch is %d bytes, expected %d" % (len(raw), ROW_BYTES * n))

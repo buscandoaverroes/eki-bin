@@ -317,6 +317,16 @@ hypothesis) forbids tuning against anecdotes.**
     **Not yet re-measured.** The lossless fix is the IMU's own FIFO (it buffers
     through a print stall); its register map has to be checked against the
     datasheet first, so it is not done blind.
+  - **Second sandbox run (2026-10-04, 109 s) — gyro scale verified.** Two
+    deliberate ~90° tilts, measured independently by the change in the gravity
+    vector (89.2° and 87.5°), integrate to **33–35 mdps/LSB** at `CTRL6 = 3` —
+    the datasheet's 35 for ±1000 dps. So the FS code table is right, the
+    default `CTRL6 = 0` was ±125 dps, and the earlier °/s figures in this
+    document were 2× high. No clipping (peak 4124 LSB ≈ 144 °/s); failed reads
+    0 (the throttle worked). **But the rate fell to ~77 Hz**: ~82 ms stalls
+    between batches, traced to `import struct`/`import binascii` *inside* the
+    per-batch functions — under the mount each costs a round trip to the Mac.
+    Moved to module top and pinned by a test; not yet re-measured.
   - States need an end: `/` ends whichever is open, and quitting closes it, so
     every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
     traceback (`stop_child` escalates INT → TERM → KILL).
