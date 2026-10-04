@@ -229,6 +229,38 @@ hypothesis) forbids tuning against anecdotes.**
     old sandboxes (tap while gripping) and was parked when its pilot reversed
     at n=30 (`insights.md` §9). "Grab" in this plan is the arbiter's future
     HANDLING state; the `j`/`k`/`l` labels are ground truth for it.
+- **Third session (2026-10-04) — the loop-rate runs, and a stuck-tilt episode.**
+  - *Loop rate is the firmware, not the recorder.* `LEVEL=rate` held 57–60 Hz
+    while lit (139 Hz in what look like dark windows); `LEVEL=full` held
+    54–56 Hz — the recorder costs ~5 %. About 17 ms an iteration lit against a
+    designed 4 ms points at the per-frame render, which runs whether or not
+    anything changed; `rate` events now carry `render_ms` to measure it. After a
+    tap the loop is also **blind for ~2.7 s** (1.2 s capture + the response
+    animation): no tilt update, no second tap.
+  - *Pure gyro vs. a veto* (all sessions, 20 true taps / 17 handling / 7
+    ambient): late-window gyro is the cleanest handling detector found (true
+    taps 0.8–1.2 °/s, no exceptions), but the early gyro peak does not separate
+    ambient from taps (1–142 vs 11–240 °/s) and every ambient knock was as quiet
+    late as a true tap. Tilt needs the accelerometer's gravity vector. So it is a
+    question of which features decide, not veto-vs-base; a gyro-first *trigger*
+    is a candidate for the Phase 1 harness to score against the current one.
+  - *Stuck tilt, two episodes, ~20–50 s each* (`level=rate`, so no raw samples
+    — **not replayable**; re-record at `full`). Engaged at 7.5–9.2° the whole
+    time, the state flickering idle/up/down. Two causes visible in the settings
+    alone: (1) `TILT_DEADZONE_DEG` is 8.0, so the bottle was resting *on the
+    deadzone edge* — chatter, with no hysteresis; (2) release needs 6 s with the
+    last 24 samples within 0.5°, so anything that jostles it (a tap while
+    engaged, a hand nearby) restarts the clock. A tilt session in progress when
+    the display sleeps also freezes rather than ends, since `update()` is not
+    called while asleep.
+  - *Design smell found while reading it:* **the tilt controller's time
+    constants are per-sample, not per-millisecond** — `TILT_SMOOTH_ALPHA`,
+    `TILT_ENGAGE_SAMPLES`, `TILT_STILL_WINDOW` and `TILT_BASELINE_ALPHA` all
+    advance once per `update()`. They were tuned at the sandbox's ~40 Hz; the
+    production loop runs 4–139 Hz. "Engaged after 4 samples" is 29 ms at 139 Hz
+    and a full second at 4 Hz; "a still window of 24 samples" is 0.4 s or 6 s.
+    That alone can make tilt feel different from minute to minute. Fix in
+    milliseconds (alpha from `dt`), independent of the render fix.
 - **Collection targets — the holes** (per `insights.md` §8: n≥30 per class,
   ≥2 sessions, before believing anything). Label each as it happens:
   1. **Ambient (`m`)** — deliberate knocks on the table/shelf at several
