@@ -187,3 +187,23 @@ def test_hot_path_functions_do_not_import():
         if isinstance(node, ast.FunctionDef) and node.name in hot:
             imports = [n for n in ast.walk(node) if isinstance(n, (ast.Import, ast.ImportFrom))]
             assert not imports, f"{node.name} imports inside the function"
+
+
+def test_corrections_void_relabel_and_add_without_mutating_the_recording():
+    recs = [rec.point_record("p", 1.0, 1)]                       # recorded as "release"
+    recs += _stream(("," , 10.0))                                # hand_hold start, id 1
+    recs[1]["id"] = 2
+    wrong = rec.state_toggle("m", 40.0, 3, "hand_hold")[0]       # meant to END hold
+    recs.append(wrong)
+    entry = {"void": [3], "relabel": {"release": "let_go"},
+             "add": [{"k": "l", "h": 40.0, "id": "fix", "state": "hand_hold", "edge": "end"}]}
+    before = [dict(r) for r in recs]
+    fixed = rec.apply_corrections(recs, entry)
+    assert recs == before                                         # input untouched
+    assert [r.get("label") for r in fixed if "label" in r] == ["let_go"]
+    assert rec.segments(fixed, end_h=99.0) == [("hand_hold", 10.0, 40.0)]
+
+
+def test_no_entry_means_no_change():
+    recs = [rec.point_record("7", 1.0, 1)]
+    assert rec.apply_corrections(recs, None) is recs

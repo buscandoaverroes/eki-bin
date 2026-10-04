@@ -134,6 +134,29 @@ def segments(records, end_h):
     return out
 
 
+def apply_corrections(records, entry):
+    """Apply a data/imu-sessions.json entry to a recording's records WITHOUT
+    touching the file: `void` drops labels by id, `add` inserts labels written
+    after the fact (in host-time order), `relabel` renames point labels. This is
+    where post-hoc fixes live — the recording stays exactly as captured."""
+    if not entry:
+        return records
+    void = set(entry.get("void", ()))
+    relabel = entry.get("relabel", {})
+    out = []
+    for r in records:
+        if r.get("k") == "l" and r.get("id") in void:
+            continue
+        if r.get("k") == "l" and r.get("label") in relabel:
+            r = dict(r, label=relabel[r["label"]])
+        out.append(r)
+    for a in entry.get("add", ()):
+        out.append(dict(a))
+    labels = sorted((r for r in out if r.get("k") == "l"), key=lambda r: r["h"])
+    rest = [r for r in out if r.get("k") != "l"]
+    return rest + labels
+
+
 def header_record(args, git, now):
     return {"k": "h", "h": now, "kind": "imu_stream", "unit": args.unit,
             "mount": args.mount, "odr_hz": args.odr, "gyro_fs_dps": args.gyro_fs, "surface": args.surface,
