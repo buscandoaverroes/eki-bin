@@ -18,18 +18,21 @@ tapped". Right hand only; the left holds the bottle.
       taps on the glass   7 top/neck   8 body   9 base
       not the bottle      u knock the table   i tap ANOTHER object on it (cup, basket)
                           o bump (footsteps, door, sitting down on a chair)
-      handling            j lift off   k set down   l grab (touch/grip, no lift)
-      p  mark — "something odd just happened"
+      handling            l grab (hand closes on it)   j lift off   k set down
+                          p release (hand lets go) — the natural sequence is l j k p
+      h  mark — "something odd just happened"
 
   STATES (a stretch of time; press once to START, again to END, press /
   to end whichever is open, or press a different state key to switch.
   An open state is closed automatically when you quit.)
-      n  rest_flat   upright on a surface, untouched
-      m  rest_lean   resting at a slight lean (4-12 deg, the deadzone edge) — this is
-                     how to CAUSE a stuck tilt on purpose: put it down tilted
-      ,  hand_hold   held in the hand, trying to be still
-      .  tilting     actively tilting to adjust brightness
+      n  rest_flat   on the surface, upright, NO hand on it
+      m  rest_lean   on the surface, propped at a slight lean (4-12 deg — a coin or
+                     folded card under one edge), NO hand on it. This is how to
+                     CAUSE a stuck tilt on purpose: the deadzone is 8 deg
+      ,  hand_hold   in the hand, trying to keep it still — no intent to adjust
+      .  tilting     in the hand, deliberately tilting to change brightness
       ;  carry       walking with it
+      (lean = surface does the holding; hold = hand does; tilt = hand moves it)
 
   Backspace or 0 undoes the last label. Append-only, same as interaction_log.py.
   q quits.
@@ -62,18 +65,19 @@ from interaction_log import (MPREMOTE, REPO, UNDO_KEYS, _git_sha, parse_line,  #
 POINTS = {
     "7": "tap_top", "8": "tap_body", "9": "tap_base",
     "u": "knock_table", "i": "knock_object", "o": "bump_other",
-    "j": "lift", "k": "set_down", "l": "grab",
-    "p": "mark",
+    "j": "lift", "k": "set_down", "l": "grab", "p": "release",
+    "h": "mark",
 }
 STATES = {
     "n": "rest_flat", "m": "rest_lean", ",": "hand_hold", ".": "tilting", ";": "carry",
 }
 END_STATE_KEY = "/"      # ends whatever state is open, without remembering its key
-LABEL_MAP = "intent-2"   # intent-1 called i "knock_shelf"; see data/imu-sessions.json
+LABEL_MAP = "intent-3"   # intent-1: i was "knock_shelf"; intent-2: p was "mark"
+#                          (used as release). See data/imu-sessions.json
 LEGEND = (
     ("glass ", "7 top   8 body   9 base"),
     ("other ", "u table   i object on table   o bump (floor, door, chair)"),
-    ("hands ", "j lift   k set down   l grab   p mark"),
+    ("hands ", "l grab   j lift   k set down   p release        h mark"),
     ("state ", "n flat   m lean   , hold   . tilt   ; carry   (press again to end)"),
     ("end   ", "/  ends whatever state is open — quitting also ends it"),
 )
