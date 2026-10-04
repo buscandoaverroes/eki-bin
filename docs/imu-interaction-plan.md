@@ -293,7 +293,8 @@ hypothesis) forbids tuning against anecdotes.**
   rate we wish it ran at. The registers are read back into the header, not
   assumed.
   - *Labels are intent, not verdicts* (`scripts/imu_record.py`): what the human
-    did. Points: `7 8 9` tap top/body/base, `u i o` knock table / shelf /
+    did. Points: `7 8 9` tap top/body/base, `u i o` knock table / tap another object on the table (`knock_object`; was
+    `knock_shelf` in intent-1) /
     bump, `j k l` lift / set down / grab, `p` mark. **States** (press to start,
     again to end): `n` rest_flat, `m` rest_lean, `,` hand_hold, `.` tilting,
     `;` carry. Undo is Backspace/`0`, append-only, as before.
@@ -355,6 +356,11 @@ hypothesis) forbids tuning against anecdotes.**
   - States need an end: `/` ends whichever is open, and quitting closes it, so
     every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
     traceback (`stop_child` escalates INT → TERM → KILL).
+- **First rich recordings (2026-10-04)** — `imu-...-112059` (3.7 min, 135
+  point events: taps at three heights ×20, table knocks ×28, taps on other
+  objects on the table ×26, bumps ×19) and `-112544` (floor walking and sitting
+  on a hard chair ×11). Both 234 Hz, zero failed reads. Which files to analyse,
+  which were dry runs, and per-session relabels: `data/imu-sessions.json`.
 - *Rich-data checklist for a session:* taps at three heights × soft/hard;
     knocks on the table and a shelf at several distances; lifts and set-downs ×
     30; grabs without lifting; long rests flat and leaned; hand-held still;

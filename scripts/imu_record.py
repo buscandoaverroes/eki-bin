@@ -16,7 +16,8 @@ tapped". Right hand only; the left holds the bottle.
 
   POINTS (something that happens at a moment)
       taps on the glass   7 top/neck   8 body   9 base
-      not the bottle      u knock table   i knock shelf/other surface   o bump (door, footsteps, bag)
+      not the bottle      u knock the table   i tap ANOTHER object on it (cup, basket)
+                          o bump (footsteps, door, sitting down on a chair)
       handling            j lift off   k set down   l grab (touch/grip, no lift)
       p  mark — "something odd just happened"
 
@@ -32,6 +33,10 @@ tapped". Right hand only; the left holds the bottle.
 
   Backspace or 0 undoes the last label. Append-only, same as interaction_log.py.
   q quits.
+
+Session notes and relabels live in data/imu-sessions.json (gitignored with the
+recordings): which files to analyse, which were dry runs, and what a label
+actually meant in a given session.
 
 Alignment: every batch from the device carries its own microsecond clock, and
 the Mac stamps each batch (and each label) with its receive time. Offline,
@@ -56,7 +61,7 @@ from interaction_log import (MPREMOTE, REPO, UNDO_KEYS, _git_sha, parse_line,  #
 
 POINTS = {
     "7": "tap_top", "8": "tap_body", "9": "tap_base",
-    "u": "knock_table", "i": "knock_shelf", "o": "bump_other",
+    "u": "knock_table", "i": "knock_object", "o": "bump_other",
     "j": "lift", "k": "set_down", "l": "grab",
     "p": "mark",
 }
@@ -64,10 +69,10 @@ STATES = {
     "n": "rest_flat", "m": "rest_lean", ",": "hand_hold", ".": "tilting", ";": "carry",
 }
 END_STATE_KEY = "/"      # ends whatever state is open, without remembering its key
-LABEL_MAP = "intent-1"
+LABEL_MAP = "intent-2"   # intent-1 called i "knock_shelf"; see data/imu-sessions.json
 LEGEND = (
     ("glass ", "7 top   8 body   9 base"),
-    ("other ", "u table   i shelf   o bump"),
+    ("other ", "u table   i object on table   o bump (floor, door, chair)"),
     ("hands ", "j lift   k set down   l grab   p mark"),
     ("state ", "n flat   m lean   , hold   . tilt   ; carry   (press again to end)"),
     ("end   ", "/  ends whatever state is open — quitting also ends it"),
