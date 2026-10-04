@@ -242,3 +242,79 @@ def test_no_bounce_while_there_is_room_to_move(load_main):
     for i in range(40):
         ctl.update(_g(30.0), 1000 + i * 25, 25)
         assert ctl.rail_bounce is None
+
+
+# ── rate independence: the same motion, at different loop rates ───
+# Replay of real recordings found the controller engaged on deliberate tilts
+# 9/10 times at 57 Hz and 2/10 at 240 Hz (scripts/replay.py, 2026-10-04):
+# every constant counted SAMPLES. They are durations now; these pin that the
+# same physical motion gives the same answer at any rate the loop runs.
+
+def _drive(ctl, script, hz):
+    """script: list of (duration_ms, deg_at_end) linear ramps. Returns the
+    controller's (time_ms, state, engaged) at every update."""
+    step = 1000.0 / hz
+    t, deg, out = 0.0, 0.0, []
+    for dur, target in script:
+        start, t0 = deg, t
+        while t < t0 + dur:
+            t += step
+            frac = min(1.0, (t - t0) / dur)
+            deg = start + (target - start) * frac
+            state = ctl.update(_g(deg), int(t), step)
+            out.append((t, state, ctl.engaged))
+    return out
+
+
+def _first_engaged_ms(trace):
+    return next((t for t, _s, e in trace if e), None)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("hz", [20, 40, 57, 139, 240])
+def test_a_slow_deliberate_tilt_engages_at_every_loop_rate(load_main, hz):
+    m = _load(load_main)
+    ctl = m.TiltController()
+    trace = _drive(ctl, [(1000, 0.0), (3000, 25.0), (2000, 25.0)], hz)
+    assert _first_engaged_ms(trace) is not None, f"never engaged at {hz} Hz"
+
+
+def test_engage_time_does_not_depend_on_loop_rate(load_main):
+    times = []
+    for hz in (40, 240):
+        m = _load(load_main)
+        times.append(_first_engaged_ms(_drive(m.TiltController(),
+                                              [(1000, 0.0), (1500, 20.0), (1000, 20.0)], hz)))
+    assert abs(times[0] - times[1]) < 60, times
+
+
+@pytest.mark.parametrize("hz", [40, 240])
+def test_resting_off_level_re_learns_neutral_at_the_same_speed(load_main, hz):
+    m = _load(load_main)
+    ctl = m.TiltController()
+    _drive(ctl, [(500, 0.0), (100, 6.0), (6000, 6.0)], hz)
+    assert ctl.deg < 1.0
+
+
+def test_time_constants_default_to_what_was_tuned(load_main):
+    m = _load(load_main, TILT_SMOOTH_ALPHA=0.15, TILT_ENGAGE_SAMPLES=4,
+              TILT_STILL_WINDOW=24, TILT_BASELINE_ALPHA=0.02)
+    assert abs(m.SMOOTH_TAU_MS - 153.9) < 1.0
+    assert m.ENGAGE_MS == 75.0 and m.STILL_WINDOW_MS == 575.0
+    assert abs(m.BASELINE_TAU_MS - 1237.5) < 1.0
+
+
+def test_explicit_millisecond_knobs_win(load_main):
+    m = _load(load_main, TILT_SMOOTH_TAU_MS=100, TILT_ENGAGE_MS=50)
+    assert m.SMOOTH_TAU_MS == 100.0 and m.ENGAGE_MS == 50.0
+
+
+def test_alpha_is_the_same_smoother_at_any_rate(load_main):
+    m = _load(load_main)
+    # 10 updates of 10 ms must decay exactly like 1 update of 100 ms
+    x = 1.0
+    for _ in range(10):
+        x *= 1 - m.alpha(10, 154.0)
+    assert abs(x - (1 - m.alpha(100, 154.0))) < 1e-9

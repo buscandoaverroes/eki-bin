@@ -512,6 +512,19 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   is an annoyance; re-baselining onto a hand-held angle poisons every
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
+# ── the same four, in MILLISECONDS — what tilt.py actually uses ──────
+# The four values above are PER SAMPLE: they advance once per update(), so
+# their meaning in time depended on how fast the loop happened to turn — and
+# the production loop turns at 4-139 Hz (insights / imu-interaction-plan).
+# Replay of real recordings (scripts/replay.py, 2026-10-04): deliberate tilts
+# engaged in 9/10 segments at 57 Hz and 2/10 at 240 Hz, same sensor data.
+# These replace them. None = derive from the per-sample value AS TUNED, i.e.
+# at the 25 ms tick tilt_freeform.py ran at, so an existing config.py keeps
+# meaning exactly what it meant when it was tuned. tilt.py does the maths.
+TILT_SMOOTH_TAU_MS = getattr(config, "TILT_SMOOTH_TAU_MS", None)      # ~154 ms
+TILT_ENGAGE_MS = getattr(config, "TILT_ENGAGE_MS", None)              # ~75 ms
+TILT_STILL_WINDOW_MS = getattr(config, "TILT_STILL_WINDOW_MS", None)  # ~575 ms
+TILT_BASELINE_TAU_MS = getattr(config, "TILT_BASELINE_TAU_MS", None)  # ~1.24 s
 
 # ── Hitting a brightness rail ────────────────────────────────────────
 # A rail is INVISIBLE: the display stops changing, and "already at maximum"

@@ -16,10 +16,11 @@
 import math
 
 import settings
-from settings import (TILT_BASELINE_ALPHA, TILT_DEADZONE_DEG, TILT_ENGAGE_SAMPLES,
-    TILT_EXPO, TILT_FIRST_MEANS, TILT_FULL_DEG, TILT_G_TOLERANCE,
-    TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, TILT_RAIL_REPEAT_MS, TILT_RATE_PER_SEC,
-    TILT_SMOOTH_ALPHA, TILT_STILL_DEG, TILT_STILL_MS, TILT_STILL_WINDOW)
+from settings import (TILT_BASELINE_ALPHA, TILT_BASELINE_TAU_MS, TILT_DEADZONE_DEG,
+    TILT_ENGAGE_MS, TILT_ENGAGE_SAMPLES, TILT_EXPO, TILT_FIRST_MEANS, TILT_FULL_DEG,
+    TILT_G_TOLERANCE, TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, TILT_RAIL_REPEAT_MS,
+    TILT_RATE_PER_SEC, TILT_SMOOTH_ALPHA, TILT_SMOOTH_TAU_MS, TILT_STILL_DEG,
+    TILT_STILL_MS, TILT_STILL_WINDOW, TILT_STILL_WINDOW_MS)
 
 # ⚠ THE "3.5s TO REVERSE" BUDGET IS GONE, and its absence is a feature.
 # The sandbox ended a session after a dwell inside the deadzone, which
@@ -31,6 +32,43 @@ from settings import (TILT_BASELINE_ALPHA, TILT_DEADZONE_DEG, TILT_ENGAGE_SAMPLE
 # is genuinely set down.
 
 _G_LSB = 0.061 / 1000.0     # raw → g at ±2g, same scaling gestures.py assumes
+
+# ── time, not samples ─────────────────────────────────────────────────
+# Every constant below used to advance once per update(), so the controller
+# behaved differently at every loop rate: replaying the same recording,
+# deliberate tilts engaged 9/10 times at 57 Hz and 2/10 at 240 Hz (the
+# baseline leak, 0.02 a SAMPLE, re-learned "upright" four times faster in
+# real time and swallowed slow tilts whole). Now each is a duration, and a
+# per-sample coefficient is computed from the actual dt of each update:
+#     alpha(dt) = 1 - exp(-dt / tau)
+# which is the same exponential smoother at any rate. Defaults are derived
+# from the per-sample values AS TUNED, at tilt_freeform.py's 25 ms tick, so
+# nothing that was tuned changes meaning — it just stops depending on rate.
+_TUNED_DT_MS = 25.0
+
+
+def _tau(tau_ms, per_sample_alpha):
+    if tau_ms is not None:
+        return float(tau_ms)
+    return -_TUNED_DT_MS / math.log(1.0 - per_sample_alpha)
+
+
+SMOOTH_TAU_MS = _tau(TILT_SMOOTH_TAU_MS, TILT_SMOOTH_ALPHA)
+BASELINE_TAU_MS = _tau(TILT_BASELINE_TAU_MS, TILT_BASELINE_ALPHA)
+ENGAGE_MS = (float(TILT_ENGAGE_MS) if TILT_ENGAGE_MS is not None
+             else (TILT_ENGAGE_SAMPLES - 1) * _TUNED_DT_MS)
+STILL_WINDOW_MS = (float(TILT_STILL_WINDOW_MS) if TILT_STILL_WINDOW_MS is not None
+                   else (TILT_STILL_WINDOW - 1) * _TUNED_DT_MS)
+_MAX_DT_MS = 1000.0     # a longer gap (a tap capture, a motion word) is a gap,
+#                         not a reason to let one sample swing every filter
+
+
+def alpha(dt_ms, tau_ms):
+    """PURE: the per-update coefficient of an exponential smoother with time
+    constant tau_ms, for an update dt_ms after the last one."""
+    if dt_ms <= 0:
+        return 0.0
+    return 1.0 - math.exp(-min(dt_ms, _MAX_DT_MS) / tau_ms)
 
 
 def expo(x, amount=None):
@@ -117,8 +155,10 @@ class TiltController:
         self.filt = None        # smoothed gravity direction
         self.axis = None        # direction of the current session's first lean
         self.engaged = False
-        self.past_deadzone = 0
-        self.still_win = []
+        self.past_deadzone = 0  # samples past the deadzone (diagnostic only)
+        self.past_since = None  # clock time the current run past the deadzone began
+        self.still_win = []     # (clock_ms, raw_deg), the last STILL_WINDOW_MS
+        self.clock = 0.0        # sum of dt — monotonic even if callers' now_ms is not
         self.still_since = 0
         self.rejected = 0
         self.deg = 0.0
@@ -131,6 +171,7 @@ class TiltController:
 
     def update(self, raw, now_ms, dt_ms):
         sample, mag_g = _norm((raw[0] * _G_LSB, raw[1] * _G_LSB, raw[2] * _G_LSB))
+        self.clock += max(0, dt_ms)
 
         # (1) magnitude gate — not gravity, so its direction means nothing
         if abs(mag_g - 1.0) > TILT_G_TOLERANCE:
@@ -142,7 +183,7 @@ class TiltController:
         if self.filt is None:
             self.filt = sample
         else:
-            a = TILT_SMOOTH_ALPHA
+            a = alpha(dt_ms, SMOOTH_TAU_MS)
             self.filt = _norm((
                 self.filt[0] + (sample[0] - self.filt[0]) * a,
                 self.filt[1] + (sample[1] - self.filt[1]) * a,
@@ -160,11 +201,14 @@ class TiltController:
         # (3) stillness — on the RAW angle, because the smoothing above
         # removes exactly the tremor that distinguishes a hand from a table
         raw_deg, _u = tilt_from(sample, self.rest)
-        self.still_win.append(raw_deg)
-        if len(self.still_win) > TILT_STILL_WINDOW:
+        self.still_win.append((self.clock, raw_deg))
+        while self.still_win and self.clock - self.still_win[0][0] > STILL_WINDOW_MS:
             self.still_win.pop(0)
-        if len(self.still_win) >= TILT_STILL_WINDOW:
-            self.jitter = max(self.still_win) - min(self.still_win)
+        # "full" = the window covers (nearly) its whole span in time, however
+        # many samples that took
+        if self.clock - self.still_win[0][0] >= 0.9 * STILL_WINDOW_MS:
+            degs = [d for _t, d in self.still_win]
+            self.jitter = max(degs) - min(degs)
         else:
             self.jitter = None
         if self.jitter is None or self.jitter > TILT_STILL_DEG:
@@ -179,18 +223,20 @@ class TiltController:
             self.engaged = False
             self.axis = None
             self.past_deadzone = 0
+            self.past_since = None
             self.rate = 0.0
             return "released"
 
         if deg < TILT_DEADZONE_DEG:
             self.past_deadzone = 0
+            self.past_since = None
             self.rate = 0.0
             if not self.engaged:
                 # Idle and level: let neutral drift to where it actually
                 # sits. The same auto-baselining a capacitive touch chip
                 # does at power-on (surface-as-input.md §2). Gated on
                 # not-engaged so it can never eat a deliberate slow tilt.
-                b = TILT_BASELINE_ALPHA
+                b = alpha(dt_ms, BASELINE_TAU_MS)
                 self.rest = _norm((
                     self.rest[0] + (self.filt[0] - self.rest[0]) * b,
                     self.rest[1] + (self.filt[1] - self.rest[1]) * b,
@@ -198,10 +244,14 @@ class TiltController:
                 ))[0]
             return "idle"
 
-        # One good sample past the deadzone is not a tilt; four in a row is.
+        # One good sample past the deadzone is not a tilt; ENGAGE_MS of them
+        # in a row is (it was "four in a row" — 75 ms at the tuned 25 ms tick,
+        # 17 ms at 240 Hz, a second at 4 Hz).
         self.past_deadzone += 1
+        if self.past_since is None:
+            self.past_since = self.clock
         if not self.engaged:
-            if self.past_deadzone < TILT_ENGAGE_SAMPLES:
+            if self.clock - self.past_since < ENGAGE_MS:
                 self.rate = 0.0
                 return "idle"
             self.engaged = True
