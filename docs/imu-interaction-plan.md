@@ -327,6 +327,13 @@ hypothesis) forbids tuning against anecdotes.**
     between batches, traced to `import struct`/`import binascii` *inside* the
     per-batch functions — under the mount each costs a round trip to the Mac.
     Moved to module top and pinned by a test; not yet re-measured.
+  - **Third sandbox run (68 s): 95–119 Hz.** The between-batch stall is back to
+    ~8.5 ms (the import fix worked), but ~20 % of sample intervals *inside*
+    batches were ~26 ms, evenly spread across row positions — so not the
+    print. The throttle's `time.sleep_us` is the suspect (it lets the port
+    service USB/the mount); replaced with a spin-wait. Expected ceiling after
+    that is ~215–220 Hz (20 samples per ~92 ms); **lossless 240 needs the
+    sensor FIFO.**
   - States need an end: `/` ends whichever is open, and quitting closes it, so
     every segment in a file is a closed interval. Ctrl-C/`q` no longer prints a
     traceback (`stop_child` escalates INT → TERM → KILL).

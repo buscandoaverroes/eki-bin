@@ -113,7 +113,14 @@ def run(odr_hz=240):
             print(interlog.fmt_batch_b64(t_batch0, rows))
             rows = []
         else:
-            time.sleep_us(settle_us)
+            # SPIN, don't sleep. time.sleep_us() lets the port service USB and
+            # the mount protocol, and on 2026-10-04 ~20 % of sample intervals
+            # came back as ~26 ms instead of ~4 ms — spread evenly across the
+            # batch, so not the print. A spin costs only CPU, which nothing
+            # else here wants, and keeps the bus quiet just the same.
+            deadline = time.ticks_add(time.ticks_us(), settle_us)
+            while time.ticks_diff(deadline, time.ticks_us()) > 0:
+                pass
 
 
 def main():
