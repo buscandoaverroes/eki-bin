@@ -38,6 +38,7 @@ from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     NO_DATA_COLOR, NO_DATA_DURATION_MS, NUM_LEDS, ORIENTATION_MAP,
     ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
     SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
+    TAP_VERTICAL_SHARE_MAX,
     STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
     TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
     WAKE_JOLT_BRIGHTNESS_MULT, WAKE_JOLT_MS, WAKE_SETTLE_MS)
@@ -188,6 +189,43 @@ def _gesture_dominant_axis(sample):
     return axis
 
 
+_IMPULSE_MS = 150        # the impact itself, for impulse_vertical_share
+_SETTLED_FROM_MS = 500   # from here on the bottle is (normally) at rest again
+
+
+def impulse_vertical_share(samples):
+    """PURE: fraction of the impact's energy that lies ALONG GRAVITY.
+
+    Gravity is the direction the capture settles to (median of every axis
+    from _SETTLED_FROM_MS on); the impact is the deviation from that over the
+    first _IMPULSE_MS. A knock on the table arrives through the base,
+    vertically; a finger on the glass pushes sideways. Mount-independent by
+    construction — it never asks which sensor axis is "up".
+
+    Returns None when it cannot say (too few settled samples, or no impulse),
+    and the caller treats None as "no evidence", never as a rejection.
+    """
+    late = [s for s in samples if s[0] >= _SETTLED_FROM_MS]
+    if len(late) < 5:
+        return None
+    bx = _gesture_median([s[1] for s in late])
+    by = _gesture_median([s[2] for s in late])
+    bz = _gesture_median([s[3] for s in late])
+    n = math.sqrt(bx * bx + by * by + bz * bz)
+    if n == 0:
+        return None
+    ux, uy, uz = bx / n, by / n, bz / n
+    vert = total = 0.0
+    for t, x, y, z in samples:
+        if t > _IMPULSE_MS:
+            break
+        dx, dy, dz = x - bx, y - by, z - bz
+        p = dx * ux + dy * uy + dz * uz
+        vert += p * p
+        total += dx * dx + dy * dy + dz * dz
+    return vert / total if total > 0 else None
+
+
 def extract_gesture_features(samples):
     """PURE: raw (t_ms, x, y, z) samples → the same feature set
     prepare_tap_dataset.py validated (docs/insights.md §8-9). `samples`
@@ -237,6 +275,7 @@ def extract_gesture_features(samples):
         "num_crossings": len(crossing_times),
         "spacing_mean_ms": _gesture_mean(gaps) if gaps else None,
         "spacing_stdev_ms": _gesture_stdev(gaps) if len(gaps) > 1 else None,
+        "vert_share": impulse_vertical_share(samples),
     }
 
 
@@ -319,7 +358,14 @@ def classify_valid_input(features):
     describes, not a replacement for classify_tap_or_flick, which stays
     defined and tested for when GESTURE_FLICK_ENABLED/GESTURE_POSITION_
     ENABLED come back on."""
-    return features["energy"] < TAP_ENERGY_THRESHOLD
+    if features["energy"] >= TAP_ENERGY_THRESHOLD:
+        return False
+    # Through the surface, not a touch (see impulse_vertical_share). Added
+    # 2026-10-04 from replay; None (no evidence) never rejects.
+    vs = features.get("vert_share")
+    if TAP_VERTICAL_SHARE_MAX is not None and vs is not None and vs >= TAP_VERTICAL_SHARE_MAX:
+        return False
+    return True
 
 
 # ─────────────────────────────────────────────────────────────

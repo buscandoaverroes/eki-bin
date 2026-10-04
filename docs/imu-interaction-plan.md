@@ -415,6 +415,21 @@ hypothesis) forbids tuning against anecdotes.**
     future tap sessions want ≥4 s between events, taps and knocks in separate
     files.
 
+- **Shipped from the Phase 1 results (2026-10-04), both verified by replay:**
+  1. *Tilt constants are durations* (`TILT_*_MS`; defaults derived from the
+     per-sample values as tuned at 25 ms). Deliberate tilts now engage 10/10
+     at 57, 139 and 240 Hz (was 2/10 at 240). The lean-induced stuck tilt now
+     reproduces identically at every rate (2/10 lean segments) — a stable
+     target for the next fix (deadzone hysteresis).
+  2. *The vertical-impulse check* (`TAP_VERTICAL_SHARE_MAX = 0.5`,
+     `gestures.impulse_vertical_share`), measured against the settled gravity
+     vector, not the sensor's z, so it is mount-independent. Firmware verdicts,
+     check off → on: knocks on the table/objects accepted **17 → 1 at 57 Hz,
+     23 → 1 at 240 Hz**, true taps hit unchanged; it also removes about half
+     the handling taps between labelled actions (23 → 12). Bumps rose 0 → 1
+     and 2 → 4: a rejected knock no longer blinds the loop, so the next event
+     is seen — the busy window, not the check.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

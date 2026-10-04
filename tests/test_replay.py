@@ -58,16 +58,21 @@ def test_a_lateral_tap_is_triggered_accepted_and_scored_as_a_hit(fw):
     assert (sc["hit"], sc["miss"]) == (1, 0)
 
 
-def test_a_vertical_knock_is_accepted_today_but_the_z_veto_rejects_it(fw):
+def test_a_vertical_knock_is_rejected_by_the_shipped_vertical_share_check(fw):
     s = with_impulse(still(0, 5000), 2000, dz=3000)
-    cands = rp.candidate_rules()
-    ev = rp.replay(fw, s, loop_hz=240, gyro_mdps=35.0, candidates=cands)
+    ev = rp.replay(fw, s, loop_hz=240, gyro_mdps=35.0, candidates=rp.candidate_rules())
     tap = [e for e in ev if e["e"] == "tap"][0]
-    assert tap["valid"] and tap["feats"]["z_share"] > 0.8
-    labs = [label("knock_table", 2400)]
-    assert rp.score(ev, labs, [])["false"] == {"knock_table": 1}
-    z = rp.score(ev, labs, [], accept=lambda e: e["valid"] and e["cand"]["z_veto"])
-    assert z["false"] == {}
+    assert tap["feats"]["vert_share"] > 0.8 and tap["feats"]["z_share"] > 0.8
+    assert not tap["valid"]                         # firmware now says no
+    assert rp.score(ev, [label("knock_table", 2400)], [])["false"] == {}
+
+
+def test_without_the_check_the_same_knock_is_a_false_tap():
+    fw_off = rp.load_firmware({"TAP_TRIGGER_THRESHOLD_MG": 50, "TAP_ENERGY_THRESHOLD": 138000,
+                               "TAP_VERTICAL_SHARE_MAX": None})
+    s = with_impulse(still(0, 5000), 2000, dz=3000)
+    ev = rp.replay(fw_off, s, loop_hz=240, gyro_mdps=35.0)
+    assert rp.score(ev, [label("knock_table", 2400)], [])["false"] == {"knock_table": 1}
 
 
 def test_a_tap_inside_the_previous_taps_busy_window_is_missed_as_blind(fw):

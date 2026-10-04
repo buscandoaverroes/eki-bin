@@ -365,6 +365,15 @@ GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
 TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
 #   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
 #   (chianti bottle), see §11
+# Reject a contact whose first 150 ms of impulse is mostly ALONG GRAVITY: a
+# knock on the table (or on a cup standing on it) reaches the bottle through
+# its base, vertically, while a finger on the glass pushes sideways. Replay of
+# the 2026-10-04 recordings: knocks on the table/objects accepted 17/54 at the
+# production loop rate; with this at 0.5, 1 — and no true tap lost
+# (docs/imu-interaction-plan.md, Phase 1 results). Measured against the
+# gravity vector the capture settles to, NOT the sensor's z axis, so it does
+# not depend on how the IMU is mounted. None disables it.
+TAP_VERTICAL_SHARE_MAX = getattr(config, "TAP_VERTICAL_SHARE_MAX", 0.5)
 ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
 #   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
 #   hardware allow

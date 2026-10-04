@@ -613,3 +613,52 @@ def test_mem_report_survives_empty_and_prints_deltas(load_main, capsys):
     out = capsys.readouterr().out
     assert "after import" in out and "after schedule load" in out
     assert "-40000" in out.replace(",", "")
+
+
+# ── impulse_vertical_share: a knock through the surface vs. a touch ──────
+# docs/imu-interaction-plan.md Phase 1: knocks on the table were the largest
+# false-tap class; their impulse arrives along gravity. Measured against the
+# gravity the capture settles to, so it must not care how the IMU is mounted.
+
+def _capture(gravity, impulse, n=290, step=4, hit=(8, 11)):
+    """(t, x, y, z) at `step` ms; `impulse` added to samples hit[0]..hit[1]."""
+    out = []
+    for i in range(n):
+        v = list(gravity)
+        if hit[0] <= i < hit[1]:
+            v = [g + d for g, d in zip(v, impulse)]
+        out.append((i * step, v[0], v[1], v[2]))
+    return out
+
+
+def test_a_sideways_push_is_mostly_not_vertical(load_main):
+    m = load_main()
+    assert m.impulse_vertical_share(_capture((0, 0, 16384), (5000, 0, 0))) < 0.05
+
+
+def test_a_knock_from_below_is_mostly_vertical(load_main):
+    m = load_main()
+    assert m.impulse_vertical_share(_capture((0, 0, 16384), (0, 0, 3000))) > 0.95
+
+
+def test_it_does_not_depend_on_which_axis_is_up(load_main):
+    m = load_main()
+    # IMU mounted on its side: gravity along x. The same physical knock from
+    # below is now an x impulse — and must still read as vertical.
+    assert m.impulse_vertical_share(_capture((16384, 0, 0), (3000, 0, 0))) > 0.95
+    assert m.impulse_vertical_share(_capture((16384, 0, 0), (0, 0, 5000))) < 0.05
+
+
+def test_no_settled_tail_means_no_evidence_not_rejection(load_main):
+    m = load_main(TAP_ENERGY_THRESHOLD=138000, TAP_VERTICAL_SHARE_MAX=0.5)
+    short = _capture((0, 0, 16384), (0, 0, 3000), n=50)          # 200 ms only
+    assert m.impulse_vertical_share(short) is None
+    assert m.classify_valid_input({"energy": 10, "vert_share": None}) is True
+
+
+def test_the_vertical_check_rejects_and_can_be_disabled(load_main):
+    m = load_main(TAP_ENERGY_THRESHOLD=138000, TAP_VERTICAL_SHARE_MAX=0.5)
+    assert m.classify_valid_input({"energy": 10, "vert_share": 0.9}) is False
+    assert m.classify_valid_input({"energy": 10, "vert_share": 0.1}) is True
+    m = load_main(TAP_ENERGY_THRESHOLD=138000, TAP_VERTICAL_SHARE_MAX=None)
+    assert m.classify_valid_input({"energy": 10, "vert_share": 0.9}) is True
