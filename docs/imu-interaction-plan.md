@@ -280,6 +280,33 @@ hypothesis) forbids tuning against anecdotes.**
      two.
   7. **Asleep vs awake** — only four wakes recorded; and quiet hours.
   8. **A second session on another day.**
+- **Phase 0b — the raw-sensor sandbox (2026-10-04; `make imu-record`).** The
+  in-situ recorder above records the pipeline *and its failures*: the loop is
+  slow, blind for ~2.7 s after a tap, and its tilt constants depend on its own
+  rate. So, ahead of any firmware fix: **record the sensor, not the pipeline.**
+  `micropython/imu_stream.py` runs nothing else — no recogniser, no render —
+  and streams raw accel + gyro at the sensor's rate (240 Hz default; 480/960
+  selectable, untested) with its own microsecond clock, a data-ready flag per
+  sample and a once-a-second `stat` (achieved Hz, worst gap). Everything the
+  firmware would have decided is then **replayed on the Mac through the real
+  `tilt.py` / trigger / classifier at any simulated loop rate**, including the
+  rate we wish it ran at. The registers are read back into the header, not
+  assumed.
+  - *Labels are intent, not verdicts* (`scripts/imu_record.py`): what the human
+    did. Points: `7 8 9` tap top/body/base, `u i o` knock table / shelf /
+    bump, `j k l` lift / set down / grab, `p` mark. **States** (press to start,
+    again to end): `n` rest_flat, `m` rest_lean, `,` hand_hold, `.` tilting,
+    `;` carry. Undo is Backspace/`0`, append-only, as before.
+  - *How to cause a stuck tilt on purpose:* you cannot make the firmware stick,
+    but you can record its *input* — **`m` rest_lean: set the bottle down at a
+    4–12° lean, on a few surfaces, for 30–60 s each**, plus `,` hand_hold and
+    `.` tilting around the deadzone edge. Replay then finds the stuck state
+    offline, reproducibly, and the regression test is made from the recording.
+  - *Rich-data checklist for a session:* taps at three heights × soft/hard;
+    knocks on the table and a shelf at several distances; lifts and set-downs ×
+    30; grabs without lifting; long rests flat and leaned; hand-held still;
+    tilting; carrying. Note the surface and whether the bottle is empty or
+    filled (`SURFACE=`, `NOTE=`) — it changes the dynamics.
 - **Exit:** ≥30 labelled examples of failure B and ≥30 of true taps, across
   at least two sessions (§8's bar), stored under `data/` (gitignored, like
   `rtc-drift.jsonl`), with the unit recorded from the start (see the

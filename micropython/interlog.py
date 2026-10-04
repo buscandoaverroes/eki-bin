@@ -46,6 +46,15 @@ _CTRL2_REG = 0x11
 _GYRO_240HZ_HIGH_PERF = 0x07
 _OUTX_L_G = 0x22
 
+# Output data rate codes, shared by the accel (CTRL1) and gyro (CTRL2). 0x05 =
+# 60 Hz and 0x07 = 240 Hz are confirmed in imu_test.py / gestures.py; the codes
+# above 240 continue the datasheet's doubling series and are NOT yet confirmed
+# on this silicon — imu_stream.py reports the achieved rate every second, so a
+# wrong code shows up as a wrong number rather than as silently wrong data.
+ODR_CODES = {60: 0x05, 120: 0x06, 240: 0x07, 480: 0x08, 960: 0x09}
+
+STREAM_ODR = 240            # imu_stream.py; the host overrides it before running
+
 ACTIVE_HZ = 50
 IDLE_HZ = 5
 HOLD_MS = 2000
@@ -88,6 +97,19 @@ def fmt_meta(t, knobs):
     for key in sorted(knobs):
         parts.append('%s:%s' % (_val(key), _val(knobs[key])))
     return TAG + "{" + ",".join(parts) + "}"
+
+
+def fmt_batch(t0, rows):
+    """A burst of raw samples from the dedicated streamer (imu_stream.py).
+    rows: (dt_us, gx, gy, gz, ax, ay, az, status). `t0` is the device time of
+    the first row, in us since the stream started."""
+    body = ",".join("[%d,%d,%d,%d,%d,%d,%d,%d]" % tuple(r) for r in rows)
+    return '%s{"k":"b","t0":%d,"d":[%s]}' % (TAG, t0, body)
+
+
+def fmt_stat(t_us, n, hz, max_gap_us, errors):
+    return '%s{"k":"t","t":%d,"n":%d,"hz":%.1f,"max_gap_us":%d,"err":%d}' % (
+        TAG, t_us, n, hz, max_gap_us, errors)
 
 
 def fmt_capture_chunks(t0, rows):

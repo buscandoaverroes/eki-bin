@@ -355,6 +355,15 @@ interaction-log: _check-mpremote
 	@test -n "$(UNIT)" || (echo "✗ usage: make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [NOTE=...]" && exit 1)
 	$(PYTHON) scripts/interaction_log.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(LEVEL),--level $(LEVEL),) $(if $(NOTE),--note "$(NOTE)",)
 
+# The raw-sensor sandbox: stream accel + gyro at the sensor's rate and label
+# what you DID (taps, knocks, lifts, rests, tilts). Runs none of the firmware;
+# everything the firmware would decide is replayed on the Mac afterwards.
+#   make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=wood] [NOTE="..."]
+.PHONY: imu-record
+imu-record: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=...] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",)
+
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.
 .PHONY: example-schedule
