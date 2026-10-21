@@ -713,6 +713,105 @@ def test_the_gyro_check_rejects_rotation_and_none_is_no_evidence(load_main):
     assert m.classify_valid_input({"energy": 10, "gyro_mid_dps": 3.0})
 
 
+# ── the warm-up guard: "once, asleep, it could not be woken" ─────────────
+# 35 mdps/LSB, so 1 dps = 28.6 LSB. The tap check rejects above 1.15 dps.
+
+def _rest_window(bias_lsb):
+    """A tap's 150-400 ms window with the bottle perfectly still at the
+    TRUE resting offset (0,0,0): any rotation it reads is pure bias error."""
+    return [(t, 0, 0, 0) for t in range(0, 450, 5)]
+
+
+def test_the_unwakeable_case_is_reproduced_and_now_abstains(load_main):
+    """THE watch item. The baseline seeds from the first sample it sees; if
+    that sample was taken mid-handling it starts wrong. Seeded at 20 dps of
+    rotation — beyond the 5 dps gate — every at-rest sample afterwards is
+    gated out, so it cannot learn its way back, and only re-seeds after
+    10 s. Before the guard, every tap in that window read as ~20 dps of
+    rotation and was rejected: nothing could wake it."""
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    b.update((572, 0, 0), 0)                     # seeded mid-handling: 20 dps
+    for _ in range(500):                         # 5 s perfectly still afterwards
+        b.update((0, 0, 0), 10)
+
+    # the old path: trust the bias as soon as it exists
+    wrong = m.gyro_mid_dps(_rest_window(0), b.bias, 35.0)
+    assert wrong > 15, "the bug: a still bottle reads as ~20 dps of rotation"
+    # the guarded path: no evidence, so the tap is judged on the other checks
+    assert b.estimate() is None
+    assert m.gyro_mid_dps(_rest_window(0), b.estimate(), 35.0) is None
+
+
+def test_two_seconds_would_not_have_been_enough(load_main):
+    """Why the warm-up is 3 tau and not the ~2 s first suggested. A seed
+    inside the gate CAN be learned from, but per-axis 5 dps is up to
+    sqrt(3) x 5 = 8.7 dps of magnitude, and after one tau of rest that is
+    still 3.2 dps — above the 1.15 dps threshold. A 2 s guard would have
+    released a baseline that still rejected every tap."""
+    m = load_main()
+    off = 142                                    # just inside the 5 dps gate on every
+    #   axis: 5 dps is 142.86 LSB, so 143 would be gated out and never learn
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    b.update((off, off, off), 0)
+    for _ in range(200):                         # 2 s at the true rest
+        b.update((0, 0, 0), 10)
+    assert m.gyro_mid_dps(_rest_window(0), b.bias, 35.0) > 1.15
+    assert b.estimate() is None                  # and the guard is still holding
+
+    for _ in range(400):                         # to 6 s = 3 tau
+        b.update((0, 0, 0), 10)
+    assert b.estimate() is not None
+    assert m.gyro_mid_dps(_rest_window(0), b.estimate(), 35.0) < 0.5
+
+
+def test_being_picked_up_does_not_restart_the_warm_up(load_main):
+    """A good baseline that sees the bottle handled is still a good
+    baseline. Only a re-seed — a new, unproven value — starts again;
+    otherwise every grab would switch the gyro check off for 6 s."""
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    b.update((0, 0, 0), 0)
+    for _ in range(700):                         # 7 s learned at rest
+        b.update((0, 0, 0), 10)
+    assert b.estimate() is not None
+    for _ in range(100):                         # 1 s of handling: gated out
+        b.update((2000, 0, 0), 10)
+    assert b.estimate() is not None
+
+
+def test_a_reseed_is_unproven_again(load_main):
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    b.update((0, 0, 0), 0)
+    for _ in range(700):
+        b.update((0, 0, 0), 10)
+    assert b.estimate() is not None
+    for _ in range(1100):                        # 11 s gated: re-seeds
+        b.update((2000, 0, 0), 10)
+    assert b.bias[0] == 2000.0
+    assert b.estimate() is None
+
+
+def test_one_sample_after_a_long_gap_is_not_seconds_of_learning(load_main):
+    """The loop blocks for whole seconds during a ceremony or a tap's
+    capture, so dt can be large. One sample is one sample — clamped like
+    the alpha, or a single reading after the goodnight sunset would
+    certify the baseline on its own."""
+    m = load_main()
+    b = m.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    b.update((0, 0, 0), 0)
+    b.update((0, 0, 0), 8000)
+    assert b.estimate() is None
+
+
+def test_the_default_warm_up_is_three_time_constants(load_main):
+    m = load_main()
+    import importlib
+    st = importlib.import_module("settings")
+    assert st.GYRO_BIAS_WARMUP_MS == 3 * st.GYRO_BIAS_TAU_MS
+
+
 def test_energy_default_is_now_a_coarse_guard(load_main):
     m = load_main()
     assert m.TAP_ENERGY_THRESHOLD == 1_000_000

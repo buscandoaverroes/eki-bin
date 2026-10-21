@@ -39,6 +39,7 @@ from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
     SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
     TAP_VERTICAL_SHARE_MAX, TAP_GYRO_MID_MAX_DPS, GYRO_BIAS_TAU_MS,
+    GYRO_BIAS_WARMUP_MS,
     GYRO_BIAS_GATE_DPS,
     STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
     TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
@@ -163,16 +164,22 @@ class GyroBias:
 
     _RESEED_MS = 10_000
 
-    def __init__(self, tau_ms=None, gate_dps=None, mdps=GYRO_MDPS_PER_LSB):
+    def __init__(self, tau_ms=None, gate_dps=None, mdps=GYRO_MDPS_PER_LSB,
+                 warmup_ms=None):
         self.tau_ms = float(GYRO_BIAS_TAU_MS if tau_ms is None else tau_ms)
         gate = GYRO_BIAS_GATE_DPS if gate_dps is None else gate_dps
         self.gate_lsb = gate * 1000.0 / mdps
+        self.warmup_ms = float(GYRO_BIAS_WARMUP_MS if warmup_ms is None
+                               else warmup_ms)
         self.bias = None
         self._gated_ms = 0
+        self._learned_ms = 0    # time spent learning at rest since the last
+        #   seed — see estimate()
 
     def update(self, g, dt_ms):
         if self.bias is None:
             self.bias = [float(g[0]), float(g[1]), float(g[2])]
+            self._learned_ms = 0
             return
         dev = max(abs(g[0] - self.bias[0]), abs(g[1] - self.bias[1]),
                   abs(g[2] - self.bias[2]))
@@ -181,13 +188,33 @@ class GyroBias:
             if self._gated_ms >= self._RESEED_MS:
                 self.bias = [float(g[0]), float(g[1]), float(g[2])]
                 self._gated_ms = 0
+                self._learned_ms = 0   # a fresh seed is unproven again
             return
         self._gated_ms = 0
         if dt_ms <= 0:
             return
-        a = 1.0 - math.exp(-min(dt_ms, 1000) / self.tau_ms)
+        step = min(dt_ms, 1000)     # same clamp as the alpha: one sample
+        #   after a long blocked gap is one sample, not seconds of learning
+        a = 1.0 - math.exp(-step / self.tau_ms)
         for i in range(3):
             self.bias[i] += (g[i] - self.bias[i]) * a
+        self._learned_ms += step
+
+    def estimate(self):
+        """The baseline, or None until it has learned for warmup_ms at rest.
+
+        None is what gyro_mid_dps already treats as "no evidence", so an
+        unproven baseline makes the gyro check ABSTAIN rather than reject.
+        That is the whole fix for the unwakeable case: a seed taken while
+        the bottle was being handled used to be trusted immediately, so for
+        up to _RESEED_MS every tap read as rotation and was thrown away.
+
+        Note what does NOT reset the count: being gated out. A good baseline
+        that sees the bottle picked up is still a good baseline — only a
+        re-seed (a new, unproven value) starts the warm-up again."""
+        if self.bias is None or self._learned_ms < self.warmup_ms:
+            return None
+        return self.bias
 
 
 GYRO_BIAS = GyroBias()      # the one the firmware loop feeds
@@ -1013,7 +1040,7 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     tap_state.acknowledge()
     samples, gyro_rows = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
-    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.bias)
+    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.estimate())
     valid = classify_valid_input(features)
     if capture_observer is not None:
         capture_observer.cap_done(trigger_ms, samples, features, valid)

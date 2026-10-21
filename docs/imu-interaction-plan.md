@@ -478,6 +478,22 @@ hypothesis) forbids tuning against anecdotes.**
   10 s re-seed. Cheap guard if it recurs: have the gyro check abstain (None)
   until the baseline has learned for ~2 s at rest. Log any recurrence with
   `make interaction-log`.
+  - **Guard added 2026-10-21, at 6 s rather than 2.** `GyroBias.estimate()`
+    returns None — "no evidence", never a rejection — until the baseline has
+    spent `GYRO_BIAS_WARMUP_MS` (default 3 × `GYRO_BIAS_TAU_MS`) learning at
+    rest since its last seed. **2 s would not have been enough:** the gate is
+    per-axis 5 dps, so a seed can be off by up to √3 × 5 = 8.7 dps and still
+    be learned from; after one time constant that is still 3.2 dps, above
+    the 1.15 dps threshold. After three it is 0.43.
+    Being gated out (handling) does not restart the warm-up — a good
+    baseline that sees a grab is still good — only a re-seed does.
+    **Replay can't see this one:** every recording starts at rest, so the
+    guard scores identically to no guard (57 and 240 Hz, ideal) — free, but
+    also unexercised. The evidence is a test that reproduces the case
+    directly (`test_the_unwakeable_case_is_reproduced_and_now_abstains`:
+    seeded at 20 dps, a perfectly still bottle reads as ~20 dps of rotation
+    on the old path). Whether it was *the* cause of the one observed
+    episode is still unknown; `make dev`'s mount remains the other suspect.
 
 ### Phase 2 — The arbiter (the structural fix)
 

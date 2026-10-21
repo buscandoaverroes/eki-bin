@@ -394,6 +394,20 @@ GYRO_BIAS_TAU_MS = getattr(config, "GYRO_BIAS_TAU_MS", 2000)   # how fast the
 #   resting baseline follows (temperature drift is minutes; 2 s is plenty)
 GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn
 #   from samples within this of the current baseline — i.e. only at rest
+# The gyro check ABSTAINS until the baseline has spent this long learning at
+# rest. Added 2026-10-21 for the "once, asleep, it could not be woken" watch
+# item: the baseline seeds from the first sample it sees, and if that sample
+# was taken mid-handling it starts wrong — then every tap reads as rotation
+# and is rejected until the baseline recovers. Abstaining means "no
+# evidence", never a rejection, so taps still pass the other two checks.
+#
+# ⚠ 3 time constants, NOT the ~2 s the interaction plan first suggested. The
+# gate is per-axis 5 dps, so a seed can be off by up to sqrt(3) x 5 = 8.7 dps
+# and still be learned from. Error after t at rest is 8.7 x exp(-t/tau):
+#   t = 1 tau (2 s)  ->  3.2 dps   still above the 1.15 dps threshold
+#   t = 3 tau (6 s)  ->  0.43 dps  well clear of it
+# A 2 s guard would have left exactly the failure it was meant to remove.
+GYRO_BIAS_WARMUP_MS = getattr(config, "GYRO_BIAS_WARMUP_MS", 3 * GYRO_BIAS_TAU_MS)
 ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
 #   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
 #   hardware allow
