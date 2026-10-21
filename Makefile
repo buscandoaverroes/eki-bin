@@ -240,12 +240,17 @@ rtc-test: _check-mpremote
 # week. Appends to data/rtc-drift.jsonl (gitignored) -- run it once to set a
 # baseline, again later for a figure. Pass --mark-seed after re-setting the
 # chip, since that destroys the baseline.
-#   make rtc-drift                    (XIAO RP2350 defaults)
-#   make rtc-drift ARGS="--mark-seed"
-#   make rtc-drift ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+#   make rtc-drift UNIT=bottle-01                    (XIAO RP2350 defaults)
+#   make rtc-drift UNIT=bottle-01 ARGS="--mark-seed"
+#   make rtc-drift UNIT=bottle-01 ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+#   make rtc-drift ARGS="--history"                  every unit, no fit
+# ⚠ UNIT is REQUIRED to write, and has no default on purpose. A DS3231 has no
+# ID register, so the tool cannot tell two chips apart; a default would file
+# every chip under one name. That is how a second chip's sample landed in
+# bottle-01's fit (2026-09-29). Post-hoc fixes: data/rtc-drift-corrections.json.
 .PHONY: rtc-drift
 rtc-drift: _check-mpremote
-	$(PYTHON) scripts/rtc_drift.py $(ARGS)
+	$(PYTHON) scripts/rtc_drift.py $(if $(UNIT),--unit $(UNIT),) $(ARGS)
 
 # ⚠ WRITES the DS3231 — the only target that does. Seeding, verifying and
 # measuring are three different intents, and they used to share two scripts

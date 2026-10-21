@@ -95,11 +95,16 @@ tap signal; expect to re-collect.
 
 ### A provisioning manifest
 Multiple DS3231s exist and nothing distinguishes them (no unique-ID register,
-no user SRAM). **Concrete hazard:** `data/rtc-drift.jsonl` has `epoch` but no
-unit field, so one `make rtc-drift` against the wrong chip silently pollutes
-bottle-01's fit. A `--unit` flag closes that hole; the larger answer is a record
-per physical unit — see `docs/gift-registry.md` (proposal, not built; forcing
-function is the unit-agnostic `data/rtc-drift-summary.json`). It must also
+no user SRAM). **The hazard happened, probably on 2026-09-29:** a chip seeded
+2026-09-13 (never recorded) was sampled into bottle-01's history, which made
+its drift appear to double (−0.52 → −0.97 ppm). Caught 2026-10-21 by a
+reading 0.87 s off the constant-rate prediction. **`--unit` is now required
+to write** (`make rtc-drift UNIT=bottle-01`), summaries are per unit, and the
+inferred seed lives in `data/rtc-drift-corrections.json` at confidence 0.7 —
+the log itself untouched. Write-up: `docs/rtc-drift-theory.md` § "A seed you
+didn't record". The flag makes the unit *asserted*, not *verified*: the tool
+still cannot tell two chips apart. The larger answer is still a record per
+physical unit — `docs/gift-registry.md` (proposal, not built). It must also
 hold `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, IMU mount location,
 `TAP_ENERGY_THRESHOLD` — per-unit facts established by hand, not derivable
 from code.

@@ -26,9 +26,12 @@ conversation. With one unit that is survivable. With three it is not — and
 the failure is silent: you would tune the second bottle with the first
 bottle's thresholds and conclude the recognizer regressed.
 
-**`data/rtc-drift-summary.json` is already unit-agnostic**, which stops being
-correct the moment there is a second DS3231. That file is the immediate
-forcing function.
+**The drift summary was unit-agnostic, and that bit before anything else
+did:** a second DS3231's sample very probably landed in bottle-01's history on
+2026-09-29. Fixed 2026-10-21 — `rtc_drift.py` now requires `--unit` and writes
+`data/rtc-drift-summary-<unit>.json`. But the unit is only *asserted* by
+whoever runs it; a registry record per unit is still what would let a tool
+check the assertion.
 
 ## Shape
 
