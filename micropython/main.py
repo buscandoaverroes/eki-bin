@@ -199,6 +199,42 @@ def _apply_line_color(contract, line):
         contract.set_line_color(tuple(color))
 
 
+def _imu_status_line(tap_state, tilt_ctl, counts):
+    """One line per 30 s block saying what the IMU path actually did.
+
+    Added 2026-10-21, after the second "asleep and could not be woken"
+    episode. Taps and tilt sit behind ONE gate (phase accepts input, not
+    booting), so a single fault stops both — and the console printed
+    nothing about the IMU at all, so four different failures looked the
+    same from outside:
+
+      phase stuck waking/settling  →  reads 0, gated N   (gate shut)
+      I2C reads failing            →  failed N           (bus)
+      reads fine, nothing triggers →  taps 0             (trigger)
+      triggers, all rejected       →  taps N → 0 ok (…)  (a classifier)
+
+    A crashed loop is the fifth, and shows as these lines stopping.
+    Counts reset every block, so each line is the last ~30 s only."""
+    parts = ["  imu: %s" % tap_state.phase,
+             "reads %d ok, %d failed, %d gated" % (counts["ok"], counts["failed"],
+                                                   counts["gated"])]
+    if counts["booting"]:
+        parts.append("%d in boot-ignore" % counts["booting"])
+    parts.append(_gestures.tap_stats_line())
+    if tilt_ctl is None:
+        parts.append("tilt off")
+    else:
+        parts.append("tilt %s %.1f°" % ("engaged" if tilt_ctl.engaged else "idle",
+                                        tilt_ctl.deg))
+    if _gestures.gyro_check_enabled():
+        parts.append("gyro " + _gestures.GYRO_BIAS.status())
+    else:
+        parts.append("gyro off")
+    for k in counts:
+        counts[k] = 0
+    return " · ".join(parts)
+
+
 def _apply_daylight(minutes, last_period):
     """Set the global brightness for the time of day. EDGE-TRIGGERED.
 
@@ -416,6 +452,11 @@ def _run_interactive_loop(schedule_data, led):
 
     last_refresh = None
     loop_started = time.ticks_ms()
+    # Counted per 30 s block and printed by _imu_status_line. These are the
+    # numbers that tell "the IMU is not being read" from "it is read and
+    # nothing triggers" from "it triggers and everything is rejected" —
+    # which looked identical from outside, twice.
+    imu_counts = {"ok": 0, "failed": 0, "gated": 0, "booting": 0}
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
     morning_armed = False  # self-arming: set when we SEE everything out of
@@ -502,6 +543,9 @@ def _run_interactive_loop(schedule_data, led):
                 else:
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
+            if imu_addr is not None:
+                print(_imu_status_line(tap_state, tilt_ctl, imu_counts))
+
             # ── the morning flower ────────────────────────────────
             # Arms itself whenever everything is out of reach, and fires
             # when the soonest train is about to cross in. The flower is
@@ -541,10 +585,16 @@ def _run_interactive_loop(schedule_data, led):
         # the display and play a wake wave nobody asked for.
         _booting = time.ticks_diff(tick_now, loop_started) < GESTURE_BOOT_IGNORE_MS
 
+        if imu_addr is not None and _booting:
+            imu_counts["booting"] += 1
+        elif imu_addr is not None and not tap_state.accepts_input():
+            imu_counts["gated"] += 1
+
         if imu_addr is not None and tap_state.accepts_input() and not _booting:
             raw, last_error_print = _safe_read_accel(
                 i2c, imu_addr, tick_now, last_error_print
             )
+            imu_counts["ok" if raw is not None else "failed"] += 1
             if raw is not None:
                 if ilog is not None:
                     ilog.sample(tick_now, raw)

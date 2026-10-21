@@ -16,6 +16,7 @@
 import math
 
 import settings
+from primitives import ticks_since
 from settings import (TILT_BASELINE_ALPHA, TILT_BASELINE_TAU_MS, TILT_DEADZONE_DEG,
     TILT_ENGAGE_MS, TILT_ENGAGE_SAMPLES, TILT_EXPO, TILT_FIRST_MEANS, TILT_FULL_DEG,
     TILT_G_TOLERANCE, TILT_MAX_BRIGHT, TILT_MIN_BRIGHT, TILT_RAIL_REPEAT_MS,
@@ -300,5 +301,7 @@ def _elapsed(now_ms, since_ms):
     """ticks_diff without importing time — the controller never needs a
     clock of its own, only the difference between two stamps its caller
     already has."""
-    d = now_ms - since_ms
+    d = ticks_since(now_ms, since_ms)   # across the wrap, plain subtraction
+    #   clamped to 0 here, so stillness could never accumulate until the
+    #   next movement re-stamped `since`
     return d if d >= 0 else 0

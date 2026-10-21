@@ -815,3 +815,108 @@ def test_the_default_warm_up_is_three_time_constants(load_main):
 def test_energy_default_is_now_a_coarse_guard(load_main):
     m = load_main()
     assert m.TAP_ENERGY_THRESHOLD == 1_000_000
+
+
+# ── the wake state machine across the ticks_ms wrap ──────────────────
+
+def _g(load_main, **kw):
+    import importlib
+    load_main(**kw)
+    return importlib.import_module("gestures")
+
+
+def test_a_wake_in_progress_at_the_wrap_still_completes(load_main):
+    """THE latent bug. Plain subtraction left `now - started` near -2**30,
+    so the phase never left "waking", accepts_input() stayed False, and
+    taps and tilt — one shared gate — stopped until power was cycled."""
+    g = _g(load_main, WAKE_JOLT_MS=500, WAKE_SETTLE_MS=1500)
+    period = g.ticks_since.__globals__["TICKS_PERIOD"]
+    st = g._TapCycleState()
+    st.wake(period - 200)                 # woken 200 ms before the wrap
+    assert not st.accepts_input()
+    st.advance(400)                       # 600 ms later, after the wrap
+    assert st.phase == "settling"
+    st.advance(2000)
+    assert st.phase == "awake" and st.accepts_input()
+
+
+def test_the_awake_deadline_is_reached_across_the_wrap(load_main):
+    """The mirror bug: the deadline was never reached, so it stayed lit."""
+    g = _g(load_main)
+    period = g.ticks_since.__globals__["TICKS_PERIOD"]
+    st = g._TapCycleState()
+    st.phase, st.awake = "awake", True
+    st.awake_until = period + 5_000       # 5 s past the wrap, unmasked
+    assert st.advance(1_000) is None      # 4 s still to go
+    assert st.advance(6_000) == "asleep"
+
+
+def test_a_status_message_expires_across_the_wrap(load_main):
+    g = _g(load_main)
+    period = g.ticks_since.__globals__["TICKS_PERIOD"]
+    m = g._StatusMessage()
+    m.show(period - 1_000, (1, 2, 3), 2_000)
+    assert m.active(500)                  # 1.5 s in, after the wrap
+    assert not m.active(1_500)            # 2.5 s in
+
+
+# ── reasons, counts and the console line ─────────────────────────────
+
+def test_reject_reason_names_the_check_and_agrees_with_classify(load_main):
+    g = _g(load_main, TAP_ENERGY_THRESHOLD=1_000_000,
+           TAP_VERTICAL_SHARE_MAX=0.5, TAP_GYRO_MID_MAX_DPS=1.15)
+    cases = [
+        ({"energy": 2_000_000}, "energy"),
+        ({"energy": 10, "vert_share": 0.8}, "vertical"),
+        ({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": 3.0}, "gyro"),
+        ({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": None}, None),
+        ({"energy": 10, "vert_share": 0.1, "gyro_mid_dps": 0.4}, None),
+    ]
+    for feats, why in cases:
+        assert g.reject_reason(feats) == why, feats
+        assert g.classify_valid_input(feats) == (why is None), feats
+
+
+def test_tap_stats_line_reports_then_resets(load_main):
+    g = _g(load_main)
+    g.TAP_STATS.update(triggers=3, accepted=1, gyro=2)
+    assert g.tap_stats_line() == "taps 3 → 1 ok (gyro 2)"
+    assert g.tap_stats_line() == "taps 0 → 0 ok"
+
+
+def test_gyro_bias_status_says_which_state_it_is_in(load_main):
+    g = _g(load_main)
+    b = g.GyroBias(tau_ms=2000, gate_dps=5.0, mdps=35.0, warmup_ms=6000)
+    assert b.status() == "no data"
+    b.update((0, 0, 0), 0)
+    for _ in range(300):
+        b.update((0, 0, 0), 10)
+    assert b.status().startswith("warming 3.0/6.0s")
+    for _ in range(300):
+        b.update((0, 0, 0), 10)
+    assert b.status() == "ready"
+
+
+def test_the_imu_status_line_tells_the_four_failures_apart(load_main):
+    """The point of the line. Taps and tilt share one gate, so one fault
+    stops both, and before this the console said nothing about the IMU —
+    four different failures looked the same. Each must read differently."""
+    m = load_main()
+
+    class _St:
+        phase = "waking"
+
+    counts = {"ok": 0, "failed": 0, "gated": 1800, "booting": 0}
+    gate_shut = m._imu_status_line(_St(), None, counts)
+    assert "imu: waking" in gate_shut and "reads 0 ok, 0 failed, 1800 gated" in gate_shut
+    assert counts["gated"] == 0, "counts reset every block"
+
+    _St.phase = "asleep"
+    counts.update(ok=0, failed=1700)
+    assert "1700 failed" in m._imu_status_line(_St(), None, counts)
+
+    m._gestures.TAP_STATS.update(triggers=4, accepted=0, gyro=4)
+    counts.update(ok=1800)
+    line = m._imu_status_line(_St(), None, counts)
+    assert "taps 4 → 0 ok (gyro 4)" in line
+    assert "tilt off" in line

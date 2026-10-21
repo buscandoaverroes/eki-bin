@@ -494,6 +494,25 @@ hypothesis) forbids tuning against anecdotes.**
     seeded at 20 dps, a perfectly still bottle reads as ~20 dps of rotation
     on the old path). Whether it was *the* cause of the one observed
     episode is still unknown; `make dev`'s mount remains the other suspect.
+  - **⚠ Recurred 2026-10-21 — from FLASH, with the guard deployed** —
+    alongside "no tilt". That rules out BOTH suspects above, so the cause is
+    still unknown. Two things learned from it:
+    - **Taps and tilt sit behind one gate** (`imu_addr` present, phase
+      accepts input, not booting), so a single fault stops both. That fits
+      the two observations arriving together.
+    - **The console printed nothing about the IMU**, so four failures looked
+      identical: gate shut (phase stuck), I2C reads failing, nothing
+      triggering, everything rejected. Hence an `imu:` line in every 30 s
+      block — phase, reads ok/failed/gated, `taps N → M ok (reason …)`,
+      tilt state, gyro baseline state. **The next occurrence is diagnosed
+      by reading that line, not by guessing.**
+  - **Found while reading the gate, NOT today's cause:** `_TapCycleState`,
+    `_StatusMessage` and `tilt._elapsed` compared `ticks_ms()` stamps with
+    plain subtraction. `ticks_ms` wraps every ~12.4 days (2**30 ms) and the
+    rp2 hardware timer survives soft resets, so a wake in progress at the
+    wrap left the phase in `waking` forever — gate shut, no taps, no tilt,
+    until a power cycle. Fixed with `primitives.ticks_since`. It cannot
+    explain today's episode: a fresh flash restarts the counter near zero.
 
 ### Phase 2 — The arbiter (the structural fix)
 

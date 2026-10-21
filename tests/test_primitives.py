@@ -237,3 +237,41 @@ def test_capture_does_not_survive_a_clear_either(load_main):
     assert lm.last_frame is want
     lm.clear()
     assert lm.last_frame is None
+
+
+# ── ticks_since: stamp arithmetic across the ticks_ms wrap ────────────
+
+def _prim(load_main):
+    import importlib
+    load_main()
+    return importlib.import_module("primitives")
+
+
+def test_ticks_since_is_plain_subtraction_away_from_the_wrap(load_main):
+    p = _prim(load_main)
+    assert p.ticks_since(1500, 1000) == 500
+    assert p.ticks_since(1000, 1500) == -500
+
+
+def test_ticks_since_is_correct_across_the_wrap(load_main):
+    """The bug: 3 ms after the wrap, a stamp taken 100 ms before it is
+    103 ms ago — not -1,073,741,721 ms."""
+    p = _prim(load_main)
+    before = p.TICKS_PERIOD - 100
+    assert p.ticks_since(3, before) == 103
+    assert p.ticks_since(before, 3) == -103
+
+
+def test_ticks_since_survives_a_deadline_past_the_period(load_main):
+    """awake_until = now + 15 min is never masked, so it can exceed the
+    period numerically while ticks_ms itself has wrapped back to zero."""
+    p = _prim(load_main)
+    deadline = (p.TICKS_PERIOD - 1000) + 900_000
+    assert p.ticks_since(898_000, deadline) == -1000       # not yet
+    assert p.ticks_since(899_500, deadline) == 500         # past it
+
+
+def test_ticks_since_lets_host_float_timestamps_through(load_main):
+    """The replay harness feeds host time in ms as floats, which never wrap."""
+    p = _prim(load_main)
+    assert p.ticks_since(2500.5, 1000.25) == 1500.25

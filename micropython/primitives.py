@@ -211,3 +211,32 @@ def gamma(mult, g=GAMMA):
     """
     return mult ** g
 
+
+
+# ── Time stamps ──────────────────────────────────────────────────
+# MicroPython's ticks_ms() WRAPS: on 32-bit ports (rp2, esp32) small ints
+# are 31-bit, so the period is 2**30 ms — about 12.4 days of uptime. And on
+# rp2 the counter is the hardware timer, which a soft reset does NOT clear,
+# so a unit left on USB for two weeks crosses it.
+TICKS_PERIOD = 1 << 30
+
+
+def ticks_since(now, then):
+    """PURE: now - then for two ticks_ms() stamps, correct across the wrap.
+
+    What time.ticks_diff does, as arithmetic, so host tests run the SAME
+    code the board does — and so callers that already hold both stamps need
+    no clock. Correct for any device period that is a multiple of 2**30,
+    for differences under 2**29 ms (6.2 days).
+
+    Found 2026-10-21: _TapCycleState compared stamps with plain subtraction,
+    so a wake in progress at the wrap left `now - started` hugely negative,
+    the phase never left "waking", and taps AND tilt — which share one gate —
+    stopped for good. A float (the host replay's timestamps) passes through
+    unchanged: those never wrap."""
+    d = now - then
+    if isinstance(d, int):
+        d &= TICKS_PERIOD - 1
+        if d >= TICKS_PERIOD >> 1:
+            d -= TICKS_PERIOD
+    return d

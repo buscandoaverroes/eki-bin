@@ -27,6 +27,7 @@ from machine import I2C, Pin
 
 from leds import (_write_frame, clear)
 import motion
+from primitives import ticks_since
 from settings import (MOTION_ENABLED, MOTION_OUTWARD_MS, MOTION_SHAKE_MS,
     NO_CYCLE_COLOR, QUIET_TAP_DURATION_MS)
 from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
@@ -199,6 +200,18 @@ class GyroBias:
         for i in range(3):
             self.bias[i] += (g[i] - self.bias[i]) * a
         self._learned_ms += step
+
+    def status(self):
+        """`ready`, `warming 3.1/6.0s`, or `no data` — for the console."""
+        if self.bias is None:
+            return "no data"
+        if self._learned_ms < self.warmup_ms:
+            out = "warming %.1f/%.1fs" % (self._learned_ms / 1000.0,
+                                          self.warmup_ms / 1000.0)
+            if self._gated_ms:
+                out += ", gated %.1fs" % (self._gated_ms / 1000.0)
+            return out
+        return "ready"
 
     def estimate(self):
         """The baseline, or None until it has learned for warmup_ms at rest.
@@ -478,19 +491,51 @@ def classify_valid_input(features):
     describes, not a replacement for classify_tap_or_flick, which stays
     defined and tested for when GESTURE_FLICK_ENABLED/GESTURE_POSITION_
     ENABLED come back on."""
+    return reject_reason(features) is None
+
+
+def reject_reason(features):
+    """PURE: why a contact is NOT a tap — "energy", "vertical", "gyro" —
+    or None if it is one. classify_valid_input is defined as this being
+    None, so the two can never disagree.
+
+    Exists for the console. With only a bool, "every tap was rejected"
+    could not be told apart from "no tap ever triggered", and both looked
+    like a jar that will not wake."""
     if features["energy"] >= TAP_ENERGY_THRESHOLD:
-        return False
+        return "energy"
     # Through the surface, not a touch (see impulse_vertical_share). Added
     # 2026-10-04 from replay; None (no evidence) never rejects.
     vs = features.get("vert_share")
     if TAP_VERTICAL_SHARE_MAX is not None and vs is not None and vs >= TAP_VERTICAL_SHARE_MAX:
-        return False
+        return "vertical"
     # Still turning after the impact: handling, not a touch (see GyroBias,
     # gyro_mid_dps). Added 2026-10-04 from replay; None never rejects.
     gm = features.get("gyro_mid_dps")
     if TAP_GYRO_MID_MAX_DPS is not None and gm is not None and gm >= TAP_GYRO_MID_MAX_DPS:
-        return False
-    return True
+        return "gyro"
+    return None
+
+
+# What happened to every trigger since the console last asked. Counted here
+# because _handle_tap is the only place that knows; main.py prints and
+# resets it in the 30 s block. "busy" is a valid tap that resolve() still
+# refused — the state machine was not accepting input.
+TAP_STATS = {"triggers": 0, "accepted": 0, "energy": 0, "vertical": 0,
+             "gyro": 0, "busy": 0}
+
+
+def tap_stats_line(reset=True):
+    """`taps 3 → 1 ok (gyro 2)`, then zero the counts."""
+    s = TAP_STATS
+    rejected = ["%s %d" % (k, s[k]) for k in ("energy", "vertical", "gyro", "busy")
+                if s[k]]
+    out = "taps %d → %d ok%s" % (s["triggers"], s["accepted"],
+                                 " (%s)" % ", ".join(rejected) if rejected else "")
+    if reset:
+        for k in s:
+            s[k] = 0
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -670,18 +715,28 @@ class _TapCycleState:
     def advance(self, now_ms):
         """Call every tick — advances WAKING->SETTLING->AWAKE on their own
         timers, and AWAKE->ASLEEP on AWAKE_MINUTES timeout. Returns the
-        phase just entered, or None if nothing changed this tick. Plain
-        subtraction, not time.ticks_diff — same choice _WakeState/
-        _TapClassifier/_GestureMenu already made for windows this short."""
-        if self.phase == "waking" and now_ms - self.phase_started_at >= WAKE_JOLT_MS:
+        phase just entered, or None if nothing changed this tick.
+
+        ⚠ WRAP-SAFE (ticks_since), and it was not. This said plain
+        subtraction was fine "for windows this short" — but the window's
+        LENGTH is not what matters, CROSSING the ticks_ms wrap is. A wake in
+        progress at the wrap left `now - started` near -2**30: the phase
+        never left "waking", accepts_input() stayed False, and taps and tilt
+        (one shared gate) stopped until power was cycled. The awake
+        deadline had the mirror bug: across the wrap it was never reached,
+        so the display would have stayed lit. ~12.4 days of uptime apart,
+        so rare — and a jar that cannot be woken is the worst failure a
+        gift can have."""
+        if self.phase == "waking" and ticks_since(now_ms, self.phase_started_at) >= WAKE_JOLT_MS:
             self.phase = "settling"
             self.phase_started_at = now_ms
             return "settling"
-        if self.phase == "settling" and now_ms - self.phase_started_at >= WAKE_SETTLE_MS:
+        if self.phase == "settling" and ticks_since(now_ms, self.phase_started_at) >= WAKE_SETTLE_MS:
             self.phase = "awake"
             self.awake_until = now_ms + AWAKE_MINUTES * 60_000
             return "awake"
-        if self.phase == "awake" and self.awake_until is not None and now_ms >= self.awake_until:
+        if (self.phase == "awake" and self.awake_until is not None
+                and ticks_since(now_ms, self.awake_until) >= 0):
             self.awake = False
             self.phase = "asleep"
             self.awake_until = None
@@ -911,7 +966,10 @@ class _StatusMessage:
         self.expires_at = now_ms + duration_ms
 
     def active(self, now_ms):
-        return self.expires_at is not None and now_ms < self.expires_at
+        # ticks_since, not `now_ms < expires_at`: across the ticks_ms wrap
+        # the plain comparison stays True for ~12 days and pins one LED on.
+        return (self.expires_at is not None
+                and ticks_since(now_ms, self.expires_at) < 0)
 
 
 # NOTE: there is deliberately no _classify_tap_response() to mirror the old
@@ -1041,7 +1099,11 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     samples, gyro_rows = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
     features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.estimate())
-    valid = classify_valid_input(features)
+    why = reject_reason(features)
+    valid = why is None
+    TAP_STATS["triggers"] += 1
+    if why is not None:
+        TAP_STATS[why] += 1
     if capture_observer is not None:
         capture_observer.cap_done(trigger_ms, samples, features, valid)
     samples = None
@@ -1052,6 +1114,10 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
 
     now_ms = time.ticks_ms()  # stale after a ~1.2s blocking capture
     resolved = tap_state.resolve(now_ms, valid)
+    if valid and resolved is None:
+        TAP_STATS["busy"] += 1
+    elif resolved is not None:
+        TAP_STATS["accepted"] += 1
     if resolved == "wake":
         if MOTION_ENABLED:
             # outward, ∝ strike force: brighter AND faster for a harder
