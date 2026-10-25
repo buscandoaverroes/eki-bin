@@ -123,14 +123,108 @@ def _get_imu():
         addr = _imu_find_device(i2c)
         if addr is None:
             return None, None
-        i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
-        if gyro_check_enabled():
-            # The gyro is only powered when something reads it: the
-            # mid-window rotation check (TAP_GYRO_MID_MAX_DPS).
-            i2c.writeto_mem(addr, _IMU_CTRL2_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
-            i2c.writeto_mem(addr, _IMU_CTRL6_REG, bytes([_IMU_GYRO_FS_1000]))
+        imu_configure(i2c, addr)
         _imu_i2c, _imu_addr = i2c, addr
     return _imu_i2c, _imu_addr
+
+
+def imu_configure(i2c, addr):
+    """The sensor's settings — at boot, and again whenever ImuWatch finds
+    them gone. ONE function so recovery writes exactly what boot did."""
+    i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+    if gyro_check_enabled():
+        # The gyro is only powered when something reads it: the
+        # mid-window rotation check (TAP_GYRO_MID_MAX_DPS).
+        i2c.writeto_mem(addr, _IMU_CTRL2_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        i2c.writeto_mem(addr, _IMU_CTRL6_REG, bytes([_IMU_GYRO_FS_1000]))
+
+
+def imu_config_lost(i2c, addr):
+    """True if the sensor's settings are not what imu_configure wrote.
+    A bus error answers False: that is a failed read, which the console
+    already counts, not evidence the sensor reset."""
+    try:
+        if i2c.readfrom_mem(addr, _IMU_CTRL1_REG, 1)[0] != _IMU_CTRL1_240HZ_HIGH_PERF:
+            return True
+        if (gyro_check_enabled() and
+                i2c.readfrom_mem(addr, _IMU_CTRL2_REG, 1)[0] != _IMU_CTRL1_240HZ_HIGH_PERF):
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def imu_recover(i2c, addr):
+    """Put the sensor's settings back, and forget what was learned from it
+    while it was dead. True if the writes went through.
+
+    Verified by hand on bottle-01, 2026-10-25, with the sensor in exactly
+    this state (CTRL1 = CTRL2 = 0, outputs (0,0,0)): writing CTRL1 alone
+    brought back 0.99 g within 100 ms. No software reset was needed. Its
+    first sample takes a few ms to exist, which is why the caller must keep
+    discarding zeros for a moment rather than trust the next read."""
+    try:
+        imu_configure(i2c, addr)
+    except OSError:
+        return False
+    # Every gyro sample while it was dead was (0,0,0), and the baseline
+    # learned from them as if the bottle were at rest. Start over — the
+    # warm-up guard then keeps the rotation check out of it for 6 s.
+    GYRO_BIAS.reset()
+    return True
+
+
+# Consecutive all-zero accelerometer reads before the settings are declared
+# lost. A working accelerometer always reads ~1 g of gravity, and even in
+# free fall its noise is several LSB per axis, so an exact (0,0,0) on all
+# three axes, 30 times in a row (~0.2 s at the loop's ~145 Hz), cannot be a
+# measurement.
+_IMU_ZERO_RUN = 30
+_IMU_RECOVER_MIN_GAP_MS = 5000   # never retry faster than this, so a sensor
+#   that will not come back is a rising count, not a hot loop on the bus
+
+
+class ImuWatch:
+    """Notices the IMU has reset itself while the board kept running.
+
+    Found 2026-10-22/25. The sensor was configured once, at boot, and
+    nothing ever checked it again. When it reset — CTRL1 and CTRL2 back to
+    0, outputs (0,0,0), still ACKing every read — the firmware went on
+    reading zeros indefinitely: no I2C error, nothing triggered, tilt
+    pinned at 0.0°, and a jar that could not be woken until it was
+    unplugged. What made the sensor reset is still unknown; this makes the
+    jar recover from it, and counts how often, which is the next clue.
+
+    Detects on ZEROS, not on repeated readings: the loop can read faster
+    than the sensor's 240 Hz, and then two reads legitimately return the
+    same sample."""
+
+    def __init__(self, zero_run=_IMU_ZERO_RUN, min_gap_ms=_IMU_RECOVER_MIN_GAP_MS):
+        self.zero_run = zero_run
+        self.min_gap_ms = min_gap_ms
+        self._zeros = 0
+        self._last = None
+        self.recoveries = 0
+
+    def dead(self, raw):
+        """True for an all-zero sample. The caller must not pass one on —
+        to the trigger it is a 1 g step on recovery (a false tap), and to
+        the gyro baseline it is a bottle at rest that isn't."""
+        if raw[0] == 0 and raw[1] == 0 and raw[2] == 0:
+            self._zeros += 1
+            return True
+        self._zeros = 0
+        return False
+
+    def due(self, now_ms):
+        if self._zeros < self.zero_run:
+            return False
+        return self._last is None or ticks_since(now_ms, self._last) >= self.min_gap_ms
+
+    def recovered(self, now_ms):
+        self._last = now_ms
+        self._zeros = 0
+        self.recoveries += 1
 
 
 def gyro_check_enabled():
@@ -200,6 +294,13 @@ class GyroBias:
         for i in range(3):
             self.bias[i] += (g[i] - self.bias[i]) * a
         self._learned_ms += step
+
+    def reset(self):
+        """Forget everything — for when the samples it learned from were not
+        real (the sensor had reset and was reading zeros)."""
+        self.bias = None
+        self._gated_ms = 0
+        self._learned_ms = 0
 
     def status(self):
         """`ready`, `warming 3.1/6.0s`, or `no data` — for the console."""

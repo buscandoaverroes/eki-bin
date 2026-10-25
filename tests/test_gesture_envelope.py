@@ -920,3 +920,113 @@ def test_the_imu_status_line_tells_the_four_failures_apart(load_main):
     line = m._imu_status_line(_St(), None, counts)
     assert "taps 4 → 0 ok (gyro 4)" in line
     assert "tilt off" in line
+
+
+# ── the IMU resetting itself while the board keeps running ────────────
+# Found 2026-10-22/25 on bottle-01: CTRL1 = CTRL2 = 0, STATUS 0, outputs
+# (0,0,0), WHO_AM_I still 0x70 — the sensor had reset and the firmware,
+# which configured it once at boot, read zeros forever. Writing CTRL1 by
+# hand brought back (-715, 483, 16276) = 0.99 g within 100 ms.
+
+class _FakeImuBus:
+    """Registers as a dict; can fail on demand."""
+    def __init__(self, regs=None, fail=False):
+        self.regs = dict(regs or {})
+        self.writes = []
+        self.fail = fail
+
+    def writeto_mem(self, addr, reg, data):
+        if self.fail:
+            raise OSError(5)
+        self.writes.append((reg, bytes(data)))
+        self.regs[reg] = data[0]
+
+    def readfrom_mem(self, addr, reg, n):
+        if self.fail:
+            raise OSError(5)
+        return bytes([self.regs.get(reg, 0)]) * n
+
+
+def test_configure_writes_what_boot_always_wrote(load_main):
+    g = _g(load_main, TAP_GYRO_MID_MAX_DPS=1.15)
+    bus = _FakeImuBus()
+    g.imu_configure(bus, 0x6B)
+    assert bus.regs[0x10] == 0x07 and bus.regs[0x11] == 0x07   # accel + gyro on
+    g2 = _g(load_main, TAP_GYRO_MID_MAX_DPS=None)
+    bus2 = _FakeImuBus()
+    g2.imu_configure(bus2, 0x6B)
+    assert bus2.regs == {0x10: 0x07}, "the gyro stays off when nothing reads it"
+
+
+def test_config_lost_reads_the_state_found_on_the_bench(load_main):
+    g = _g(load_main, TAP_GYRO_MID_MAX_DPS=1.15)
+    assert g.imu_config_lost(_FakeImuBus({0x10: 0x00, 0x11: 0x00}), 0x6B)   # the bench
+    assert not g.imu_config_lost(_FakeImuBus({0x10: 0x07, 0x11: 0x07}), 0x6B)
+    assert g.imu_config_lost(_FakeImuBus({0x10: 0x07, 0x11: 0x00}), 0x6B)   # gyro alone
+    # a failed read is a bus problem, already counted, not a reset
+    assert not g.imu_config_lost(_FakeImuBus(fail=True), 0x6B)
+
+
+def test_recover_restores_settings_and_forgets_the_dead_gyro_baseline(load_main):
+    """While dead, every gyro read was (0,0,0) and the baseline learned it
+    as a bottle at rest. It has to start over, warm-up and all."""
+    g = _g(load_main, TAP_GYRO_MID_MAX_DPS=1.15)
+    g.GYRO_BIAS.update((0, 0, 0), 0)
+    for _ in range(700):
+        g.GYRO_BIAS.update((0, 0, 0), 10)
+    assert g.GYRO_BIAS.estimate() is not None
+    bus = _FakeImuBus({0x10: 0x00, 0x11: 0x00})
+    assert g.imu_recover(bus, 0x6B) is True
+    assert not g.imu_config_lost(bus, 0x6B)
+    assert g.GYRO_BIAS.estimate() is None
+    assert g.imu_recover(_FakeImuBus(fail=True), 0x6B) is False
+
+
+def test_the_watch_fires_on_zeros_and_not_on_a_real_reading(load_main):
+    g = _g(load_main)
+    w = g.ImuWatch(zero_run=30, min_gap_ms=5000)
+    assert not w.dead((-715, 483, 16276))
+    for i in range(29):
+        assert w.dead((0, 0, 0))
+        assert not w.due(i * 7)
+    assert w.dead((0, 0, 0))
+    assert w.due(210), "30 zeros in a row: that cannot be a measurement"
+
+
+def test_one_real_sample_resets_the_count(load_main):
+    """Zeros on all three axes cannot be measured noise — but one real
+    reading in between means it was not dead, so the run starts again."""
+    g = _g(load_main)
+    w = g.ImuWatch(zero_run=30)
+    for _ in range(29):
+        w.dead((0, 0, 0))
+    w.dead((3, -2, 16380))
+    w.dead((0, 0, 0))
+    assert not w.due(1000)
+
+
+def test_a_sensor_that_will_not_come_back_is_a_count_not_a_hot_loop(load_main):
+    g = _g(load_main)
+    w = g.ImuWatch(zero_run=30, min_gap_ms=5000)
+    for _ in range(30):
+        w.dead((0, 0, 0))
+    assert w.due(0)
+    w.recovered(0)
+    for _ in range(30):
+        w.dead((0, 0, 0))
+    assert not w.due(2000), "rate-limited"
+    assert w.due(5000)
+    assert w.recoveries == 1
+
+
+def test_the_status_line_shows_zeros_and_recoveries(load_main):
+    m = load_main()
+
+    class _St:
+        phase = "asleep"
+
+    w = m._gestures.ImuWatch()
+    w.recoveries = 2
+    counts = {"ok": 4342, "failed": 0, "gated": 0, "booting": 0, "zero": 4342}
+    line = m._imu_status_line(_St(), None, counts, w)
+    assert "4342 ZERO" in line and "recovered 2 since boot" in line

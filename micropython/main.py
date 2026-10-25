@@ -199,7 +199,21 @@ def _apply_line_color(contract, line):
         contract.set_line_color(tuple(color))
 
 
-def _imu_status_line(tap_state, tilt_ctl, counts):
+def _recover_imu(i2c, addr, watch, now_ms, why, phase, ilog):
+    """Re-configure a sensor that reset itself, and say so — with what the
+    display was doing, because what made the sensor reset is still
+    unknown, and a supply dip from the strip would show up as recoveries
+    clustering while it is lit."""
+    ok = _gestures.imu_recover(i2c, addr)
+    watch.recovered(now_ms)
+    print("  [imu] sensor reset itself (%s) — %s (#%d since boot; %s, "
+          "brightness %.2f)" % (why, "reconfigured" if ok else "RECONFIGURE FAILED",
+                                watch.recoveries, phase, settings.BRIGHTNESS))
+    if ilog is not None:
+        ilog.event(now_ms, "imu_recover", why=why, ok=ok)
+
+
+def _imu_status_line(tap_state, tilt_ctl, counts, watch=None):
     """One line per 30 s block saying what the IMU path actually did.
 
     Added 2026-10-21, after the second "asleep and could not be woken"
@@ -212,12 +226,15 @@ def _imu_status_line(tap_state, tilt_ctl, counts):
       I2C reads failing            →  failed N           (bus)
       reads fine, nothing triggers →  taps 0             (trigger)
       triggers, all rejected       →  taps N → 0 ok (…)  (a classifier)
+      the sensor reset itself      →  N ZERO, then "recovered" (ImuWatch)
 
     A crashed loop is the fifth, and shows as these lines stopping.
     Counts reset every block, so each line is the last ~30 s only."""
-    parts = ["  imu: %s" % tap_state.phase,
-             "reads %d ok, %d failed, %d gated" % (counts["ok"], counts["failed"],
-                                                   counts["gated"])]
+    reads = "reads %d ok, %d failed, %d gated" % (counts["ok"], counts["failed"],
+                                                  counts["gated"])
+    if counts.get("zero"):
+        reads += ", %d ZERO" % counts["zero"]
+    parts = ["  imu: %s" % tap_state.phase, reads]
     if counts["booting"]:
         parts.append("%d in boot-ignore" % counts["booting"])
     parts.append(_gestures.tap_stats_line())
@@ -230,6 +247,8 @@ def _imu_status_line(tap_state, tilt_ctl, counts):
         parts.append("gyro " + _gestures.GYRO_BIAS.status())
     else:
         parts.append("gyro off")
+    if watch is not None and watch.recoveries:
+        parts.append("recovered %d since boot" % watch.recoveries)
     for k in counts:
         counts[k] = 0
     return " · ".join(parts)
@@ -456,7 +475,8 @@ def _run_interactive_loop(schedule_data, led):
     # numbers that tell "the IMU is not being read" from "it is read and
     # nothing triggers" from "it triggers and everything is rejected" —
     # which looked identical from outside, twice.
-    imu_counts = {"ok": 0, "failed": 0, "gated": 0, "booting": 0}
+    imu_counts = {"ok": 0, "failed": 0, "gated": 0, "booting": 0, "zero": 0}
+    imu_watch = _gestures.ImuWatch()
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
     morning_armed = False  # self-arming: set when we SEE everything out of
@@ -544,7 +564,14 @@ def _run_interactive_loop(schedule_data, led):
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
             if imu_addr is not None:
-                print(_imu_status_line(tap_state, tilt_ctl, imu_counts))
+                # The slow check: a reset whose outputs froze at a non-zero
+                # value would never trip the zero detector. One register
+                # read every 30 s covers it.
+                if _gestures.imu_config_lost(i2c, imu_addr):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "settings lost", tap_state.phase, ilog)
+                    trigger_buffer = []
+                print(_imu_status_line(tap_state, tilt_ctl, imu_counts, imu_watch))
 
             # ── the morning flower ────────────────────────────────
             # Arms itself whenever everything is out of reach, and fires
@@ -595,6 +622,17 @@ def _run_interactive_loop(schedule_data, led):
                 i2c, imu_addr, tick_now, last_error_print
             )
             imu_counts["ok" if raw is not None else "failed"] += 1
+            # A sensor that reset itself answers every read with (0,0,0) —
+            # no error, so this is the only place it shows. Never pass a
+            # zero sample on, and after ~0.2 s of them, re-configure.
+            if raw is not None and imu_watch.dead(raw):
+                imu_counts["zero"] += 1
+                if imu_watch.due(tick_now):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "reading zeros", tap_state.phase, ilog)
+                    trigger_buffer = []   # the next real sample would read
+                    #   as a 1 g step against whatever is left in here
+                raw = None
             if raw is not None:
                 if ilog is not None:
                     ilog.sample(tick_now, raw)

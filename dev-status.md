@@ -33,6 +33,14 @@ givable" and "is this the right costume". Two things follow.
 | **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
 | **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
 
+**The IMU resets itself — recovered from, cause unknown (2026-10-25).** The
+"asleep and cannot be woken" episodes were the LSM6DSV16X dropping back to
+power-on defaults while the board ran on, then reading `(0,0,0)` with no
+error. `ImuWatch` now notices (zeros, or settings gone) and re-configures —
+the sequence verified by hand on bottle-01. What *makes* it reset is open:
+watch the `[imu] sensor reset itself` lines for a pattern (lit? bright?
+just handled?). `docs/imu-interaction-plan.md` has the trail.
+
 And one *process* item that is not a wall but bites at the second unit:
 **a provisioning manifest** (§ below).
 

@@ -506,6 +506,34 @@ hypothesis) forbids tuning against anecdotes.**
       block — phase, reads ok/failed/gated, `taps N → M ok (reason …)`,
       tilt state, gyro baseline state. **The next occurrence is diagnosed
       by reading that line, not by guessing.**
+  - **✅ DIAGNOSED 2026-10-22/25 — the sensor resets itself.** The new
+    `imu:` line read `asleep · reads 4342 ok, 0 failed, 0 gated · taps 0 →
+    0 ok · tilt idle 0.0°`: gate open, bus fine, nothing triggering, tilt
+    pinned at zero. At the REPL, with the loop stopped but the state kept:
+    `WHO_AM_I 0x70` (alive, answering) but **`CTRL1 0x0`, `CTRL2 0x0`,
+    `STATUS 0x0`, outputs `(0,0,0)`**. The LSM6DSV16X had reset to its
+    power-on defaults while the board kept running — both settings lost at
+    once, so a whole-chip reset, not one register clobbered — and the
+    firmware, which configured it ONCE at boot, read zeros forever. No I2C
+    error, so nothing complained.
+    **Writing `CTRL1 = 0x07` by hand revived it** — `(-715, 483, 16276)`,
+    0.99 g, `STATUS 0x5` — after a 100 ms wait. No software reset needed.
+    (An immediate read after the write still returned zeros: the first
+    sample takes a few ms to exist.)
+    **Fix — `gestures.ImuWatch`:** 30 consecutive `(0,0,0)` reads (~0.2 s;
+    a working accelerometer always reads gravity, and even in free fall its
+    noise is several LSB per axis) → `imu_recover()` writes the boot
+    settings again and resets the gyro baseline, which had been learning
+    from zeros. Zero samples are never passed on — to the trigger, the
+    first real one would be a 1 g step, a false tap. Plus a slow check:
+    CTRL1/CTRL2 read every 30 s, for a reset whose outputs freeze non-zero.
+    Retries at most every 5 s. Each recovery prints the display state and
+    brightness, and the `imu:` line counts `ZERO` reads and recoveries.
+    **Still unknown: WHY it resets.** Candidates: a dip in the sensor's
+    supply (§13 — the strip has browned the board out before), a glitch
+    from touch (September: touching the IMU gave EIO), or something on the
+    shared bus. Recoveries clustering while the display is lit and bright
+    would point at the supply, and at the load switch / decoupling work.
   - **Found while reading the gate, NOT today's cause:** `_TapCycleState`,
     `_StatusMessage` and `tilt._elapsed` compared `ticks_ms()` stamps with
     plain subtraction. `ticks_ms` wraps every ~12.4 days (2**30 ms) and the
