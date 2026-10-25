@@ -602,6 +602,28 @@ the table), which is why the vertical check worked so cleanly.
 ⚠ One bottle, one table, one day. §8's rule applies: a hypothesis until a
 second session agrees.
 
+#### Moving the gyro window earlier does not help — measured
+
+The timing table suggested the shipped gyro check (150–400 ms) partly
+misses where grabs differ (100–200 ms). Swept through the firmware's own
+path (`TAP_GYRO_MID_START_MS/END_MS`, replay, 240 Hz ideal, energy 1M,
+vertical 0.5):
+
+| window | thr | taps kept | grabs accepted |
+|---|---|---|---|
+| **150–400 (shipped)** | **1.15** | **48/62** | **22** |
+| 120–300 | 1.15 | 45 | 18 |
+| 120–300 | 0.8 | 44 | 15 |
+| 100–250 | 0.8 | 38 | 11 |
+| 100–200 | 0.8 | 36 | 9 |
+
+**Every grab rejected costs about one real tap.** Taps rock the bottle
+too, and some are still rocking at 100–150 ms, so any single rotation
+threshold that catches grabs catches taps. That is the timing table's
+overlap made concrete, and it is the evidence this check is at its limit:
+the remaining grabs are the arbiter's, not a retune's. Shipped defaults
+kept. (Tapping harder does not rescue it — a harder tap rocks more.)
+
 #### The noise floor is not zero
 
 | | accel deviation | gyro |
