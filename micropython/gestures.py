@@ -40,7 +40,7 @@ from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
     SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
     TAP_VERTICAL_SHARE_MAX, TAP_GYRO_MID_MAX_DPS, GYRO_BIAS_TAU_MS,
-    GYRO_BIAS_WARMUP_MS,
+    GYRO_BIAS_WARMUP_MS, TAP_GYRO_MID_START_MS, TAP_GYRO_MID_END_MS,
     GYRO_BIAS_GATE_DPS,
     STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
     TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
@@ -1199,7 +1199,9 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     tap_state.acknowledge()
     samples, gyro_rows = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
-    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.estimate())
+    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.estimate(),
+                                            start_ms=TAP_GYRO_MID_START_MS,
+                                            end_ms=TAP_GYRO_MID_END_MS)
     why = reject_reason(features)
     valid = why is None
     TAP_STATS["triggers"] += 1

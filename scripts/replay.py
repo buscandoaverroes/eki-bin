@@ -152,7 +152,9 @@ def capture_features(fw, samples, i0, t0, window_ms, gyro_mdps, bias=None):
         rows = [(int(samples[k].t - t0), samples[k].gx, samples[k].gy, samples[k].gz)
                 for k in range(i0, j) if samples[k].t - t0 < 450]
         feats["gyro_mid_dps"] = fw.gestures.gyro_mid_dps(
-            rows, bias.estimate() if bias is not None else None, gyro_mdps)
+            rows, bias.estimate() if bias is not None else None, gyro_mdps,
+            start_ms=fw.settings.TAP_GYRO_MID_START_MS,
+            end_ms=fw.settings.TAP_GYRO_MID_END_MS)
     pre = [samples[k] for k in range(max(0, i0 - 200), i0) if t0 - 600 <= samples[k].t <= t0 - 100]
     late = [samples[k] for k in range(i0, j) if samples[k].t - t0 >= 400]
     mid = [samples[k] for k in range(i0, j) if 150 <= samples[k].t - t0 < 400]

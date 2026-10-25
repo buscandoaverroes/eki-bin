@@ -390,6 +390,13 @@ TAP_VERTICAL_SHARE_MAX = getattr(config, "TAP_VERTICAL_SHARE_MAX", 0.5)
 # removed by a running baseline (gestures.GyroBias). None disables the check
 # AND leaves the gyro powered down.
 TAP_GYRO_MID_MAX_DPS = getattr(config, "TAP_GYRO_MID_MAX_DPS", 1.15)
+# The window that rotation is measured over, ms after the trigger. Settings
+# rather than constants so replay can score the firmware's own path with a
+# different window (2026-10-25: a timing analysis put the tap-vs-grab
+# difference at 100-200 ms, while 200-400 showed none). The capture only
+# reads the gyro for its first 450 ms, so END must stay at or under that.
+TAP_GYRO_MID_START_MS = getattr(config, "TAP_GYRO_MID_START_MS", 150)
+TAP_GYRO_MID_END_MS = getattr(config, "TAP_GYRO_MID_END_MS", 400)
 GYRO_BIAS_TAU_MS = getattr(config, "GYRO_BIAS_TAU_MS", 2000)   # how fast the
 #   resting baseline follows (temperature drift is minutes; 2 s is plenty)
 GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn

@@ -542,6 +542,114 @@ hypothesis) forbids tuning against anecdotes.**
     until a power cycle. Fixed with `primitives.ticks_since`. It cannot
     explain today's episode: a fresh flash restarts the counter near zero.
 
+### Between Phase 1 and 2 — the frame, and what the data says (2026-10-25)
+
+**The frame: two stages and a clock between them.** Every idea so far —
+thresholds, trees, an ESN as a classifier, an ESN as an anomaly detector —
+fits one of three roles, and the roles do not compete:
+
+| role | job | starts as | earns a change by |
+|---|---|---|---|
+| **Stage 1** | *when to look* — did anything happen? | the fixed trigger, on this table | evidence the table version fails somewhere |
+| **the arbiter** | *when to decide* | a settlement window, length from the data below | — it is required whatever the stages are |
+| **Stage 2** | *what it was* | the current rules (energy, vertical, gyro) | beating them on replay |
+
+**The rule for both stages: start with the controlled condition.** A fixed
+threshold on one table, not learned and not adaptive. Prove it there. Only
+then test an adaptive Stage 1 against it — a threshold scaled to the recent
+noise first, and an ESN only if the background turns out to have a rhythm a
+predictor could learn (music through a shelf, a compressor, a train line).
+Music is a variable to add on purpose later, not the starting case.
+
+**The problem, decomposed:**
+
+1. **Detection** — did anything happen? Depends on the room (below).
+2. **Discrimination** — what was it?
+   - knock through the table vs a touch: separable *at impact* — handled
+     (vertical share, 17 → 1)
+   - lift / set-down vs a tap: largely handled (0/50, 2/51 false taps)
+   - **a grab beginning vs a tap: open** — overlapping, needs the aftermath
+   - kinds of tap (double, position): deferred; §8's limits stand
+3. **Timing** — when can a verdict be trusted? (below: ~200 ms+)
+4. **Transfer** — other bottles (the glass's own response) and other rooms
+   (the background). Different problems: subtracting a room's background does
+   not change how a heavier bottle answers a tap.
+
+#### When does a grab stop looking like a tap?
+
+50 labelled taps vs 37 grabs (and 48 knocks), five sessions, bottle-01, one
+wood table. Features in slices after the trigger, against a baseline from
+0.6–0.1 s before it. AUC: 0.5 = indistinguishable, 1.0 = fully separable.
+
+| ms after impact | tap vs grab, best AUC | | tap vs knock |
+|---|---|---|---|
+| 0–30 | 0.83 rotation | grabs twist ~2× harder (31 vs 16 dps median) | 0.97 |
+| 30–100 | 0.64 | nearly identical | 0.95 |
+| **100–200** | **0.85** movement | **tap settled (1.8 mg), grab still moving (8.0 mg)** | 0.77 |
+| 200–400 | 0.68 | the hand has closed and paused | 0.81 |
+| 400–800 | 0.78 | a held bottle trembles; one on a table does not | 0.71 |
+
+**No single window separates a tap from a grab; the difference is a shape
+across ~800 ms.** That is the definition of a problem that has to wait and
+combine windows — the arbiter's job, not a better threshold's. It also
+corrects an earlier claim in this repo's conversation that the two are
+*identical* at impact: they are not (0.83), but they overlap too much to
+call there.
+
+Knocks, by contrast, separate right at impact (they arrive weaker, through
+the table), which is why the vertical check worked so cleanly.
+
+⚠ One bottle, one table, one day. §8's rule applies: a hypothesis until a
+second session agrees.
+
+#### The noise floor is not zero
+
+| | accel deviation | gyro |
+|---|---|---|
+| untouched on the table, median | 1.0 mg | 0.06 dps |
+| untouched, 99.9th percentile | 10.5 mg (max 37) | 1.4 dps |
+| someone walking around it | **7–50 mg** | |
+| trigger threshold | **50 mg** | |
+| a median tap, first 30 ms | ~170 mg | |
+
+The loudest footstep reached the trigger threshold exactly. The room is a
+real input, and Stage 1 has a real job — but the controlled-condition rule
+still says: fix the table case first.
+
+#### Sample rate, SPI, MicroPython
+
+- **The tap/grab difference lives at hand-motion timescales** (tens to
+  hundreds of ms). At 240 Hz the decisive 100–200 ms window holds ~25
+  samples. SPI would not add information for this question.
+- **Rate does matter for *detection*:** replayed at 57 Hz, 20 of 62 taps
+  never triggered; at 240 Hz, 12. Short impulses fall between samples.
+- **The limit is the MicroPython loop (~145 Hz with rendering), not I²C**,
+  which could sustain kHz reads. The no-soldering fix, if rate becomes the
+  bottleneck, is the IMU's **FIFO**: the chip buffers at full ODR and the
+  loop collects batches. Unused today.
+- Rust buys compute headroom (a continuous ESN), not information.
+
+#### A simulator: replay, with pluggable stages and a live source
+
+Enough data exists to develop and compare stage designs **for the table
+case** — not to prove them (one bottle, one day), and none at all for other
+rooms. The simulator is an extension of `scripts/replay.py`, not a new tool:
+
+1. **Stages as plug-ins.** Stage 1, the arbiter and Stage 2 become objects
+   the harness drives, with today's firmware behaviour as the baseline.
+2. **The arbiter is written as a pure firmware module** (like `tilt.py`),
+   which the harness imports — one implementation, scored on recordings,
+   then switched on in `main.py`. Never a parallel copy.
+3. **A live source.** `make imu-record` already streams raw samples to the
+   Mac in the recording format; a `--follow` mode tails that file and runs
+   the same pipeline as it arrives, printing verdicts (committed / vetoed /
+   why). The bottle on the bench, the Mac deciding — a design loop with no
+   upload in it.
+
+**Data still needed:** a session that deliberately interleaves *tap only*
+and *grab → tilt*, labelled — the exact discrimination this is about — and a
+second day, to validate rather than develop.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing
