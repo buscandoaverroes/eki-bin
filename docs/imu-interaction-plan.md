@@ -672,6 +672,32 @@ rooms. The simulator is an extension of `scripts/replay.py`, not a new tool:
 and *grab → tilt*, labelled — the exact discrimination this is about — and a
 second day, to validate rather than develop.
 
+#### The first dry run of that session (2026-10-26), and what it changed
+
+Two things, both about the recording rather than the bottle:
+
+1. **The stream died 2.1 s in, silently.** The last rows were real gravity,
+   then nothing for a minute, while the Mac went on printing "234 Hz". Most
+   likely the IMU reset itself again (§ the IMU resets itself). The stream
+   couldn't say so: it waited quietly for data, and its heartbeat only
+   printed when data came. It now heartbeats on wall time, and after 100 ms
+   without data it checks CTRL1 and revives a reset sensor (an `imu_reset`
+   event). The Mac warns `STREAM STALLED` within 1.5 s.
+2. **Labelling by hand bent the motion being measured.** With one hand on
+   the bottle and one on the keys (`l` at the grab, `.` at the tilt), the
+   grab came out as a performance, not a natural movement. Since the
+   order is known in advance, the recorder now **cues** the trials
+   (`PROTOCOL=tap-vs-grab`). A countdown shows the instruction in words, then
+   a beep for GO. Space means done, `r` means redo. The **cue** is the label.
+   The act's timing comes from the data, inside the window [GO, done]:
+   hand-pressed times were late anyway (press *after*, plus reaction time).
+   Botched attempts stay in the file, labelled `redo`. Records and reasons:
+   `scripts/imu_protocol.py`; `imu_protocol.trials()` reads them back.
+
+   ⚠ For analysis: the space press that ends a trial is itself a knock on
+   the table if the keyboard shares it. It sits at the window's `done`
+   edge, so trim the last ~300 ms or put the keyboard elsewhere.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

@@ -37,6 +37,14 @@ tapped". Right hand only; the left holds the bottle.
   Backspace or 0 undoes the last label. Append-only, same as interaction_log.py.
   q quits.
 
+GUIDED (PROTOCOL=tap-vs-grab): the script says what to do. A countdown with
+the instruction in words — hands off the bottle while it runs — then a beep
+and GO. Do it, both hands free, and press SPACE when you've let go. r = "I
+messed that up": the attempt is kept, labelled redo, and repeated at once —
+also during the next countdown, if you only notice then. The label is the
+cue, not a key press; why, and the trial records: scripts/imu_protocol.py.
+START_AT=n resumes a session that was stopped part-way (a new file).
+
 Session notes and relabels live in data/imu-sessions.json (gitignored with the
 recordings): which files to analyse, which were dry runs, and what a label
 actually meant in a given session.
@@ -59,6 +67,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import imu_protocol  # noqa: E402
 from interaction_log import (MPREMOTE, REPO, UNDO_KEYS, _git_sha, parse_line,  # noqa: E402
                              stop_child)
 
@@ -161,6 +170,7 @@ def header_record(args, git, now):
     return {"k": "h", "h": now, "kind": "imu_stream", "unit": args.unit,
             "mount": args.mount, "odr_hz": args.odr, "gyro_fs_dps": args.gyro_fs, "surface": args.surface,
             "note": args.note, "label_map": LABEL_MAP, "git": git, "format": 2,
+            "protocol": getattr(args, "protocol", None),
             "started": datetime.fromtimestamp(now).isoformat(timespec="seconds")}
 
 
@@ -169,6 +179,19 @@ def out_path(out_dir, unit, now):
 
 
 # ── I/O ────────────────────────────────────────────────────────────────────
+_SOUND = Path("/System/Library/Sounds/Tink.aiff")
+
+
+def _beep():
+    # The GO cue, so eyes can stay on the bottle. Fire-and-forget: the record
+    # is stamped before this, and the sound lags it by tens of ms.
+    if _SOUND.exists():
+        subprocess.Popen(["afplay", str(_SOUND)], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    else:
+        sys.stdout.write("\a")
+
+
 def _restore_device():
     try:
         for a in (["soft-reset"], ["exec", "pass"]):
@@ -190,7 +213,19 @@ def main():
     ap.add_argument("--surface", default="", help="what it sits on (wood, stone, felt…)")
     ap.add_argument("--note", default="")
     ap.add_argument("--out-dir", type=Path, default=REPO / "data")
+    ap.add_argument("--protocol", choices=sorted(imu_protocol.PROTOCOLS),
+                    help="guided trials: the script cues each one (see the docstring)")
+    ap.add_argument("--rest", type=float, default=4.0,
+                    help="guided: hands-off countdown before each trial, s")
+    ap.add_argument("--start-at", type=int, default=1, help="guided: first trial number")
+    ap.add_argument("--no-beep", action="store_true")
     args = ap.parse_args()
+    guide = None
+    if args.protocol:
+        steps = imu_protocol.plan(args.protocol)
+        if not 1 <= args.start_at <= len(steps):
+            sys.exit(f"✗ --start-at must be 1..{len(steps)}")
+        guide = imu_protocol.Guide(steps, rest_s=args.rest, start_at=args.start_at)
     if not MPREMOTE.exists():
         sys.exit(f"✗ {MPREMOTE} missing — run `make setup`")
 
@@ -216,6 +251,7 @@ def main():
         ttymod.setcbreak(sys.stdin.fileno())
 
     seq = 0
+    go_h = 0.0
     standing = []
     current = None
     n_batches = n_labels = 0
@@ -230,23 +266,52 @@ def main():
 
     print(f"● recording → {path}")
     print(f"  unit={args.unit} mount={args.mount} odr={args.odr} Hz surface={args.surface or '—'}\n")
-    print("  keys (right hand):")
-    for name, keys in LEGEND:
-        print(f"    {name} {keys}")
-    print("    undo   Backspace or 0          quit   q\n")
+    if guide:
+        print(f"  guided: {args.protocol}, {len(guide.queue)} trials, {args.rest:g} s countdown")
+        print("    SPACE  done (after you've let go)     r  I messed that up — redo it")
+        print("    h      mark something odd             q  quit (START_AT= resumes)")
+        print("  Hands off the bottle during every countdown. Starting when data flows…\n")
+    else:
+        print("  keys (right hand):")
+        for name, keys in LEGEND:
+            print(f"    {name} {keys}")
+        print("    undo   Backspace or 0          quit   q\n")
+    shown = None            # the countdown number on screen
+
+    def emit(recs):
+        nonlocal seq
+        for r in recs:
+            seq += 1
+            f.write(json.dumps(dict(r, id=seq)) + "\n")
+        f.flush()
 
     with open(path, "w") as f:
         f.write(json.dumps(header_record(args, _git_sha(), now)) + "\n")
         try:
             while proc.poll() is None:
                 watch = [out_fd] + ([sys.stdin] if tty else [])
-                ready, _, _ = select.select(watch, [], [], 0.5)
+                ready, _, _ = select.select(watch, [], [], 0.1 if guide else 0.5)
                 for r in ready:
                     if r is sys.stdin:
                         ch = sys.stdin.read(1)
                         t_now = time.time()
                         if ch == "q":
                             raise KeyboardInterrupt
+                        if guide:
+                            was = guide.current
+                            recs, handled = guide.key(ch, t_now)
+                            emit(recs)
+                            for r in recs:
+                                if r["edge"] == "done":
+                                    mark = "✓ kept" if r["status"] == "ok" else "↺ redo"
+                                    print(f"\r  {mark} {r['trial']}  "
+                                          f"({r['h'] - go_h:.1f} s)  · {n_samples} samples, "
+                                          f"{last_hz or 0:.0f} Hz" + " " * 10)
+                                elif r["edge"] == "verdict":
+                                    print(f"\r  ↺ {r['trial']} re-judged: redo, "
+                                          f"then {was} again" + " " * 20)
+                            if handled:
+                                continue
                         if ch in UNDO_KEYS:
                             if not standing:
                                 print("  (nothing to undo)")
@@ -315,9 +380,41 @@ def main():
                 if (last_data_at is not None and not stalled
                         and time.time() - last_data_at > 1.5):
                     stalled = True
-                    print("  ⚠ STREAM STALLED — no samples for 1.5 s. Labels pressed now "
-                          "have no data under them; stop (q) and check before carrying on.")
-                if time.time() - last_status >= 10:
+                    if guide:
+                        emit(guide.stall(time.time()))
+                        print(f"\n  ⚠ STREAM STALLED — trial {guide.current} paused (voided "
+                              "if it had started); it restarts when data returns.")
+                    else:
+                        print("  ⚠ STREAM STALLED — no samples for 1.5 s. Labels pressed now "
+                              "have no data under them; stop (q) and check before carrying on.")
+                if guide:
+                    t_now = time.time()
+                    if guide.phase == "idle" and first_sample_at and first_sample_at > 0:
+                        emit(guide.begin(t_now))
+                    elif guide.phase == "paused" and not stalled:
+                        emit(guide.resume(t_now))
+                    recs = guide.tick(t_now)
+                    if recs:
+                        emit(recs)
+                        go_h = recs[0]["h"]
+                        if not args.no_beep:
+                            _beep()
+                        print("\r     ▶ GO" + " " * 20, flush=True)
+                        shown = None
+                    if guide.fresh:
+                        guide.fresh = False
+                        print("\n" + guide.announce())
+                    left = guide.countdown(t_now)
+                    if left is not None and left != shown:
+                        shown = left
+                        print(f"\r     {left} …", end="", flush=True)
+                    if guide.phase == "finished":
+                        kept, redone = guide.summary()
+                        print("\n  ● protocol complete — kept "
+                              + ", ".join(f"{k} {v}" for k, v in sorted(kept.items()))
+                              + f"; {redone} redone. Stopping.")
+                        raise KeyboardInterrupt
+                elif time.time() - last_status >= 10:
                     last_status = time.time()
                     print(f"  … {n_samples} samples, {last_hz or 0:.0f} Hz now, "
                           f"{n_labels} labels" + (f", in [{current}]" if current else "")
@@ -330,6 +427,11 @@ def main():
         except KeyboardInterrupt:
             pass
         finally:
+            if guide:
+                recs = guide.abandon(time.time())
+                if recs:
+                    emit(recs)
+                    print(f"\n  (trial {recs[0]['trial']} cut off — labelled abandoned)")
             if current is not None:
                 # A recording that ends mid-state would leave a segment with no
                 # end; close it here so every state in the file is a closed
@@ -344,7 +446,9 @@ def main():
             stop_child(proc)
             _restore_device()
 
-    print(f"\n■ {path}\n  {n_batches * 10} samples, {n_labels} labels")
+    tally = (f"{len(guide.kept)}/{len(guide.trials)} trials kept" if guide
+             else f"{n_labels} labels")
+    print(f"\n■ {path}\n  {n_samples} samples, {tally}")
 
 
 if __name__ == "__main__":
