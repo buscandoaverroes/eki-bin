@@ -59,10 +59,8 @@ def run(odr_hz=240):
         return
 
     code = interlog.ODR_CODES[odr_hz]
-    i2c.writeto_mem(addr, _CTRL1, bytes([code]))
-    i2c.writeto_mem(addr, _CTRL2, bytes([code]))
     fs = getattr(interlog, "STREAM_GYRO_FS", 1000)
-    i2c.writeto_mem(addr, _CTRL6, bytes([interlog.GYRO_FS_CODES[fs]]))
+    _configure(i2c, addr, code, fs)
     regs = i2c.readfrom_mem(addr, _CTRL1, 10)          # CTRL1..CTRL10, as read
     knobs = {"kind": "imu_stream", "odr_hz": odr_hz, "addr": addr,
              "gyro_fs_requested": fs}
@@ -84,7 +82,26 @@ def run(odr_hz=240):
     last_sample = None
     quiet_us = int(1_000_000 / odr_hz * 0.85)
 
+    resets = 0
+    st = -1
+    last_ready = t_acc
+    last_check = t_acc
+
     while True:
+        # Time first, every iteration — including failed reads and empty
+        # polls. The heartbeat below runs on THIS clock, not on samples.
+        now = time.ticks_us()
+        t_acc += time.ticks_diff(now, t_last)
+        t_last = now
+        if t_acc - win_start >= 1_000_000:
+            # ⚠ ON WALL TIME, and that is the fix. It used to sit inside the
+            # data-ready branch, so the moment data stopped — a reset sensor,
+            # a failing bus — the stream went silent and could not say why.
+            # A 2026-10-26 dry run streamed 2.1 s, then nothing, for 45 s,
+            # while the Mac's status line went on reading "234 Hz".
+            print(interlog.fmt_stat(t_acc, n, n_win * 1e6 / (t_acc - win_start),
+                                    max_gap, errors, resets, st))
+            win_start, n_win, max_gap = t_acc, 0, 0
         try:
             i2c.readfrom_mem_into(addr, _STATUS, sbuf)
             st = sbuf[0]
@@ -92,13 +109,30 @@ def run(odr_hz=240):
                 i2c.readfrom_mem_into(addr, _DATA, dbuf)
         except OSError:
             errors += 1
+            _spin_us(150)
             continue
-        now = time.ticks_us()
-        t_acc += time.ticks_diff(now, t_last)
-        t_last = now
         if not (st & 1):
+            # No new sample. Normal for a few ms; not for 100. Then check
+            # whether the sensor reset itself (CTRL1 back to power-down) and
+            # put it back — the same failure gestures.ImuWatch handles in
+            # the firmware, which this stream has no other defence against.
+            if t_acc - last_ready > _STALL_US and t_acc - last_check > _STALL_US:
+                last_check = t_acc
+                try:
+                    if i2c.readfrom_mem(addr, _CTRL1, 1)[0] != code:
+                        _configure(i2c, addr, code, fs)
+                        resets += 1
+                        print(interlog.fmt_event(t_acc // 1000, "imu_reset",
+                                                 n=resets, stalled_ms=(t_acc - last_ready) // 1000))
+                        time.sleep_ms(120)              # first samples after a (re)start are junk
+                        # t_last deliberately NOT reset: the pause has to stay
+                        # in the stream's clock, or every later sample would be
+                        # stamped 120 ms early and labels would drift off the data.
+                except OSError:
+                    errors += 1
             _spin_us(150)                               # not yet: check again shortly
             continue
+        last_ready = t_acc
         gx, gy, gz, ax, ay, az = struct.unpack_from("<hhhhhh", dbuf, 0)
         if rows and t_acc - (t_batch0 + rows[-1][0]) > interlog.MAX_DELTA_US:
             # A stall longer than the packed time stamp can express (65 ms):
@@ -114,15 +148,22 @@ def run(odr_hz=240):
         if last_sample is not None and t_acc - last_sample > max_gap:
             max_gap = t_acc - last_sample
         last_sample = t_acc
-        if t_acc - win_start >= 1_000_000:
-            print(interlog.fmt_stat(t_acc, n, n_win * 1e6 / (t_acc - win_start),
-                                    max_gap, errors))
-            win_start, n_win, max_gap = t_acc, 0, 0
         if len(rows) >= _BATCH:
             print(interlog.fmt_batch_b64(t_batch0, rows))
             rows = []
         else:
             _spin_us(quiet_us)                          # the next sample cannot exist yet
+
+
+_STALL_US = 100_000   # no sample this long (24 periods at 240 Hz) → check the sensor
+
+
+def _configure(i2c, addr, code, fs):
+    """Accel and gyro on at the requested rate, gyro full scale. At start,
+    and again whenever the sensor is found reset."""
+    i2c.writeto_mem(addr, _CTRL1, bytes([code]))
+    i2c.writeto_mem(addr, _CTRL2, bytes([code]))
+    i2c.writeto_mem(addr, _CTRL6, bytes([interlog.GYRO_FS_CODES[fs]]))
 
 
 def _spin_us(us):

@@ -167,9 +167,14 @@ def decode_batch_b64(b64, n):
     return out
 
 
-def fmt_stat(t_us, n, hz, max_gap_us, errors):
-    return '%s{"k":"t","t":%d,"n":%d,"hz":%.1f,"max_gap_us":%d,"err":%d}' % (
-        TAG, t_us, n, hz, max_gap_us, errors)
+def fmt_stat(t_us, n, hz, max_gap_us, errors, resets=0, st=-1):
+    """The stream's once-a-second heartbeat. `resets` is how many times the
+    sensor has been found reset and re-configured; `st` the last STATUS
+    byte read (-1 = none yet) — 0 there with hz 0 is a sensor that stopped
+    converting, not a slow loop."""
+    return ('%s{"k":"t","t":%d,"n":%d,"hz":%.1f,"max_gap_us":%d,"err":%d,'
+            '"resets":%d,"st":%d}' % (TAG, t_us, n, hz, max_gap_us, errors,
+                                      resets, st))
 
 
 def fmt_capture_chunks(t0, rows):

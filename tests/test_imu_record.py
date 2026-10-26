@@ -33,6 +33,13 @@ def test_stat_roundtrips():
     assert out["max_gap_us"] == 5200 and out["err"] == 0
 
 
+def test_stat_carries_sensor_resets_and_the_last_status_byte():
+    # A heartbeat with no samples behind it is the point: it is what tells
+    # the Mac the sensor stopped, instead of the stream simply going quiet.
+    out = host.parse_line(interlog.fmt_stat(3_000_000, 480, 0.0, 0, 2, resets=1, st=0), 1.0)
+    assert out["hz"] == 0 and out["resets"] == 1 and out["st"] == 0 and out["err"] == 2
+
+
 def test_odr_codes_match_the_two_confirmed_values():
     assert interlog.ODR_CODES[60] == 0x05        # imu_test.py
     assert interlog.ODR_CODES[240] == 0x07       # gestures.py

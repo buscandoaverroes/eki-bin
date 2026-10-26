@@ -220,6 +220,10 @@ def main():
     current = None
     n_batches = n_labels = 0
     last_hz = None
+    n_samples = 0
+    last_data_at = None     # host time of the last batch — a stall is its absence
+    stalled = False
+    resets = 0
     last_status = time.time()
     first_sample_at = None
     buf = b""
@@ -288,16 +292,37 @@ def main():
                             f.write(json.dumps(rec, separators=(",", ":")) + "\n")
                             if rec["k"] == "b":
                                 n_batches += 1
+                                n_samples += len(rec.get("d", ()))
                                 first_sample_at = first_sample_at or time.time()
+                                last_data_at = time.time()
+                                if stalled:
+                                    stalled = False
+                                    print("  ✓ stream resumed")
                             elif rec["k"] == "t":
                                 last_hz = rec.get("hz")
+                                resets = rec.get("resets", resets)
+                            elif rec["k"] == "e" and rec.get("e") == "imu_reset":
+                                print("  ⚠ the sensor reset itself (stalled %s ms) — "
+                                      "reconfigured, #%s this recording"
+                                      % (rec.get("stalled_ms"), rec.get("n")))
                             elif rec["k"] == "x":
                                 print("  | " + rec["text"].rstrip())
                 f.flush()
+                # Say so the MOMENT data stops. The 2026-10-26 dry run streamed
+                # 2.1 s and then nothing, and this loop went on printing
+                # "234 Hz achieved" for the rest of it — the Hz came from the
+                # last heartbeat, which had stopped arriving.
+                if (last_data_at is not None and not stalled
+                        and time.time() - last_data_at > 1.5):
+                    stalled = True
+                    print("  ⚠ STREAM STALLED — no samples for 1.5 s. Labels pressed now "
+                          "have no data under them; stop (q) and check before carrying on.")
                 if time.time() - last_status >= 10:
                     last_status = time.time()
-                    print(f"  … {n_batches * 10} samples, {last_hz or 0:.0f} Hz achieved, "
-                          f"{n_labels} labels" + (f", in [{current}]" if current else ""))
+                    print(f"  … {n_samples} samples, {last_hz or 0:.0f} Hz now, "
+                          f"{n_labels} labels" + (f", in [{current}]" if current else "")
+                          + (f", sensor reset {resets}×" if resets else "")
+                          + ("   ⚠ STALLED" if stalled else ""))
                 if first_sample_at is None and time.time() - now > 30:
                     first_sample_at = -1
                     print("  ⚠ 30 s and no samples — see the lines above (IMU found? "
