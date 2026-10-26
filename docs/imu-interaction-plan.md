@@ -534,6 +534,18 @@ hypothesis) forbids tuning against anecdotes.**
     from touch (September: touching the IMU gave EIO), or something on the
     shared bus. Recoveries clustering while the display is lit and bright
     would point at the supply, and at the load switch / decoupling work.
+    **✅ Answered 2026-10-26: the wiring, at certain angles.** The guided
+    session (strip dark: `imu_stream` drives no LEDs) reset 12 times in
+    683 s. 11 came during handling and none in 30 taps, with no shock in the
+    300 ms before any of them. 8 of 12 came while the bottle leaned toward one
+    sector (~60–115° in the sensor frame), some at only 13–26° of lean.
+    About 25 tilts leaning the other way, many past 45°, never reset. So
+    not impact, not touch, not the strip's load: a loose wire inside the
+    bottle making intermittent contact in one direction (the owner saw the
+    same pattern by hand). A whole-chip reset suggests the sensor's power
+    or ground. **Fix: the harness (wall #2), not firmware.** `ImuWatch`
+    stays as the safety net. The reset count per session is the test of
+    whether a harness fixed it.
   - **Found while reading the gate, NOT today's cause:** `_TapCycleState`,
     `_StatusMessage` and `tilt._elapsed` compared `ticks_ms()` stamps with
     plain subtraction. `ticks_ms` wraps every ~12.4 days (2**30 ms) and the
