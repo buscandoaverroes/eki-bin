@@ -710,6 +710,36 @@ Two things, both about the recording rather than the bottle:
    the table if the keyboard shares it. It sits at the window's `done`
    edge, so trim the last ~300 ms or put the keyboard elsewhere.
 
+#### The baseline: shipped firmware on the guided session (2026-10-26)
+
+`imu-bottle-01-20261026-193043`, 68 kept trials, shipping knobs (energy
+1e6, vertical share 0.5, gyro 150–400 ms ≤ 1.15 dps):
+
+| loop | taps accepted | grab/hold trials with a false tap | tap-wait-grab: tap / false after | hands-off countdowns |
+|---|---|---|---|---|
+| 240 Hz, no blindness | 15/30 | 16/30 (20 false taps) | 5/8 · 2 | 0 |
+| 240 Hz | 15/30 | 16/30 (20) | 5/8 · 2 | 0 |
+| 145 Hz (≈ with rendering) | 9/30 | 15/30 | 5/8 · 0 | 0 |
+| 57 Hz | 4/30 | 12/30 | 3/8 · 0 | 0 |
+
+**Of the 15 taps missed at 240 Hz, 12 never triggered: a Stage 1 loss, not
+a Stage 2 one.** The trigger watches the change in the *length* of the
+acceleration vector, |a|. A tap on the side of an upright bottle pushes it
+sideways, which rotates the vector and barely lengthens it. Every one of
+the 30 taps moved the vector by 54–865 mg (median ~210). Measured as |a|,
+that was 5–298 mg, typically 3–5× smaller. The earlier hand-labelled
+sessions (48/62) had harder, performed taps. Guided taps are natural ones,
+and natural taps are gentle. The arbiter can't commit a tap that Stage 1
+never hands it, so **Stage 1 comes first**: trigger on the high-passed
+vector (a minus a slow baseline vector), then re-measure the noise floor
+in those terms. The chip's own wake-up detection works on high-passed
+per-axis data, so this also points the way to moving Stage 1 onto the
+chip.
+
+The hands-off countdowns produced no false taps. Accepted taps outside the
+kept trials all fell in redone attempts (real handling) or just after a
+sensor reset (the first samples after a reconfigure).
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing
