@@ -76,7 +76,7 @@ def test_the_gyro_baseline_is_frozen_at_the_trigger_not_shared():
     # learning while the window fills. Overlapping captures (ideal) expose it.
     fw = rp.load_firmware()
     bias = fw.gestures.GyroBias(mdps=35.0)
-    arb = sim.CaptureArbiter(fw, sim.AcceptStage2(fw), gyro_mdps=35.0)
+    arb = sim.CaptureArbiter(fw, sim.AcceptClassifier(fw), gyro_mdps=35.0)
     for _ in range(2000):
         bias.update((10, 0, 0), DT)
     arb.trigger(0.0, 0, 60.0, bias)
@@ -113,9 +113,9 @@ def test_a_slow_tilt_does_not_fire_the_vector_trigger(fw):
     assert [e for e in sim.Pipeline(fw, 240, "vector").run(out) if e["e"] == "trigger"] == []
 
 
-def test_accept_stage2_scores_stage1_alone(fw):
+def test_accept_classifier_scores_detect_alone(fw):
     samples = stream(4, [(2000, down(300), 60)])          # a long shove: firmware may reject
-    taps = [e for e in sim.Pipeline(fw, 240, stage2="accept").run(samples) if e["e"] == "tap"]
+    taps = [e for e in sim.Pipeline(fw, 240, classify="accept").run(samples) if e["e"] == "tap"]
     assert taps and all(e["valid"] for e in taps)
 
 
@@ -201,7 +201,7 @@ def test_main_runs_end_to_end_on_a_guided_file(tmp_path, capsys):
              {"k": "l", "h": 6.0, "id": 2, "trial": 1, "attempt": 1, "edge": "done", "status": "ok"}]
     path = tmp_path / "imu-test-guided.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
-    sim.main([str(path), "--stage1", "magnitude,vector"])
+    sim.main([str(path), "--detect", "magnitude,vector"])
     out = capsys.readouterr().out
     assert "magnitude · capture · firmware     taps  0/1 (triggered  0/1)" in out
     assert "vector · capture · firmware        taps  1/1 (triggered  1/1)" in out

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""scripts/sim.py — the two-stage pipeline on the Mac, one block at a time.
+"""scripts/sim.py — the IMU pipeline on the Mac: detect → arbiter → classify.
 
     make sim                                   # every use:true session, what ships
-    make sim STAGE1=magnitude,vector LOOP_HZ=240,145
+    make sim DETECT=magnitude,vector LOOP_HZ=240,145
     make sim-live                              # follow the recording being made now
 
 THE FRAME (docs/imu-interaction-plan.md, "Between Phase 1 and 2"):
 
-    samples ─► LOOP ─► STAGE 1 ─► ARBITER ─► STAGE 2 ─► verdict
+    samples ─► LOOP ─► DETECT ─► ARBITER ─► CLASSIFY ─► verdict
                which   "should I   "when do    "what was
                samples  look?"      I decide?"  it?"
                the loop                 ▲
@@ -15,15 +15,15 @@ THE FRAME (docs/imu-interaction-plan.md, "Between Phase 1 and 2"):
 
 Every block is swappable, and what ships fills every slot by default:
 
-  STAGE 1   magnitude  |a| − median(|a|) ≥ 50 mg — the firmware's own
+  DETECT    magnitude  |a| − median(|a|) ≥ 50 mg — the firmware's own
                        functions (gestures._gesture_magnitude_mg/_median)
             vector     ‖a − median(a)‖ ≥ 50 mg, per axis — the SAME buffer
                        and threshold, so the one thing changed is geometry
                        (a sideways tap turns the vector; it barely lengthens it)
   ARBITER   capture    today's: capture a fixed window, decide once, then go
                        blind (window + the response, after an accepted tap)
-  STAGE 2   firmware   gestures.reject_reason — energy · vertical · gyro
-            accept     everything Stage 1 hands over is a tap (scores Stage 1 alone)
+  CLASSIFY  firmware   gestures.reject_reason — energy · vertical · gyro
+            accept     everything detect hands over is a tap (scores detect alone)
 
 This is replay.py with the blocks pulled apart, not a second firmware:
 the features, the gyro baseline and the verdict are imported from
@@ -41,7 +41,7 @@ SCORING. Guided recordings (PROTOCOL=..., scripts/imu_protocol.py) score per
 trial: taps accepted in T; any accepted tap in G/H (a false tap); in D, the
 tap and anything accepted ≥1.5 s after it; and accepted taps in no attempt's
 window (the hands-off countdowns). Hand-labelled recordings score with
-replay.score(). Both also count Stage 1 TRIGGERS, because Stage 1 is judged
+replay.score(). Both also count detect's TRIGGERS, because detect is judged
 on recall (did every tap trigger?) and on what wakes it in rest_flat — the
 noise floor — not on verdicts.
 """
@@ -82,7 +82,7 @@ class Loop:
         return True
 
 
-# ── STAGE 1 ───────────────────────────────────────────────────────────────
+# ── DETECT ───────────────────────────────────────────────────────────────
 class MagnitudeTrigger:
     """What ships: the change in |a| against the median of the last few
     samples the loop saw. Built from the firmware's own functions."""
@@ -131,11 +131,11 @@ class VectorTrigger(MagnitudeTrigger):
         return dev if dev >= self.thr else None
 
 
-STAGE1 = {"magnitude": MagnitudeTrigger, "vector": VectorTrigger}
+DETECT = {"magnitude": MagnitudeTrigger, "vector": VectorTrigger}
 
 
-# ── STAGE 2 ───────────────────────────────────────────────────────────────
-class FirmwareStage2:
+# ── CLASSIFY ───────────────────────────────────────────────────────────────
+class FirmwareClassifier:
     name = "firmware"
 
     def __init__(self, fw):
@@ -147,7 +147,7 @@ class FirmwareStage2:
         return why is None, why
 
 
-class AcceptStage2:
+class AcceptClassifier:
     name = "accept"
 
     def __init__(self, fw):
@@ -157,7 +157,7 @@ class AcceptStage2:
         return True, None
 
 
-STAGE2 = {"firmware": FirmwareStage2, "accept": AcceptStage2}
+CLASSIFY = {"firmware": FirmwareClassifier, "accept": AcceptClassifier}
 
 
 # ── ARBITER ───────────────────────────────────────────────────────────────
@@ -169,15 +169,15 @@ class CaptureArbiter:
     impulse is judged on its own (replay --ideal)."""
     name = "capture"
 
-    def __init__(self, fw, stage2, gyro_mdps=None, blind_ms=replay.BLIND_MS, ideal=False):
-        self.fw, self.stage2 = fw, stage2
+    def __init__(self, fw, classify, gyro_mdps=None, blind_ms=replay.BLIND_MS, ideal=False):
+        self.fw, self.classify = fw, classify
         self.window = fw.gestures._GESTURE_WINDOW_MS
         self.blind_ms, self.ideal, self.gyro_mdps = blind_ms, ideal, gyro_mdps
         self.pending = []           # [(t0, i0, dev, gyro baseline)] captures still filling
         self.busy_until = -1e18
 
     def open(self, t):
-        """Is Stage 1 listening at t?"""
+        """Is detect listening at t?"""
         return t >= self.busy_until
 
     def trigger(self, t, i, dev, bias=None):
@@ -201,7 +201,7 @@ class CaptureArbiter:
             t0, i0, dev, frozen = self.pending.pop(0)
             feats, _ = replay.capture_features(self.fw, samples, i0, t0, self.window,
                                                self.gyro_mdps, frozen)
-            ok, why = self.stage2.judge(feats)
+            ok, why = self.classify.judge(feats)
             if ok and not self.ideal:
                 self.busy_until = t0 + self.window + self.blind_ms
             out.append({"e": "tap", "t": t0, "dev": dev, "feats": feats, "valid": ok,
@@ -223,19 +223,19 @@ ARBITERS = {"capture": CaptureArbiter}
 
 # ── the pipeline ──────────────────────────────────────────────────────────
 class Pipeline:
-    def __init__(self, fw, loop_hz=240.0, stage1="magnitude", arbiter="capture",
-                 stage2="firmware", gyro_mdps=None, ideal=False, blind_ms=replay.BLIND_MS):
+    def __init__(self, fw, loop_hz=240.0, detect="magnitude", arbiter="capture",
+                 classify="firmware", gyro_mdps=None, ideal=False, blind_ms=replay.BLIND_MS):
         self.fw = fw
         self.loop = Loop(loop_hz)
-        self.stage1 = STAGE1[stage1](fw)
-        self.arbiter = ARBITERS[arbiter](fw, STAGE2[stage2](fw), gyro_mdps=gyro_mdps,
+        self.detect = DETECT[detect](fw)
+        self.arbiter = ARBITERS[arbiter](fw, CLASSIFY[classify](fw), gyro_mdps=gyro_mdps,
                                          blind_ms=blind_ms, ideal=ideal)
         self.bias = fw.gestures.GyroBias(mdps=gyro_mdps) if gyro_mdps else None
         self.tilt = fw.tilt.TiltController() if fw.settings.TILT_ENABLED else None
         self.samples, self.events = [], []
         self._last_t = None
         self._tilt_key = None
-        self.label = f"{stage1} · {arbiter} · {stage2}"
+        self.label = f"{detect} · {arbiter} · {classify}"
 
     def feed(self, s):
         """One sample in; the events it completed out (also kept in .events)."""
@@ -244,7 +244,7 @@ class Pipeline:
         out = self.arbiter.sample(self.samples, i, self.bias)
         if self.arbiter.open(s.t) and self.loop.sees(s.t):
             # The loop's turn: the gyro baseline, the tilt controller and
-            # Stage 1 all see this sample, in the firmware's order.
+            # detect all see this sample, in the firmware's order.
             if self.bias is not None:
                 self.bias.update((s.gx, s.gy, s.gz), 0 if self._last_t is None else s.t - self._last_t)
             if self.tilt is not None:
@@ -255,10 +255,10 @@ class Pipeline:
                     self._tilt_key = key
                     out.append({"e": "tilt", "t": s.t, "state": key[0], "engaged": self.tilt.engaged})
             self._last_t = s.t
-            dev = self.stage1.update(s)
+            dev = self.detect.update(s)
             if dev is not None:
                 self.arbiter.trigger(s.t, i, dev, self.bias)
-                self.stage1.reset()
+                self.detect.reset()
                 out.append({"e": "trigger", "t": s.t, "dev": dev})
         self.events.extend(out)
         return out
@@ -391,8 +391,8 @@ def live(path, args, knobs):
         k = rec.get("k")
         if k == "m" and pipe is None:
             mdps = replay.GYRO_MDPS.get(rec.get("CTRL6"))
-            pipe = Pipeline(fw, float(args.loop_hz.split(",")[0]), args.stage1.split(",")[0],
-                            args.arbiter, args.stage2, gyro_mdps=mdps, ideal=args.ideal)
+            pipe = Pipeline(fw, float(args.loop_hz.split(",")[0]), args.detect.split(",")[0],
+                            args.arbiter, args.classify, gyro_mdps=mdps, ideal=args.ideal)
             print(f"  pipeline: {pipe.label} at {args.loop_hz.split(',')[0]} Hz, gyro {mdps} mdps/LSB\n")
         elif k == "l" and rec.get("edge") == "go":
             kind, where = rec["type"], rec.get("where")
@@ -401,7 +401,7 @@ def live(path, args, knobs):
             for s in samples_of(rec):
                 for e in pipe.feed(s):
                     if e["e"] == "trigger":
-                        print(f"     ▲ Stage 1  {e['dev']:4.0f} mg   → capturing")
+                        print(f"     ▲ detect   {e['dev']:4.0f} mg   → capturing")
                     elif e["e"] == "tap":
                         f = e["feats"]
                         g = f.get("gyro_mid_dps")
@@ -424,9 +424,9 @@ def newest_recording(unit):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("files", nargs="*", type=Path)
-    ap.add_argument("--stage1", default="magnitude", help=f"comma list of {sorted(STAGE1)}")
+    ap.add_argument("--detect", default="magnitude", help=f"comma list of {sorted(DETECT)}")
     ap.add_argument("--arbiter", default="capture", choices=sorted(ARBITERS))
-    ap.add_argument("--stage2", default="firmware", help=f"comma list of {sorted(STAGE2)}")
+    ap.add_argument("--classify", default="firmware", help=f"comma list of {sorted(CLASSIFY)}")
     ap.add_argument("--loop-hz", default="240", help="comma list, e.g. 240,145,57")
     ap.add_argument("--ideal", action="store_true", help="no loop blindness")
     ap.add_argument("--knob", action="append", default=[], help="NAME=VALUE over what ships")
@@ -464,8 +464,8 @@ def main(argv=None):
         print(f"\n== {path.name}" + (f"  (guided: {header['protocol']})" if recs else ""))
         for hz in [float(x) for x in args.loop_hz.split(",")]:
             print(f"  loop {hz:g} Hz{' ideal' if args.ideal else ''}")
-            for s1 in args.stage1.split(","):
-                for s2 in args.stage2.split(","):
+            for s1 in args.detect.split(","):
+                for s2 in args.classify.split(","):
                     fw = replay.load_firmware(knobs)        # fresh tilt state per run
                     pipe = Pipeline(fw, hz, s1, args.arbiter, s2,
                                     gyro_mdps=header.get("gyro_mdps"), ideal=args.ideal)

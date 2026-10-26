@@ -556,19 +556,23 @@ hypothesis) forbids tuning against anecdotes.**
 
 ### Between Phase 1 and 2 — the frame, and what the data says (2026-10-25)
 
-**The frame: two stages and a clock between them.** Every idea so far —
+**The frame: detect → arbiter → classify.** Every idea so far —
 thresholds, trees, an ESN as a classifier, an ESN as an anomaly detector —
 fits one of three roles, and the roles do not compete:
 
 | role | job | starts as | earns a change by |
 |---|---|---|---|
-| **Stage 1** | *when to look* — did anything happen? | the fixed trigger, on this table | evidence the table version fails somewhere |
+| **detect** | *when to look* — did anything happen? | the fixed trigger, on this table | evidence the table version fails somewhere |
 | **the arbiter** | *when to decide* | a settlement window, length from the data below | — it is required whatever the stages are |
-| **Stage 2** | *what it was* | the current rules (energy, vertical, gyro) | beating them on replay |
+| **classify** | *what it was* | the current rules (energy, vertical, gyro) | beating them on replay |
 
-**The rule for both stages: start with the controlled condition.** A fixed
+*Named detect / arbiter / classify, not Stage 1 / Stage 2: the display
+pipeline already owns those words (design principle 9, `tests/test_stage1.py`),
+and this doc used them for both until 2026-10-26.*
+
+**The rule for detect and classify: start with the controlled condition.** A fixed
 threshold on one table, not learned and not adaptive. Prove it there. Only
-then test an adaptive Stage 1 against it — a threshold scaled to the recent
+then test an adaptive detect against it — a threshold scaled to the recent
 noise first, and an ESN only if the background turns out to have a rhythm a
 predictor could learn (music through a shelf, a compressor, a train line).
 Music is a variable to add on purpose later, not the starting case.
@@ -647,7 +651,7 @@ kept. (Tapping harder does not rescue it — a harder tap rocks more.)
 | a median tap, first 30 ms | ~170 mg | |
 
 The loudest footstep reached the trigger threshold exactly. The room is a
-real input, and Stage 1 has a real job — but the controlled-condition rule
+real input, and detect has a real job — but the controlled-condition rule
 still says: fix the table case first.
 
 #### Sample rate, SPI, MicroPython
@@ -669,7 +673,7 @@ Enough data exists to develop and compare stage designs **for the table
 case** — not to prove them (one bottle, one day), and none at all for other
 rooms. The simulator is an extension of `scripts/replay.py`, not a new tool:
 
-1. **Stages as plug-ins.** Stage 1, the arbiter and Stage 2 become objects
+1. **Blocks as plug-ins.** Detect, the arbiter and classify become objects
    the harness drives, with today's firmware behaviour as the baseline.
 2. **The arbiter is written as a pure firmware module** (like `tilt.py`),
    which the harness imports — one implementation, scored on recordings,
@@ -722,36 +726,36 @@ Two things, both about the recording rather than the bottle:
 | 145 Hz (≈ with rendering) | 9/30 | 15/30 | 5/8 · 0 | 0 |
 | 57 Hz | 4/30 | 12/30 | 3/8 · 0 | 0 |
 
-**Of the 15 taps missed at 240 Hz, 12 never triggered: a Stage 1 loss, not
-a Stage 2 one.** The trigger watches the change in the *length* of the
+**Of the 15 taps missed at 240 Hz, 12 never triggered: a detect loss, not
+a classify one.** The trigger watches the change in the *length* of the
 acceleration vector, |a|. A tap on the side of an upright bottle pushes it
 sideways, which rotates the vector and barely lengthens it. Every one of
 the 30 taps moved the vector by 54–865 mg (median ~210). Measured as |a|,
 that was 5–298 mg, typically 3–5× smaller. The earlier hand-labelled
 sessions (48/62) had harder, performed taps. Guided taps are natural ones,
-and natural taps are gentle. The arbiter can't commit a tap that Stage 1
-never hands it, so **Stage 1 comes first**: trigger on the high-passed
+and natural taps are gentle. The arbiter can't commit a tap that detect
+never hands it, so **detect comes first**: trigger on the high-passed
 vector (a minus a slow baseline vector), then re-measure the noise floor
 in those terms. The chip's own wake-up detection works on high-passed
-per-axis data, so this also points the way to moving Stage 1 onto the
+per-axis data, so this also points the way to moving detect onto the
 chip.
 
 The hands-off countdowns produced no false taps. Accepted taps outside the
 kept trials all fell in redone attempts (real handling) or just after a
 sensor reset (the first samples after a reconfigure).
 
-#### The simulator, and Stage 1's first swap (2026-10-26)
+#### The simulator, and detect's first swap (2026-10-26)
 
 `scripts/sim.py` (`make sim`, `make sim-live`) is replay with the blocks
-pulled apart: LOOP → STAGE 1 → ARBITER → STAGE 2, plus the tilt controller
+pulled apart: LOOP → DETECT → ARBITER → CLASSIFY, plus the tilt controller
 in parallel. What ships fills every slot. With those blocks it reproduces
 `replay.replay()` exactly, every event and feature, on real recordings at
 57/145/240 Hz and in ideal mode (`tests/test_sim.py` pins it on synthetic
 streams). It processes one sample at a time and never looks ahead, so
 `--follow` runs the same pipeline on a recording while it is being made.
 
-First swap, **Stage 1 = vector**: ‖a − per-axis median‖ instead of
-|a| − median(|a|). The buffer, the 50 mg threshold and Stage 2 are all
+First swap, **detect = vector**: ‖a − per-axis median‖ instead of
+|a| − median(|a|). The buffer, the 50 mg threshold and classify are all
 unchanged, so the only difference is the geometry.
 
 | | magnitude (ships) | vector |
@@ -769,14 +773,14 @@ unchanged, so the only difference is the geometry.
   the vector deviation is 3–5× larger, so the impulse stays above threshold
   for long enough that a 145 Hz loop still sees it.
 - **The cost is the hand leaving the bottle.** Set-downs and releases
-  trigger more and pass Stage 2 more. They come straight after the hand has
+  trigger more and pass classify more. They come straight after the hand has
   been holding the bottle, so this is the arbiter's look-back veto, not a
   threshold to raise.
 - **The noise floor isn't proven yet.** About 9 minutes of hands-off data,
   one table, a quiet room, nothing for footsteps. A rest-heavy session
   (footsteps, door, a chair) is needed before this ships.
 - Live, trial 1 of the session shows the arbiter's case in one line: a
-  grab held still passes Stage 2 (no rotation in 150–400 ms), and the tilt
+  grab held still passes classify (no rotation in 150–400 ms), and the tilt
   engages a second later.
 
 ### Phase 2 — The arbiter (the structural fix)
