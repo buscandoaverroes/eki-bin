@@ -808,6 +808,83 @@ the ad-hoc coupling in `_run_interactive_loop`. Sketch, not a spec:
   committed), C does not reproduce. Then a real-hardware session in the
   bottle, and only then merge.
 
+#### Built 2026-10-26, in simulation: `micropython/arbiter.py`
+
+The sketch above, narrowed by the guided session to the one rule the data
+supports. **A classified tap is a claim, settled on stillness:**
+
+```
+  t0 ── ring-down ──┬── quiet window ──┐
+  trigger   0-250 ms │    250-600 ms    │
+                     │                  ├─ still → COMMIT (proved; nothing later undoes it)
+                     │                  └─ not still → provisional:
+                     │                       sustained rotation / active tilt → VETO "handled after"
+                     │                       nothing by 1.8 s                → VETO "not still"
+  handling ended < 1.5 s before t0 ───────────────────────────────────► VETO "handled before"
+```
+
+**Why stillness and not a timer** (guided session, first trigger per trial):
+
+| | measured |
+|---|---|
+| a tap's own rotation (>10 dps, 50 ms mean) | over by 51 / 129 / 166 ms (p50 / p90 / max) |
+| grab-and-tilt: sustained rotation starts | +100 ms, at once |
+| hold-then-tilt: sustained rotation starts | +456 / 983 / 1365 ms (p10 / 50 / 90) |
+| tap-wait-grab: the grab starts | +994 / 2091 / 2835 ms (p10 / 50 / 90) |
+| accel jitter, 250-600 ms: taps (n 38) / holds (n 15) | median 1.04 / 2.29 mg, AUC 0.92 |
+
+Holds need a window of at least ~1.4 s and tap-wait-grabs allow under 1.0 s,
+so no fixed window works for both. Stillness does: a finger leaves the
+bottle at the sensor's noise floor, a hand doesn't. It costs no latency
+when the bottle is still: it settles at 600 ms, inside the 1.2 s capture
+that classify waits for anyway.
+
+**Result** (`make sim DETECT=vector ARBITER=capture,settle`):
+
+| | capture (today) | settle |
+|---|---|---|
+| guided natural taps, 240 Hz | 29/30 | 28/30 |
+| guided grab trials with a false tap | 14/30 (17 taps) | **6/30 (6)** |
+| tap-wait-grab: tap / false after | 7/8 · 1 | 7/8 · 0 |
+| Oct 4 handling, ideal: set-down · release · grab | 9/51 · 13/29 · 21/39 | **0/51 · 7/29 · 9/39** |
+| knocks, bumps, footsteps, rest | unchanged (0–1) | 0 |
+| **Oct 4 taps, made with the other hand holding the bottle (ideal)** | 59/62 | **3/62** |
+
+Combined with vector detect, against the shipped firmware: natural taps
+15/30 → 28/30, grab trials with a false tap 16/30 → 6/30.
+
+**Two things found while building it:**
+
+- **Tilt "engaged" is not handling.** It means a tilt session is *open*,
+  and one stays open until the bottle has been still for `TILT_STILL_MS`
+  (6 s), on purpose. In the guided session that was 87% of the time,
+  and fed as evidence it vetoed almost every tap. The evidence is the tilt
+  *adjusting* (state `up`/`down`).
+- **Float32 on the device.** The stillness RMS is summed about the window's
+  first sample. Summed about zero, E[x²] − E[x]² cancels catastrophically in
+  MicroPython's 32-bit floats (gravity makes x² ~ 1e6 mg² for a ~1 mg²
+  variance). Host floats hide it.
+
+**The open decision: must a tap count with a hand on the bottle?** By
+design the arbiter says no: a hand on it *is* handling. The cost is the last
+row of the table. `ARBITER_QUIET_MG` is the dial:
+
+| QUIET_MG | natural taps | grab trials w/ false tap | taps on a held bottle | grab · release (Oct 4) |
+|---|---|---|---|---|
+| 1.2 | 25/30 | 2/30 | 0/62 | 1/39 · 2/29 |
+| **1.6** (default) | 28/30 | 6/30 | 3/62 | 9/39 · 7/29 |
+| 2.5 | 29/30 | 8/30 | 16/62 | 18/39 · 12/29 |
+| 5.0 | 29/30 | 9/30 | 46/62 | 21/39 · 12/29 |
+| off | 29/30 | 10/30 | 52/62 | 21/39 · 13/29 |
+
+Even with stillness off, the look-back and rotation vetoes beat today's
+capture (10 vs 14/30). Set-downs stay at 0 throughout.
+
+**Before it ships:** the hand-on-bottle decision; a rest-heavy recording
+(footsteps, a door, a chair; this is ~9 minutes of hands-off data in a quiet
+room); then wire it into `main.py` behind `ARBITER_ENABLED`, and a session
+in the bottle. Failure C (stuck tilt) is untouched.
+
 ### Phase 3 — Gyro-driven features, if the arbiter needs them
 
 If Phase 2 with accel-only still leaves B, add rotation onset/rate as

@@ -79,7 +79,7 @@ def load_firmware(knobs=None):
     for k, v in (knobs or {}).items():
         setattr(cfg, k, v)
     for name in list(sys.modules):
-        if name in ("config", "settings", "gestures", "tilt", "leds", "motion",
+        if name in ("config", "settings", "gestures", "tilt", "arbiter", "leds", "motion",
                     "primitives", "palette", "contracts", "signals", "status",
                     "schedule", "clock", "diag", "horizon", "interlog"):
             sys.modules.pop(name, None)
@@ -91,6 +91,7 @@ def load_firmware(knobs=None):
     ns.settings = importlib.import_module("settings")
     ns.gestures = importlib.import_module("gestures")
     ns.tilt = importlib.import_module("tilt")
+    ns.arbiter = importlib.import_module("arbiter")
     return ns
 
 

@@ -29,17 +29,17 @@ givable" and "is this the right costume". Two things follow.
 
 | wall | state | doc |
 |---|---|---|
-| **Interaction: tap and tilt fight** | Each works in isolation; together they are unreliable. Diagnosed as a *composition* problem, not a classification one. **Plan drafted, iterate before building.** | `docs/imu-interaction-plan.md` |
+| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. **Open decision:** must a tap count with a hand on the bottle? (The arbiter says no, by design.) Then a rest-heavy noise session, then wire into `main.py`. | `docs/imu-interaction-plan.md` |
 | **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
 | **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
 
-**The IMU resets itself — recovered from, cause unknown (2026-10-25).** The
-"asleep and cannot be woken" episodes were the LSM6DSV16X dropping back to
-power-on defaults while the board ran on, then reading `(0,0,0)` with no
-error. `ImuWatch` now notices (zeros, or settings gone) and re-configures —
-the sequence verified by hand on bottle-01. What *makes* it reset is open:
-watch the `[imu] sensor reset itself` lines for a pattern (lit? bright?
-just handled?). `docs/imu-interaction-plan.md` has the trail.
+**The IMU resets itself — it's the wiring (2026-10-26).** The "asleep and
+cannot be woken" episodes were the LSM6DSV16X dropping back to power-on
+defaults while the board ran on, reading `(0,0,0)` with no error. `ImuWatch`
+now notices and re-configures. The guided session pinned the cause: 12
+resets in 11 minutes, all while the bottle was being handled, none during
+taps, 8 of 12 with the bottle leaning one way. A loose wire, fixed by the
+harness. `docs/imu-interaction-plan.md` has the trail.
 
 And one *process* item that is not a wall but bites at the second unit:
 **a provisioning manifest** (§ below).
@@ -70,9 +70,12 @@ givability**: NFC / sticker-book input (`docs/nfc-provisioning.md`).
 ## Next up
 
 **1. The interaction plan** — `docs/imu-interaction-plan.md`. Firmware only, no
-new hardware. Instrument and record → replay harness → one arbiter for tap +
-tilt with look-back → gyro. ML (MLC / ESN) is gated on the arbiter failing
-against recorded data, not scheduled.
+new hardware. Recorded ✓ (guided, `PROTOCOL=tap-vs-grab`) → simulator ✓
+(`make sim`, `make sim-live`) → vector detect + arbiter ✓ in simulation →
+**decide the hand-on-bottle question → a rest-heavy noise session → wire
+into `main.py` behind `ARBITER_ENABLED` → a session in the bottle.** ML
+(MLC / ESN) is gated on the arbiter failing against recorded data, not
+scheduled.
 
 **2. Small, independent, cheap**
 - Re-test whether the RP2350's third onboard indicator can be turned off in

@@ -22,6 +22,9 @@ Every block is swappable, and what ships fills every slot by default:
                        (a sideways tap turns the vector; it barely lengthens it)
   ARBITER   capture    today's: capture a fixed window, decide once, then go
                        blind (window + the response, after an accepted tap)
+            settle     micropython/arbiter.py: a classified tap is a claim,
+                       committed once the bottle is proved still, vetoed if
+                       a hand was on it just before or is on it after
   CLASSIFY  firmware   gestures.reject_reason — energy · vertical · gyro
             accept     everything detect hands over is a tap (scores detect alone)
 
@@ -48,6 +51,7 @@ noise floor — not on verdicts.
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -180,6 +184,14 @@ class CaptureArbiter:
         """Is detect listening at t?"""
         return t >= self.busy_until
 
+    @property
+    def capturing(self):
+        return bool(self.pending)
+
+    def motion(self, s, bias, tilting):
+        """A sample the firmware's arbiter would see. Today's has none."""
+        return []
+
     def trigger(self, t, i, dev, bias=None):
         # The gyro baseline as it stands NOW. The firmware's capture runs in
         # its own inner loop, so the baseline doesn't learn during the window;
@@ -218,7 +230,73 @@ class _Frozen:
         return self._est
 
 
-ARBITERS = {"capture": CaptureArbiter}
+class SettleArbiter(CaptureArbiter):
+    """micropython/arbiter.py in the capture's place. The capture still runs
+    (classify needs its window), but its verdict is only a claim: the
+    arbiter commits or vetoes it, from the motion the firmware would feed
+    it — every sample while a capture reads at full rate, the loop's turns
+    otherwise."""
+    name = "settle"
+
+    def __init__(self, fw, classify, gyro_mdps=None, blind_ms=replay.BLIND_MS, ideal=False):
+        super().__init__(fw, classify, gyro_mdps, blind_ms, ideal)
+        self.arb = fw.arbiter.Arbiter()
+        self.info = {}              # t0 -> {"dev", "feats"} for the events
+
+    def trigger(self, t, i, dev, bias=None):
+        super().trigger(t, i, dev, bias)
+        self.arb.claim(t)
+        self.info[t] = {"dev": dev, "feats": None}
+
+    def sample(self, samples, i, bias, end=False):
+        t = samples[i].t
+        while self.pending and (end or t - self.pending[0][0] > self.window):
+            t0, i0, dev, frozen = self.pending.pop(0)
+            feats, _ = replay.capture_features(self.fw, samples, i0, t0, self.window,
+                                               self.gyro_mdps, frozen)
+            ok, why = self.classify.judge(feats)
+            if t0 in self.info:             # not already vetoed before the capture finished
+                self.info[t0]["feats"] = feats
+                self.arb.verdict(t0, ok, why)
+        if end:
+            return self._events(self._cut_off(t), t)
+        return []
+
+    def motion(self, s, bias, tilting):
+        est = bias.estimate() if bias is not None else None
+        gdps = None
+        if est is not None and self.gyro_mdps:
+            gdps = math.sqrt((s.gx - est[0]) ** 2 + (s.gy - est[1]) ** 2
+                             + (s.gz - est[2]) ** 2) * self.gyro_mdps / 1000.0
+        ds = self.arb.update(s.t, (s.ax * 0.061, s.ay * 0.061, s.az * 0.061), gdps, tilting)
+        return self._events(ds, s.t)
+
+    def _cut_off(self, t):
+        """The recording ended with claims open: decide them on what there is."""
+        out = []
+        for c in self.arb.claims:
+            if c.verdict is not None and not c.verdict[0]:
+                out.append((self.fw.arbiter.REJECT, c.t0, c.verdict[1]))
+            elif c.veto is None and c.quiet and c.verdict is not None:
+                out.append((self.fw.arbiter.COMMIT, c.t0, None))
+            else:
+                out.append((self.fw.arbiter.VETO, c.t0, c.veto or "cut off"))
+        self.arb.claims = []
+        return out
+
+    def _events(self, decisions, t):
+        out = []
+        for kind, t0, why in decisions:
+            ok = kind == self.fw.arbiter.COMMIT
+            if ok and not self.ideal:
+                self.busy_until = max(self.busy_until, t + self.blind_ms)   # the response
+            info = self.info.pop(t0, {"dev": 0, "feats": None})
+            out.append({"e": "tap", "t": t0, "dev": info["dev"], "feats": info["feats"] or {},
+                        "valid": ok, "why": why, "decided": t, "blind_until": self.busy_until})
+        return out
+
+
+ARBITERS = {"capture": CaptureArbiter, "settle": SettleArbiter}
 
 
 # ── the pipeline ──────────────────────────────────────────────────────────
@@ -242,7 +320,9 @@ class Pipeline:
         i = len(self.samples)
         self.samples.append(s)
         out = self.arbiter.sample(self.samples, i, self.bias)
-        if self.arbiter.open(s.t) and self.loop.sees(s.t):
+        capturing = self.arbiter.capturing
+        turn = self.arbiter.open(s.t) and self.loop.sees(s.t)
+        if turn:
             # The loop's turn: the gyro baseline, the tilt controller and
             # detect all see this sample, in the firmware's order.
             if self.bias is not None:
@@ -255,6 +335,11 @@ class Pipeline:
                     self._tilt_key = key
                     out.append({"e": "tilt", "t": s.t, "state": key[0], "engaged": self.tilt.engaged})
             self._last_t = s.t
+        if turn or capturing:
+            # Adjusting now (up/down), not merely engaged: see arbiter.update.
+            tilting = self._tilt_key is not None and self._tilt_key[0] in ("up", "down")
+            out.extend(self.arbiter.motion(s, self.bias, tilting))
+        if turn:
             dev = self.detect.update(s)
             if dev is not None:
                 self.arbiter.trigger(s.t, i, dev, self.bias)
@@ -392,7 +477,7 @@ def live(path, args, knobs):
         if k == "m" and pipe is None:
             mdps = replay.GYRO_MDPS.get(rec.get("CTRL6"))
             pipe = Pipeline(fw, float(args.loop_hz.split(",")[0]), args.detect.split(",")[0],
-                            args.arbiter, args.classify, gyro_mdps=mdps, ideal=args.ideal)
+                            args.arbiter.split(",")[0], args.classify, gyro_mdps=mdps, ideal=args.ideal)
             print(f"  pipeline: {pipe.label} at {args.loop_hz.split(',')[0]} Hz, gyro {mdps} mdps/LSB\n")
         elif k == "l" and rec.get("edge") == "go":
             kind, where = rec["type"], rec.get("where")
@@ -425,7 +510,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("files", nargs="*", type=Path)
     ap.add_argument("--detect", default="magnitude", help=f"comma list of {sorted(DETECT)}")
-    ap.add_argument("--arbiter", default="capture", choices=sorted(ARBITERS))
+    ap.add_argument("--arbiter", default="capture", help=f"comma list of {sorted(ARBITERS)}")
     ap.add_argument("--classify", default="firmware", help=f"comma list of {sorted(CLASSIFY)}")
     ap.add_argument("--loop-hz", default="240", help="comma list, e.g. 240,145,57")
     ap.add_argument("--ideal", action="store_true", help="no loop blindness")
@@ -465,13 +550,14 @@ def main(argv=None):
         for hz in [float(x) for x in args.loop_hz.split(",")]:
             print(f"  loop {hz:g} Hz{' ideal' if args.ideal else ''}")
             for s1 in args.detect.split(","):
-                for s2 in args.classify.split(","):
-                    fw = replay.load_firmware(knobs)        # fresh tilt state per run
-                    pipe = Pipeline(fw, hz, s1, args.arbiter, s2,
-                                    gyro_mdps=header.get("gyro_mdps"), ideal=args.ideal)
-                    ev = pipe.run(samples)
-                    print(fmt_trials(pipe.label, score_trials(ev, recs)) if recs
-                          else fmt_labelled(pipe.label, score_labelled(ev, labels, segs)))
+                for ar in args.arbiter.split(","):
+                    for s2 in args.classify.split(","):
+                        fw = replay.load_firmware(knobs)        # fresh tilt state per run
+                        pipe = Pipeline(fw, hz, s1, ar, s2,
+                                        gyro_mdps=header.get("gyro_mdps"), ideal=args.ideal)
+                        ev = pipe.run(samples)
+                        print(fmt_trials(pipe.label, score_trials(ev, recs)) if recs
+                              else fmt_labelled(pipe.label, score_labelled(ev, labels, segs)))
 
 
 if __name__ == "__main__":

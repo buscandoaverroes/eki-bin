@@ -389,13 +389,13 @@ replay:
 # every slot; swap one block at a time and re-score on the same recordings.
 # sim-live runs it on the recording `make imu-record` is making right now —
 # start the recording, then this in a second terminal.
-#   make sim [DETECT=magnitude,vector] [CLASSIFY=firmware,accept] [LOOP_HZ=240,145] [IDEAL=1] [FILES=...]
-#   make sim-live [DETECT=vector] [LOOP_HZ=145]
+#   make sim [DETECT=magnitude,vector] [ARBITER=capture,settle] [CLASSIFY=firmware,accept] [LOOP_HZ=240,145] [IDEAL=1] [FILES=...]
+#   make sim-live [DETECT=vector] [ARBITER=settle] [LOOP_HZ=145]
 .PHONY: sim sim-live
 sim:
-	$(PYTHON) scripts/sim.py $(FILES) $(if $(DETECT),--detect $(DETECT),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(IDEAL),--ideal,)
+	$(PYTHON) scripts/sim.py $(FILES) $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(IDEAL),--ideal,)
 sim-live:
-	$(PYTHON) -u scripts/sim.py --follow $(if $(DETECT),--detect $(DETECT),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(UNIT),--unit $(UNIT),)
+	$(PYTHON) -u scripts/sim.py --follow $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(UNIT),--unit $(UNIT),)
 
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.

@@ -415,6 +415,30 @@ GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn
 #   t = 3 tau (6 s)  ->  0.43 dps  well clear of it
 # A 2 s guard would have left exactly the failure it was meant to remove.
 GYRO_BIAS_WARMUP_MS = getattr(config, "GYRO_BIAS_WARMUP_MS", 3 * GYRO_BIAS_TAU_MS)
+
+# ── the arbiter (micropython/arbiter.py): when a tap becomes real ──────────
+# A classified tap is provisional until the bottle proves it was left alone.
+# Every number below is a measurement from the guided session of 2026-10-26
+# (docs/imu-interaction-plan.md, "The arbiter"), not a guess. Off by default:
+# main.py doesn't drive it yet; scripts/sim.py does.
+ARBITER_ENABLED = getattr(config, "ARBITER_ENABLED", False)
+# Settled = still. A tapped bottle drops back to the sensor's noise floor
+# within ~250 ms (accel jitter median 1.04 mg, max 2.4); a held one carries
+# the hand's tremor (median 2.3 mg). RMS about the window's own mean, mg.
+ARBITER_QUIET_FROM_MS = getattr(config, "ARBITER_QUIET_FROM_MS", 250)
+ARBITER_QUIET_MS = getattr(config, "ARBITER_QUIET_MS", 350)
+ARBITER_QUIET_MG = getattr(config, "ARBITER_QUIET_MG", 1.6)
+# Handling = sustained rotation: above ROT_DPS (25 ms smoothing) for ROT_MS.
+# A tap's own rotation is over by ~170 ms, so nothing before RINGDOWN_MS
+# counts against it.
+ARBITER_ROT_DPS = getattr(config, "ARBITER_ROT_DPS", 10.0)
+ARBITER_ROT_MS = getattr(config, "ARBITER_ROT_MS", 100)
+ARBITER_RINGDOWN_MS = getattr(config, "ARBITER_RINGDOWN_MS", 200)
+# Look-back: handling that ended this recently makes a trigger the hand
+# leaving the bottle (set-down, release), not a tap.
+ARBITER_LOOKBACK_MS = getattr(config, "ARBITER_LOOKBACK_MS", 1500)
+# A tap that never settles is given up on here: a hand held it throughout.
+ARBITER_SETTLE_MAX_MS = getattr(config, "ARBITER_SETTLE_MAX_MS", 1800)
 ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
 #   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
 #   hardware allow

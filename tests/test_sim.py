@@ -205,3 +205,32 @@ def test_main_runs_end_to_end_on_a_guided_file(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "magnitude · capture · firmware     taps  0/1 (triggered  0/1)" in out
     assert "vector · capture · firmware        taps  1/1 (triggered  1/1)" in out
+
+
+# ── the settle arbiter, inside the pipeline ───────────────────────────────
+def _tremor(samples, t_from, mg, seed=3):
+    """Add a hand's tremor (per-axis gaussian, mg) from t_from on."""
+    import random
+    rnd = random.Random(seed)
+    k = 1 / 0.061
+    return [rp.Sample(s.t, s.ax + int(rnd.gauss(0, mg) * k), s.ay + int(rnd.gauss(0, mg) * k),
+                      s.az + int(rnd.gauss(0, mg) * k), s.gx, s.gy, s.gz) if s.t >= t_from else s
+            for s in samples]
+
+
+def _taps(samples, arbiter):
+    return [e for e in sim.Pipeline(rp.load_firmware(), 240, "vector", arbiter, gyro_mdps=35.0).run(samples)
+            if e["e"] == "tap"]
+
+
+def test_settle_commits_a_tap_on_a_bottle_left_alone():
+    samples = stream(10, [(8000, sideways(200), 12)], gyro_dps=0.2)
+    taps = _taps(samples, "settle")
+    assert [(e["valid"], e["why"]) for e in taps] == [(True, None)]
+    assert taps[0]["decided"] - taps[0]["t"] >= 1200       # after classify's capture, not before
+
+
+def test_settle_vetoes_the_same_tap_with_a_hand_on_the_bottle():
+    samples = _tremor(stream(10, [(8000, sideways(200), 12)], gyro_dps=0.2), 7000, 2.5)
+    assert [(e["valid"], e["why"]) for e in _taps(samples, "capture")] == [(True, None)]
+    assert [(e["valid"], e["why"]) for e in _taps(samples, "settle")] == [(False, "not still")]
