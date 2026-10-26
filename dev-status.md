@@ -29,7 +29,7 @@ givable" and "is this the right costume". Two things follow.
 
 | wall | state | doc |
 |---|---|---|
-| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. **Open decision:** must a tap count with a hand on the bottle? (The arbiter says no, by design.) Then a rest-heavy noise session, then wire into `main.py`. | `docs/imu-interaction-plan.md` |
+| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. Decided: a tap with a hand on the bottle doesn't count (design principle 18). **Next: rest-heavy sessions, ~3 h in total** (zero false taps in 3 h is what bounds the rate under 1/h), then wire into `main.py`. | `docs/imu-interaction-plan.md` |
 | **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
 | **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
 
@@ -72,7 +72,7 @@ givability**: NFC / sticker-book input (`docs/nfc-provisioning.md`).
 **1. The interaction plan** — `docs/imu-interaction-plan.md`. Firmware only, no
 new hardware. Recorded ✓ (guided, `PROTOCOL=tap-vs-grab`) → simulator ✓
 (`make sim`, `make sim-live`) → vector detect + arbiter ✓ in simulation →
-**decide the hand-on-bottle question → a rest-heavy noise session → wire
+hand-on-bottle decided ✓ → **rest-heavy sessions (~3 h in total) → wire
 into `main.py` behind `ARBITER_ENABLED` → a session in the bottle.** ML
 (MLC / ESN) is gated on the arbiter failing against recorded data, not
 scheduled.

@@ -865,9 +865,11 @@ Combined with vector detect, against the shipped firmware: natural taps
   MicroPython's 32-bit floats (gravity makes x² ~ 1e6 mg² for a ~1 mg²
   variance). Host floats hide it.
 
-**The open decision: must a tap count with a hand on the bottle?** By
-design the arbiter says no: a hand on it *is* handling. The cost is the last
-row of the table. `ARBITER_QUIET_MG` is the dial:
+**Decided 2026-10-26 (owner): a tap does not count with a hand on the
+bottle.** "A tap is a distinct gesture; a tap while holding is noise, because
+it's being held" (design principle 18). `ARBITER_QUIET_MG` stays at 1.6:
+it already keeps held taps out (3/62), and 1.2 would also cost natural taps.
+For the record, the dial:
 
 | QUIET_MG | natural taps | grab trials w/ false tap | taps on a held bottle | grab · release (Oct 4) |
 |---|---|---|---|---|
@@ -880,10 +882,18 @@ row of the table. `ARBITER_QUIET_MG` is the dial:
 Even with stillness off, the look-back and rotation vetoes beat today's
 capture (10 vs 14/30). Set-downs stay at 0 throughout.
 
-**Before it ships:** the hand-on-bottle decision; a rest-heavy recording
-(footsteps, a door, a chair; this is ~9 minutes of hands-off data in a quiet
-room); then wire it into `main.py` behind `ARBITER_ENABLED`, and a session
-in the bottle. Failure C (stuck tilt) is untouched.
+**Before it ships:** rest-heavy recordings (~9 minutes of hands-off data so
+far, in a quiet room), then wire it into `main.py` behind `ARBITER_ENABLED`,
+and a session in the bottle. Failure C (stuck tilt) is untouched.
+
+**How much rest is enough.** The exit target is < 1 false tap per hour. Zero
+false taps in T hours bounds the rate below 3/T per hour (95%, the "rule of
+three"). So 30 minutes can only show < 6/h, and < 1/h needs ~3 hours of
+zero. Detect's trigger rate is far higher and is measurable in 30 minutes.
+Plan: 30-60 minute sessions (`n` at the start labels the whole recording
+rest_flat) at different times of day, until ~3 h in total. Size: 31 MB per
+hour on disk, ~380 MB per hour to load whole, so keep files under an hour
+until the loader streams.
 
 ### Phase 3 — Gyro-driven features, if the arbiter needs them
 
