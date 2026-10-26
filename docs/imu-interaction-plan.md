@@ -740,6 +740,45 @@ The hands-off countdowns produced no false taps. Accepted taps outside the
 kept trials all fell in redone attempts (real handling) or just after a
 sensor reset (the first samples after a reconfigure).
 
+#### The simulator, and Stage 1's first swap (2026-10-26)
+
+`scripts/sim.py` (`make sim`, `make sim-live`) is replay with the blocks
+pulled apart: LOOP → STAGE 1 → ARBITER → STAGE 2, plus the tilt controller
+in parallel. What ships fills every slot. With those blocks it reproduces
+`replay.replay()` exactly, every event and feature, on real recordings at
+57/145/240 Hz and in ideal mode (`tests/test_sim.py` pins it on synthetic
+streams). It processes one sample at a time and never looks ahead, so
+`--follow` runs the same pipeline on a recording while it is being made.
+
+First swap, **Stage 1 = vector**: ‖a − per-axis median‖ instead of
+|a| − median(|a|). The buffer, the 50 mg threshold and Stage 2 are all
+unchanged, so the only difference is the geometry.
+
+| | magnitude (ships) | vector |
+|---|---|---|
+| natural taps, guided, 240 Hz | 15/30 (18 triggered) | **29/30 (30)** |
+| natural taps, guided, 145 Hz | 9/30 | **29/30** |
+| performed taps, 2026-10-04, ideal | 48/62 | **59/62** |
+| knocks: table · other object (ideal) | 0/28 · 1/26 | 0/28 · 1/26 |
+| bumps (ideal) | 5/19 | 7/19 |
+| guided grab trials with a false tap, 240 Hz | 16/30 | 14/30 |
+| set_down · release with a false tap (ideal) | 2/51 · 4/29 | **9/51 · 13/29** |
+| rest_flat (151 s) · guided countdowns (~7 min) | 0 · 0 accepted | 0 · 0 accepted |
+
+- **Recall is solved for this table**, and the loop rate stops mattering:
+  the vector deviation is 3–5× larger, so the impulse stays above threshold
+  for long enough that a 145 Hz loop still sees it.
+- **The cost is the hand leaving the bottle.** Set-downs and releases
+  trigger more and pass Stage 2 more. They come straight after the hand has
+  been holding the bottle, so this is the arbiter's look-back veto, not a
+  threshold to raise.
+- **The noise floor isn't proven yet.** About 9 minutes of hands-off data,
+  one table, a quiet room, nothing for footsteps. A rest-heavy session
+  (footsteps, door, a chair) is needed before this ships.
+- Live, trial 1 of the session shows the arbiter's case in one line: a
+  grab held still passes Stage 2 (no rotation in 150–400 ms), and the tilt
+  engages a second later.
+
 ### Phase 2 — The arbiter (the structural fix)
 
 One pure, host-testable object that owns the tap/tilt relationship, replacing

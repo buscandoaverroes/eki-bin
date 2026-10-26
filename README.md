@@ -140,6 +140,9 @@ make test               # host-side logic tests (also runs automatically on uplo
 make upload             # push main.py + config.py + schedule.json to the Pico
 make screen             # open the REPL to watch it run
 make imu-record UNIT=bottle-01  # raw sensor stream + intent labels, no firmware (data/imu-*.jsonl)
+make imu-record UNIT=bottle-01 PROTOCOL=tap-vs-grab  # guided: the script cues each trial
+make sim                # the IMU pipeline with swappable blocks, scored on every usable recording
+make sim-live           # the same, live, on the recording being made (second terminal)
 make leakcheck          # scan what's about to be published (also runs in `make pr` + the pre-push hook)
 make pr                 # push this branch + open its PR against dev (body: .pr-body.md, else the commit list)
 ```
