@@ -546,6 +546,13 @@ hypothesis) forbids tuning against anecdotes.**
     or ground. **Fix: the harness (wall #2), not firmware.** `ImuWatch`
     stays as the safety net. The reset count per session is the test of
     whether a harness fixed it.
+    **Amended the same evening: not only when handled.** The first rest
+    session (33 min, untouched) reset once. The bottle was upright and
+    still (<0.6 dps, 2 mg) for the 1.3 s before, with a 46 mg vertical table
+    event ~4 s earlier. Handling makes resets far more frequent (12 in
+    11 min vs 1 in 33), but a marginal connection can drop out without it.
+    The conclusion stands (wiring, harness), the "only at certain angles"
+    part doesn't.
   - **Found while reading the gate, NOT today's cause:** `_TapCycleState`,
     `_StatusMessage` and `tilt._elapsed` compared `ticks_ms()` stamps with
     plain subtraction. `ticks_ms` wraps every ~12.4 days (2**30 ms) and the
@@ -885,6 +892,30 @@ capture (10 vs 14/30). Set-downs stay at 0 throughout.
 **Before it ships:** rest-heavy recordings (~9 minutes of hands-off data so
 far, in a quiet room), then wire it into `main.py` behind `ARBITER_ENABLED`,
 and a session in the bottle. Failure C (stuck tilt) is untouched.
+
+**Rest session 1 (2026-10-26, 33 min, evening, untouched, wood table):**
+
+| | triggers | false taps |
+|---|---|---|
+| magnitude detect + capture (ships) | 1 | 0 |
+| vector detect + capture | 5 | **3 (5.4/h)** |
+| **vector detect + settle** | 5 | **0** |
+
+The five triggers were two kinds of table event. Two came **vertically**,
+through the table (vertical share ~0.6), and classify rejects those as it
+always has. Three were the **table bumped sideways**, one of them the
+owner's marked knock: sideways like a tap, no rotation (≤1.1 dps) like a
+tap, so classify passed them. But the table kept swaying for ~3 s afterwards
+(quiet-window RMS 8–10 mg), and the arbiter vetoed them as not still. So
+"not still" doesn't only mean a hand. It means anything other than a
+finger, which leaves the bottle quiet.
+
+**A consequence for wiring this in:** the firmware flashes an ACK on every
+*trigger*, before any verdict (`ACK_FLASH_MS`, on purpose for feel). Vector
+detect raises triggers at rest from ~2/h to ~9/h, so the bottle would blink
+on table bumps, in the dark too, though nothing commits. Decide this at
+wiring time: accept it, require more than 50 mg for the ACK, or no instant
+ACK at night.
 
 **How much rest is enough.** The exit target is < 1 false tap per hour. Zero
 false taps in T hours bounds the rate below 3/T per hour (95%, the "rule of

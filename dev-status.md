@@ -29,7 +29,7 @@ givable" and "is this the right costume". Two things follow.
 
 | wall | state | doc |
 |---|---|---|
-| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. Decided: a tap with a hand on the bottle doesn't count (design principle 18). **Next: rest-heavy sessions, ~3 h in total** (zero false taps in 3 h is what bounds the rate under 1/h), then wire into `main.py`. | `docs/imu-interaction-plan.md` |
+| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. Decided: a tap with a hand on the bottle doesn't count (design principle 18). Rest session 1 (33 min): **0 false taps** with the arbiter (3 without it, all sideways table bumps). **Next: ~2½ h more rest**, then wire into `main.py`, deciding the ACK flash (vector detect makes it fire ~9/h at rest). | `docs/imu-interaction-plan.md` |
 | **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
 | **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
 
@@ -39,7 +39,9 @@ defaults while the board ran on, reading `(0,0,0)` with no error. `ImuWatch`
 now notices and re-configures. The guided session pinned the cause: 12
 resets in 11 minutes, all while the bottle was being handled, none during
 taps, 8 of 12 with the bottle leaning one way. A loose wire, fixed by the
-harness. `docs/imu-interaction-plan.md` has the trail.
+harness. The first rest session then reset once with the bottle untouched,
+so handling makes it frequent but isn't required.
+`docs/imu-interaction-plan.md` has the trail.
 
 And one *process* item that is not a wall but bites at the second unit:
 **a provisioning manifest** (§ below).
