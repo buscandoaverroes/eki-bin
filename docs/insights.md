@@ -101,6 +101,33 @@ is hidden by the medium.
   live UX pain point ("I won't make this one, what's the one after?"), not just
   the wasted-pixels observation below it originally was. See
   `docs/contracts/display-contract.md` § Multiple trains.
+- **Power-budget-aware brightness cap.** Field finding (§6-adjacent, logged in
+  `docs/hardware.md` 2026-07-13): at 120 LEDs, `BRIGHTNESS=1.0` froze the Qi path
+  and tripped MacBook USB overcurrent; `0.15` is the safe ceiling. Total draw
+  scales with `NUM_LEDS`, but `BRIGHTNESS` is a flat per-device knob today — so a
+  bigger strip is a silent footgun. Idea: derive an *effective* brightness ceiling
+  from a configured current budget and `NUM_LEDS` (roughly `budget_mA /
+  (NUM_LEDS * mA_per_led_at_full)`), clamping `BRIGHTNESS` down automatically. Also
+  note the *practical* draw is far below worst-case — ambient contracts rarely
+  light all N at full white — so a budget based on realistic frames, not all-white,
+  is the useful version. Empirical constants (mA/LED, safe budget per power source)
+  needed before implementing; don't guess them.
+- **Bottle-colour "bin filter" presets.** The brown gift-jar bottle noticeably
+  shifts perceived LED colour (white → soft orange-white, forest green →
+  yellow-green, dim gray → yellow — see `docs/hardware.md`'s 2026-07-23
+  bring-up log). 2–3 pre-shift colour presets ("bins") could compensate for
+  (or lean into) a given bottle's cast. Not built — parked until colour
+  fidelity through glass matters again, e.g. a different/less-tinted bottle.
+- **Multiple eki-bins as a shelf display.** Floated during Qi bring-up
+  (2026-07-25): several jars, each independently configured for a different
+  favourite line/station, sitting dark and decorative on a shelf — placing
+  *one* on the Qi pad both powers it and selects it as "the line I'm
+  watching today," and removing it from the pad is a more natural "off"
+  gesture than a switch or unplug. Directly validates the wake/sleep design
+  in `docs/contracts/wake-interaction.md` as a real interaction model, not
+  just a power-saving trick — not something to build now, no code implication
+  beyond what that doc already covers, just a product-vision note worth
+  keeping.
 
 ---
 
@@ -146,6 +173,12 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
 - Too bright **even in the brown bottle**.
 - We already have Unix time → modulate brightness by **sunrise/sunset**.
 - Later: **IMU "shake to adjust brightness"** if glare is the main complaint.
+  **Grown into a full design (2026-07-25)**, motivated by real Qi bring-up
+  findings (thermal cutoff on long runs; "off 80% of the time" as the actual
+  desired aesthetic, not a compromise) — see
+  `docs/contracts/wake-interaction.md`: a bounded wake window per tap/boot,
+  single vs. double tap doing different things, and the boot ceremony's
+  burst reused as a "waking up" cue rather than rebuilt.
 - Be prudent about *when* it glows at all: if **no train within "N-LED" reach**,
   go dark — no reason to shine at 3 a.m. This is smarter than fixed quiet hours
   (the schedule itself defines the on/off envelope).
@@ -157,6 +190,15 @@ on building blocks is necessary but secondary to how the thing *feels* in the ro
   clock doesn't perform a startup sequence — it just *is*. Is it OK to hold the
   paradigm "in suspense" during connection, or should boot be invisible/instant?
   Park this; it's a genuine design fork, not just an implementation detail.
+- **Resolved toward "yes, have a ceremony" (2026-07-23):** a concrete v1.4
+  boot-sequence design was proposed — power-on indicator → WiFi/NTP "loading
+  circle" spin → success burst → crossfade into the live contract, with a
+  persistent all-red breathe on failure. Framed as answering the open tension
+  above, not sidestepping it: the ceremony is bounded (power-on → clock-on),
+  never recurs during normal operation, and a real clock *does* have an
+  analogous moment (setting it after a power cut) — it's the "always visible
+  countdown timer" framing that would've broken the clock illusion, not a
+  one-time boot cue. See `docs/archive/dev-status-history.md` § V1.4 for the implementation status.
 
 ### Form factor / hardware size
 - Pico 2W was the right call for dev ergonomics. But it **won't fit most bottle
@@ -225,3 +267,1880 @@ primitives (so whatever looks good there renders with the exact math a real
 contract would use) and lets you paint arbitrary LED ranges with independent
 colour/animation for quick side-by-side comparison, without WiFi/schedule/the
 full loop. General-purpose now, not just for this one decision.
+
+---
+
+## 7. iOS's generic NDEF API breaks on Type-5 tags (NFC bench, 2026-07)
+
+The whole "give it to a friend, no app" plan hinged on iOS Shortcuts writing the
+ST25DV tag. It doesn't work — and the *reason* is a reusable trap worth keeping:
+
+- **The tag is fine.** Raw ISO-15693 block read/write (CC file, NDEF TLV, a full
+  hand-encoded NDEF Text record) all verified byte-perfect over RF. Not a hardware
+  or encoding problem.
+- **The generic high-level API is the problem.** Apple's `NFCNDEFReaderSession` —
+  which backs iOS Shortcuts, ST's "NFC Tap" NDEF tab, and third-party rewriter
+  apps — times out / fails to detect NDEF specifically on **ISO-15693 / NFC-Forum
+  Type-5** tags. Documented multi-year iOS pattern. The low-level
+  `NFCTagReaderSession` + `NFCISO15693Tag` path works every time.
+- **Lesson:** "does NFC work?" is the wrong question — *which API layer* is
+  everything. Most consumer NFC tooling targets Type-2 (NTAG-style) tags; Type-5
+  is a different world, and the convenient high-level tools silently don't cover
+  it. Also: Shortcuts has **no NDEF content read/write action at all** (only a
+  UID-keyed trigger), so it was never a real writer regardless.
+- **Consequence:** a minimal first-party app became unavoidable — not a failure of
+  the no-app principle, just the reality of this tag class on iOS. Decision +
+  tag data contract: `docs/nfc-provisioning.md`.
+
+---
+
+## 8. Tap-gesture tuning: hardware-informed limits, not assumed ones (2026-08-04)
+
+**Setup:** built `micropython/vibration_sandbox.py` (batch data collection —
+position × tap-count reps, streamed to flash as JSON Lines) and
+`scripts/analyze_taps.py` (peak magnitude / ring-down / hysteresis-based tap
+counting on the host) to answer "what tap gestures can this hardware actually
+support" empirically, instead of assuming `docs/contracts/wake-interaction.md`'s
+original single-vs-double-tap design would just work. This sandbox is what
+will inform that contract's still-stubbed `_imu_tap_detected()`.
+
+Muji glass jar, blue-tack mount, 240Hz sampling, 60 clean reps (10 per
+position×tap-count combo, controlled technique — pad only, bottle secured
+without a bracing hand):
+
+| Signal | Result |
+|---|---|
+| Position (neck vs. body), best single threshold | **98.3%** (~390mg cutoff) |
+| 1-tap | **100%** |
+| 2-tap | 70% overall — **80% at neck, 60% at body** |
+| 3-tap | 40% overall — 50% at neck, 30% at body |
+
+**Headline takeaway:** position (neck vs. body) is a far more reliable signal
+than tap-count beyond one tap. The original design leans on the *weaker* of
+the two axes (single vs. double tap). "Single tap at neck" vs. "single tap at
+body" would likely be both simpler to implement (no timing-based counting)
+and more reliable (98%+ vs. 70%) than double-tap. Not yet decided whether to
+redesign around this — see open questions below.
+
+**Why 2-/3-tap degrade:** looks like an algorithm limit so far, not a hard
+sensor one. The hysteresis-based peak counter can't split two strikes that
+happen close enough together that the signal never drops back below
+threshold between them. Ring-down itself is fast (4-10ms), and successful
+2-tap reps cluster at 232-327ms spacing — so real taps spaced like that
+should be resolvable in principle. Not yet confirmed whether faster failures
+are a fixable detection gap or a human motor-control floor.
+
+**Methodology notes** (matter for reading the numbers above):
+- Absolute peak magnitudes are ~3-5x larger at 240Hz than an earlier 60Hz
+  pass on the *same* bottle — finer sampling catches a fast transient's true
+  peak that 60Hz was under-sampling. **Thresholds are ODR-dependent — don't
+  mix data collected at different sample rates.**
+- Tap technique (nail vs. pad, whether a hand braced the bottle) measurably
+  moves position separability — an uncontrolled-technique run on this same
+  jar showed neck/body ranges overlapping; only the controlled-technique run
+  above hit 98.3%.
+
+**Open questions (mid-investigation — testing a wine bottle next):**
+- **How much generalizes across bottles?** Glass mass/thickness/geometry
+  plausibly shifts the *absolute* mg thresholds per bottle (this jar's
+  ~390mg cutoff probably won't transfer). The *relative* pattern (neck >
+  body — less material near the neck to absorb the shock) might generalize
+  even if the absolute numbers don't. A second, physically different bottle
+  is the first real data point on this either way.
+- **Where does calibration happen?** If thresholds are bottle-specific,
+  something has to set them per unit: **(a) dev-time** — the maker runs this
+  same sandbox once per physical jar, bakes the result into that unit's
+  `config.py` (fits the existing ~19-knob config philosophy, zero runtime
+  complexity); **(b) runtime** — the device self-calibrates from a few taps
+  on first boot (robust to bottle swaps/drift, but needs a real on-device
+  calibration UX with no laptop in the loop). Leaning toward (a) for V1.5
+  given the scale (a handful of gift units, not a product line) — (b) reads
+  more like a V2/Rust-era feature, and would be a natural use for the
+  LSM6DSV16X's onboard MLC/FSM (deliberately unused so far — see
+  `docs/hardware.md`).
+- **Would ML "solve" the heterogeneity?** Skeptical on principle: a model
+  trained on raw absolute features inherits the same bottle-specificity
+  hardcoded thresholds have — it has no more physics knowledge than the data
+  it's given. The more promising lever is *feature engineering* (e.g.
+  normalizing peak magnitude against a same-session reference tap, so it's a
+  ratio rather than a raw mg value), independent of whether the final
+  classifier is a threshold or a trained model. Whether a normalized feature
+  actually generalizes across bottles is itself an empirical question the
+  multi-bottle testing will answer — not something to assume either way.
+
+**Update (2026-08-04, later same day) — the classifier earns its keep once
+the features are right.** Rebuilt the matrix based on the findings above:
+dropped 3-tap (consistently the worst result everywhere), kept neck (best
+position separator despite being the worst tap-count position), added
+**shoulder** (the neck/body transition — angled tap vector, hypothesized to
+excite less rocking) and **base** (grounded contact point, same reasoning).
+Built `scripts/prepare_tap_dataset.py` (raw signal → engineered-feature CSV:
+energy, duration, spacing regularity, etc. — deliberately *not* reusing
+`detected_taps`, since training on that would just teach a model to imitate
+the hysteresis algorithm's mistakes) and `scripts/train_tap_classifier.py`
+(cross-validated comparison against the hand-tuned baselines).
+
+Chianti bottle, 240 clean reps (60 per position, 120 per tap-count), 5-fold CV:
+
+| Question | Hand-tuned baseline | Trained classifier (random forest) |
+|---|---|---|
+| Tap count (1 vs. 2) | ~55% (hysteresis peak-counter) | **91-92%** |
+| Position (4-way: neck/shoulder/body/base) | ~73-100% pairwise, weakest at neck-vs-shoulder | **85%** (single 4-way model) |
+
+Tap-count result is the headline: the classifier didn't just edge out the
+threshold approach, it solved a problem the threshold genuinely can't —
+distinguishing "one tap plus rocking echo" from "two real taps" needs
+*multiple* signal properties considered together (spacing regularity, total
+energy, crossing count), which a single hysteresis threshold has no way to
+combine. Feature importances confirm this isn't black-box magic: the top
+features are exactly the physics-motivated ones (`spacing_mean_ms`,
+`spacing_stdev_ms`, `energy`) designed specifically around the rocking
+discovery above — **the feature engineering did the real work; the
+classifier's contribution was combining several such features into one
+decision, which a threshold structurally cannot do.** This refines rather
+than contradicts the earlier "ML isn't a shortcut" take: on muji (clean,
+non-rocking, single dominant feature) the simple threshold still *beat* the
+classifier (98.3% vs. 95-97%) — the classifier only earns its complexity
+when the underlying signal genuinely needs more than one feature to explain,
+which rocking-prone bottles apparently do and calm ones don't.
+
+Position-by-tap-count breakdown, same session — extends the original "is
+1-tap reliable" question with data the earlier 2-position matrix didn't
+have:
+
+| | 1-tap | 2-tap |
+|---|---|---|
+| base | **100%** | 73% |
+| shoulder | 83% | 60% |
+| body | 47% | 33% |
+| neck | 23% | 23% |
+
+Clean physical ordering (base > shoulder > body > neck) matching distance
+from the grounded contact point. Base and shoulder clear the 80-90%
+reliability bar for 1-tap; neck and body don't, and 2-tap doesn't clear it
+anywhere (though base at 73% narrows the gap a lot). Note: **neck is the
+best-*separated* position but the worst for tap-count *reliability*** — the
+two properties don't track together, so "pick the most distinctive-looking
+position" isn't the same question as "pick a position where tap detection
+actually works."
+
+**Cross-bottle generalization test — added `--train-bottle`/`--test-bottle`
+to `train_tap_classifier.py` (train on one bottle entirely, test on another
+entirely, no pooling/shuffling across — stricter than k-fold on pooled data,
+which can leak bottle identity across folds).** Trained on chianti-3 (240
+reps), tested on muji's original session, restricted to the positions/tap-
+counts both bottles actually share (neck/body, 1-2 taps); confirmed first
+that both sessions ran at the same effective sample rate (~215Hz) so this
+isn't just the earlier ODR-mismatch problem resurfacing:
+
+| Target | Cross-bottle accuracy (train chianti-3 → test muji) |
+|---|---|
+| Position (neck/body) | **0%** — worse than random guessing |
+| Tap count (1 vs. 2) | **85%** (random forest) |
+
+This is a real, decisive answer to the "universal vs. per-bottle" question,
+not just a hint, and it splits cleanly along feature *type*, not target
+difficulty: **position relies on amplitude features (peak magnitude,
+energy), which are bound to a specific bottle's glass mass/geometry — a
+boundary learned on chianti's scale is meaningless on muji's (muji's
+absolute magnitudes run 3-5x higher at the same position, entirely
+different range). Tap-count relies mostly on timing features (spacing
+regularity) — how fast a human physically taps twice doesn't depend on the
+bottle's physical response, so it survives the bottle swap.** Practical
+read: amplitude-based classification (position) needs per-bottle
+calibration, no way around it; timing-based classification (tap-count) may
+not, or may need much less. Worth testing directly once a matching
+shoulder/base muji session exists — this test so far only covers the two
+positions/tap-counts the two bottles happened to already share.
+
+**Follow-up (same day) — a dedicated shoulder+base, 1-tap-only, n=80/side
+session landed, and it complicates the shoulder/base pairing specifically,
+while strongly confirming tap-count reliability:**
+
+- **Tap presence: 157/160 = 98.1%.** Rock solid at scale — the base/shoulder
+  choice for reliable single-tap detection holds up completely.
+- **Shoulder-vs-base separability dropped from 96.7% (chianti-3, n=60/side)
+  to 71.2% (chianti-4, n=80/side) on the same bottle.** Checked whether this
+  was small-sample luck or real drift by comparing the two sessions' raw
+  numbers directly: shoulder mean 265mg→193mg, base mean 65mg→115mg — the
+  ordering held (shoulder > base, both sessions) but the *gap* narrowed
+  substantially. That's genuine session-to-session variability in the
+  physical measurement, not a sampling artifact — matches the pattern
+  already seen with the neck/body 3-tap flip between the two earlier
+  chianti sessions (§8 above). **Pooling both sessions gives ~81.4%**,
+  probably the more honest current estimate than either session alone.
+- Tried normalizing each capture's peak magnitude against that session's own
+  median before pooling, hoping to cancel out the drift — **didn't help**
+  (still 81.4%). Should have seen that coming: a per-session linear rescale
+  doesn't change a distribution's *relative* overlap, so it can't move a
+  best-threshold split. The drift isn't a simple scale/offset the two
+  sessions disagree on — more likely genuine variability in exact tap
+  location/technique within "shoulder" and "base" as target zones, which
+  normalization can't fix.
+- **Practical implication:** shoulder-vs-base, at ~81% pooled, is currently
+  a weaker position pair than neck-vs-body (100%), neck-vs-base (93%),
+  shoulder-vs-body (100%), or body-vs-base (91%) — though those are each
+  still only a single session's read, and this same finding says single-
+  session reads can't be trusted at face value. **Open question, not yet
+  answered:** whether those other pairs hold up as well as shoulder/base
+  didn't once tested across multiple independent sessions the same way.
+
+---
+
+## 9. Tap/gesture envelope — final synthesis (2026-08-04)
+
+§8 above is the full field log — a sandbox toolchain
+(`micropython/vibration_sandbox.py`, `imu_test.py`, `handling_test.py`,
+`orientation_test.py`, plus host-side `scripts/analyze_taps.py` /
+`prepare_tap_dataset.py` / `train_tap_classifier.py`) built and run across
+~15 sessions and two physically different bottles (muji jar, chianti wine
+bottle) to answer "what can this hardware actually support" empirically
+instead of assuming the original wake-interaction.md design would just
+work. This section is the decision-ready summary. The design built on it
+lives in **`docs/contracts/gesture-envelope.md`**.
+
+**The winners:**
+
+| Modality | Reliability | Recognizer | Hardware dependency |
+|---|---|---|---|
+| Flip/orientation (upright/horizontal/upside-down) | Visually unambiguous, steady-state | Hardcoded: dominant axis + sign | Wired power only — Qi breaks on flip |
+| Tap presence @ base | 98% (167/170) | Hardcoded: peak-magnitude threshold | none |
+| Tap presence @ shoulder | 95% (161/170) | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. soft tap | 91-94% | Hardcoded: peak-magnitude threshold | none |
+| Flick vs. hard handling | 100% via `spacing_stdev_ms` (magnitude alone caps ~80%) | Hardcoded threshold, but on a *shape* feature, not magnitude | none |
+| Position: shoulder vs. base | ~81.5% pooled across 3 sessions (71-97% range per session) | Hardcoded ≈ trained classifier — no ML benefit found | optional/toggle, per-bottle calibrated |
+
+**What didn't pan out — kept here so it isn't silently re-attempted:**
+- Tap presence @ neck (23%) and @ body (51%), un-held — ruled out.
+- 2-tap and 3-tap counting — never cleared a usable reliability bar at any
+  position on either bottle; replaced by gesture-*type* (tap/flick) instead
+  of tap-*count* as the second signal dimension.
+- `grab_and_tap` — an n=10 pilot showed 51%→90% reliability at body,
+  genuinely exciting; **did not replicate at n=30 across all 4 positions**
+  (neck improved 23%→63% but still weak; shoulder, body, and base all got
+  *worse*; position-discrimination *within* grab_and_tap collapsed further
+  than free-tap's). A trained classifier didn't rescue it either (75% vs.
+  free-tap's 85% for position). Root cause unconfirmed — likely the same
+  session-to-session technique drift seen elsewhere, not a settled physical
+  effect. Parked, not built on, until the inconsistency is understood.
+  One piece *did* generalize: separating a deliberate held-tap from
+  accidental handling via `energy` scored 90-98% regardless of position —
+  reusable as a general noise-rejection technique even though the specific
+  gesture didn't pan out.
+
+**The recurring methodology lesson, worth stating once, plainly, since it
+showed up at least four separate times in §8:** a small sample (n=10) in
+this investigation *consistently* looked better than it turned out to be
+at scale — shoulder-vs-base separability alone swung 96.7% (n=60) → 71.2%
+(n=80) → 81.7% (n=60) across three independent sessions on the same
+bottle, and `grab_and_tap`'s exciting n=10 pilot reversed at n=30. **Treat
+anything validated at n<30 or in a single session as a hypothesis, not a
+result** — this cost real rework more than once here, and the fix each
+time was the same: collect more, pool across sessions, and only trust
+numbers that hold up when re-checked.
+
+---
+
+## 10. ACK/CONFIRM LED jolt — real-hardware iteration (2026-08-16)
+
+§9's fuller gesture vocabulary (position, flick-vs-tap, etc.) didn't get
+built on directly — real-hardware testing the day after §9 was written
+found that every one of its harder problems was *additional*
+discrimination on top of tap-vs-noise, which was never actually
+unreliable (95-98%+). Scoped down instead to a minimal "light switch"
+contract: tap wakes, tap cycles, timeout sleeps. Full design + rationale:
+`docs/contracts/gesture-envelope.md` §11 ("Scope pivot"). This section is
+the field-note synthesis of what came after that pivot — designing and
+tuning the LED response to that contract, across five real-hardware
+rounds in one day, once `main.py`'s recognizer + state machine were
+already validated on their own.
+
+**The core UX finding — brightness has to bridge the gap, not just mark
+the endpoints:** the two-phase design (instant ACK the moment a tap is
+felt, ~1.2s later a CONFIRM once the recognizer has a verdict) is
+necessary — that gap is however long the recognizer actually takes to
+decide, not a rendering choice, and no capture window shorter than that
+stays accurate (§11's own latency/accuracy table: ~94-98% at 1200ms down
+to ~70% at 50ms). But the *naive* rendering of that gap — ACK flashes,
+drops to black, CONFIRM flashes later — read as two disconnected blips
+with a stall in between, not one continuous gesture. Fix: ACK settles
+onto a dim-but-non-zero "continental shelf," held for the rest of the
+gap, that CONFIRM then rises *from* instead of from black. The shelf is
+doing real communicative work ("still here, deciding") that a hard cut to
+off can't.
+
+**"Hardware-defined software" as a genuine UX win, not just a slogan:**
+tap strength (`dev`, the triggering sample's deviation from baseline —
+the only signal available before `energy` is known) scales both the ACK
+peak *and* the shelf level, so a harder tap reads brighter on both the
+"up" and the "down." Took real tuning to land, though — the brightness
+range needed widening **three separate times** as testing moved from a
+bare LED strip to inside the actual frosted jar: 0.5-1.0x (2x spread,
+imperceptible) → 0.4-1.6x (4x, worked bare) → 0.35-2.2x (in-bottle, the
+frosted glass compresses contrast a bare strip never showed) → pulled
+back to 0.35-6.0x after a saturation bug was found (see below). **The
+in-bottle jump is the one to remember**: a diffuser you haven't tested
+through yet will always make a bare-strip-tuned range look flatter than
+it is — 駅瓶's whole premise is the frosted glass, so bare-strip numbers
+were never more than a rough starting point.
+
+**Two real rendering bugs, both traced to the same root cause — gamma
+correction misapplied to a low-brightness or held value:**
+- A brightness ceiling that looked fine in isolated tests (`10.0x`)
+  turned out to **clamp every hard tap to identical pure white** past
+  roughly 65% strength — losing exactly the differentiation the whole
+  feature exists for. Not obvious from watching single taps one at a
+  time; only showed up comparing two different hard taps side by side.
+  Fixed, then **hardened with a pytest regression test**
+  (`tests/test_gesture_sandbox.py`) checked against the actual
+  historical bad value — the saturation point is a pure property of the
+  brightness constants + `BRIGHTNESS`/`STARTUP_COLOR`, fully verifiable
+  without hardware, unlike whether real taps' `dev` values *cluster* in
+  practice (that's empirical, stays a documented on-hardware thing to
+  watch, not something a unit test can know).
+- The ACK's descent (rendered through the normal gamma+dither path)
+  visibly dove to near-black *before* reaching the shelf's own
+  (deliberately linear, un-gamma'd) brightness, then jumped back up once
+  the static shelf write took over — "dive underground to 0, then back
+  up to a plateau." Root cause: `gamma(mult)` for `mult` below roughly
+  0.3 is *much* smaller than `mult` itself, and the ACK's whole range
+  sat mostly in that zone. Fixed by rendering the whole ACK shape without
+  gamma correction — the same fix already used for the shelf itself
+  (`MARKER_BRIGHTNESS`'s precedent, approach-contract.md), just extended
+  to cover the animated approach to that value, not only the held value.
+  **General lesson for this codebase, worth stating past this one
+  feature:** gamma correction is for genuinely wide, actively-perceived
+  brightness swings — apply it reflexively to a value that's mostly
+  *low* or *about to be held static*, and it actively works against you
+  instead of smoothing anything.
+
+**A real hardware-fragility finding, not a firmware bug:** `OSError EIO`
+from the IMU read, twice, both correlated with physical handling (moving
+the bottle, a fumbled tap) — the same "connection shaken loose by
+tapping" `vibration_sandbox.py` diagnosed first (§8). An initial read
+that it correlated with *light* taps specifically didn't hold up on more
+data — another small-sample-mislead instance, see above. `gesture_sandbox.py`
+now catches it, skips the one bad sample, and only escalates to a visible
+LED cue (a new, distinct persistent-breathe colour) if a read hasn't
+succeeded in over a second — a deliberate consequence of
+`led-status-messages.md`'s "errors are persistent and unambiguous, not
+almost-normal" principle: a brief flash for a single dropped sample would
+have worked against that, not honored it.
+
+---
+
+## 11. ESP32-C3 WiFi memory: two heaps, and only one of them counts (2026-08-17)
+
+Bringing the gesture dev unit up on the XIAO hit `OSError: Wifi Out of
+Memory` from `connect_wifi()`. Worth writing up because **two plausible
+diagnoses were wrong before the real one**, and the debugging method
+(measure the right pool) generalises well past this bug.
+
+### What it wasn't
+
+- **Not credentials.** `WIFI_SSID = config.WIFI_SSID` is direct attribute
+  access, so a missing value raises `AttributeError` at import — nowhere
+  near WiFi.
+- **Not (only) `mpremote run`.** `make run` ships the whole ~115KB source
+  over stdin to be held in RAM *and* compiled there; the traceback said
+  `File "<stdin>"`. Running from flash instead (`make upload` + soft reset)
+  was a genuine improvement and is now the documented path for a file this
+  size — but it did **not** fix the error. Right practice, wrong root cause.
+- **Not MicroPython heap exhaustion.** The obvious check says the opposite:
+
+  ```
+  gc.mem_free() → 155,824      GC total 175,872, used 37,632
+  ```
+
+  `main.py` — all 2355 lines — is **37KB of live data in a 172KB heap**.
+  There is no bloat problem in the sense you'd assume.
+
+### What it is
+
+**There are two separate heaps, and `gc.mem_free()` measures the wrong
+one.** MicroPython's GC heap holds Python objects. ESP-IDF's `malloc` heap
+is entirely separate, and `esp_wifi_init()` allocates from *that*. The two
+compete for the same physical SRAM, and on the ESP32 port MicroPython's GC
+heap **grows on demand by splitting chunks off the IDF heap and never
+returns them**.
+
+The right instrument is `esp32.idf_heap_info(esp32.HEAP_DATA)`, which
+returns one `(total, free, largest_free, min_free)` tuple **per region** —
+ESP-IDF manages SRAM as several disjoint ranges, not one pool, and a given
+`malloc` must be satisfied within a single region.
+
+Measured on a bare boot, bringing WiFi up by hand:
+
+| Region | free before | free after | WiFi took |
+|---|---|---|---|
+| 1 | 5,664 | 5,664 | 0 |
+| 2 | 10,160 | 4 | **10,156** |
+| 3 | 115,624 | 111,568 | 4,056 |
+| 4 | 26,448 | 32 | **26,416** |
+| | | **total** | **40,628** |
+
+**The distribution matters more than the total.** WiFi drained regions 2
+and 4 to 4 and 32 bytes while leaving 111KB untouched in region 3. That
+isn't the allocator being lazy — those buffers need DMA-capable internal
+SRAM, which region 3 doesn't provide. **Region 3's 111KB is essentially
+useless to WiFi.** Only regions 2 and 4 count.
+
+Which produces the number worth remembering: at a bare boot region 4 has
+26,448 bytes free and WiFi wants 26,416. **Thirty-two bytes of margin.**
+WiFi on this chip was always at the edge; compiling a `main.py` that had
+roughly doubled in size grew the GC heap ~5.5KB into region 4 and pushed it
+over. The IMU code didn't break it so much as consume the last slack.
+
+### How the allocator picks regions, and how much we can steer it
+
+`heap_caps_malloc(size, caps)` walks the registered heaps in a fixed
+priority order from the SoC's memory-layout table and takes the first that
+both satisfies the capability mask and has a large enough free block. It is
+**deterministic** for a given firmware and allocation sequence — but the
+sequence is exactly what changes between runs, which is why order matters
+so much here.
+
+From MicroPython, direct control is **not available**: you cannot request
+capabilities, and WiFi's allocations are internal to ESP-IDF. What is
+controllable:
+
+- **Ordering** — allocate the big, capability-constrained thing (WiFi)
+  before the flexible things (Python objects). Implemented; see below.
+- **Total pressure** — anything that stops the GC heap growing.
+- **Build-time `CONFIG_ESP32_WIFI_*`** — RX/TX buffer counts, static vs.
+  dynamic. This is the only real lever on WiFi's 40KB appetite, and it
+  needs a custom firmware build.
+
+### Fixed now (the cheap half)
+
+`main()` brings WiFi up **before** `load_schedule()`. The 8KB JSON parses
+into a much larger object graph that was previously held across WiFi init,
+costing ~5.5KB of precisely the contested region. Reordering lets
+MicroPython grow into what's left rather than the reverse.
+
+This buys margin. **It does not create headroom** — a fix that works by
+reclaiming 5KB against a 32-byte baseline margin is one feature away from
+breaking again.
+
+### The real fix, deliberately deferred
+
+Compiling a 115KB module on-device is a transient allocation spike that
+permanently enlarges the GC heap. Removing that spike is the durable
+answer, in rough order of effort:
+
+1. **Precompile to `.mpy`** (`mpy-cross`), with a two-line `main.py` that
+   imports it. No firmware build required.
+2. **Freeze into firmware** — bytecode lives in flash, not RAM. Biggest
+   win, needs a custom MicroPython build.
+3. **Split `main.py`** into modules so no single compile is huge. Helps
+   partly; the combined bytecode still lands in RAM.
+4. **Trim docstrings in hot modules.** Worth knowing: *comments are
+   stripped at compile time, docstrings are not* — they become live string
+   objects. This codebase's deliberately long docstrings therefore have a
+   real RAM cost, which is a genuine tension with its documentation ethos.
+   A marginal lever, listed for completeness rather than recommended.
+
+Deferred on purpose: `feature/gesture-envelope` is about getting gestures
+working on the XIAO, and the reorder unblocks that. Also worth noting the
+project's own roadmap retires this problem — V2 drops WiFi for a DS3231
+RTC, and gesture work needs no network at all (`GESTURE_DEBUG_ENABLED`
+already runs WiFi-free).
+
+---
+
+## 12. Low-PWM colour collapse, and colour in a real bottle (2026-08-18)
+
+First full in-bottle run of the assembled unit (XIAO C3 + IMU + 21-LED strip,
+approach contract, line-cycling on tap). Two findings, one a bug and one a
+constraint.
+
+### The bug: `(1,1,1)` is not gray
+
+Marker ticks were rendering **yellow**, not the dim neutral they're specified
+as. The arithmetic:
+
+```
+BRIGHTNESS 0.15 × MARKER_BRIGHTNESS 0.15 = 0.0225
+MARKER_COLOR (80,80,80) × 0.0225 → (1, 1, 1)
+```
+
+**One PWM step out of 255 per channel.** At that level WS2812B channel
+matching collapses — the R/G/B dies have different efficiencies and different
+minimum-drive behaviour, so equal values stop meaning neutral. Red and green
+dominate blue at the very bottom, and `(1,1,1)` reads warm yellow-green.
+
+**This was already in `docs/hardware.md`** as a brown-glass observation
+("Dim neutral gray → Yellow"). It was mis-attributed: the glass wasn't the
+cause, low PWM was. The glass merely made it easier to notice.
+
+**Generalised rule, worth applying anywhere a dim neutral is used:** below
+roughly 4-5/255 per channel, *hue is not controllable on this hardware*. It
+isn't a dithering artifact (it persisted with `DITHER = False`) and it isn't a
+dead pixel (`led-test` showed a uniform strip). Plan brightness so any colour
+that must read as a specific hue lands above that floor, or accept that it
+will skew warm.
+
+**Debugging note worth more than the bug.** Three plausible theories were
+wrong before the right one: urgency-driven colour (ruled out — the approach
+contract never reads `urgency`), the anchor washing an adjacent dot (ruled
+out — the anchor is nowhere near the affected LEDs), and a defective LED
+(ruled out by `led-test`). What actually settled it was a single observation
+— *every* LED on one arm was affected, not one — which immediately excluded
+anything per-pixel. **The reasoning was slower than the measurement, again.**
+
+### The constraint: tinted glass compresses the palette, as predicted
+
+Confirmed directly, and it's the thing §11's line-colour design most depends
+on: through the opaque brown bottle, **only near-opposite hues are reliably
+distinguishable** — blue vs. yellow/red. Adjacent hues collapse, exactly as
+§3 predicted from the red-vs-orange finding.
+
+### The low-PWM floor, measured (2026-08-24)
+
+`make low-pwm-test` in `ramp` mode on the AE-WS2812B-STICK8, raw values, no
+gamma and no `BRIGHTNESS`:
+
+| raw | reads as |
+|---|---|
+| `(1,1,1)` | **red** — "a faint mars in the distance", no luminosity |
+| `(2,2,2)` | **purple** |
+| `(3,3,3)` | **neutral grey** — first honest white |
+| `(4,4,4)` | brighter, less soft than 3 |
+
+**The floor on this strip is 3.** Below it, equal values stop meaning
+neutral.
+
+The progression names the culprit. Purple at 2 is red + blue with green
+absent, so the low-PWM ordering here is **red > blue > green** — green is
+the weak channel. (An earlier guess in `low_pwm_test.py` assumed blue was
+weak and biased its compensation candidates the wrong way. The ramp settled
+it in one run, which is the argument for measuring rather than reasoning.)
+
+### Per-channel compensation: `(2,3,2)` is the dimmest neutral
+
+`balanced` mode, same strip, same run conditions:
+
+| raw | reads as | total |
+|---|---|---|
+| `(1,1,1)` | dim red ("mars") | 3 |
+| `(1,2,1)` | forest green | 4 |
+| `(1,2,2)` | deep blue | 5 |
+| `(1,3,1)` | grass, bright green | 5 |
+| `(1,3,2)` | sky blue | 6 |
+| **`(2,3,2)`** | **first neutral grey** | **7** |
+| `(2,4,2)` / `(2,3,3)` | neutral | 8 |
+
+So **green wants +1 over red and blue**, and compensation buys a neutral at
+a total of 7 instead of `(3,3,3)`'s 9 — about 22% less output for the same
+apparent colour. Real, but modest; not the order-of-magnitude win that would
+force a redesign.
+
+`channels` mode at value 2 confirms it independently: **white reads purple**,
+i.e. red + blue with green under-contributing at equal value.
+
+**Control worth noting:** the two LEDs showing each candidate looked
+identical to each other. That rules out per-die manufacturing scatter — this
+is a systematic property of the WS2812B's channels, so one compensation
+applies strip-wide and no per-pixel calibration is needed.
+
+### ⚠ In a brown bottle, a NEUTRAL marker is impossible at any value
+
+Running `ramp` mode through the thick brown bottle made every step read warm
+— including values well above the floor. That is not a floor problem. Amber
+glass absorbs blue (see the vessel section above), so a neutral grey cannot
+survive it at *any* PWM value. The glass is subtracting the channel that
+makes grey grey.
+
+**This splits the marker question in two, and only the first is about the
+LED:**
+
+1. **The floor (a strip property, measure on the BENCH).** Below ~3 raw,
+   WS2812B channels stop matching and equal values produce an unpredictable
+   hue. Worth avoiding regardless of vessel, because "unpredictable" is
+   worse than "warm": a marker that lands on red reads like a dim train,
+   and `LINE_COLOR`/urgency colours are exactly what it must not be
+   confused with.
+
+2. **Whether the marker does its job (a vessel property, judge IN the
+   bottle).** In brown glass the criterion cannot be "reads neutral" — that
+   is unachievable. It becomes **"is it distinguishable from a train and
+   from the anchor?"**, which is answered by *brightness and position*, not
+   hue. A dim warm tick next to a bright warm train still reads as a tick.
+
+So: measure the floor bare, then set `MARKER_BRIGHTNESS` in the bottle by
+asking whether the ticks recede behind the trains — not by asking whether
+they look grey. They will not look grey, and that is the glass working as
+designed rather than a fault.
+
+### Why marker ticks read warm — arithmetic, not mystery
+
+Markers take the STATIC path in `leds.py`, so what reaches the LED is:
+
+```
+raw = MARKER_COLOR[ch] × BRIGHTNESS × MARKER_BRIGHTNESS
+    = 80 × 0.15 × 0.15  =  1
+```
+
+**Exactly the `(1,1,1)` that reads red.** The default `MARKER_BRIGHTNESS =
+0.15` lands precisely on the worst value available. `MARKER_BRIGHTNESS = 0`
+was set to hide it, which removed the affordance rather than fixing it.
+
+| `MARKER_BRIGHTNESS` | raw | reads |
+|---|---|---|
+| 0.15 (old default) | 1 | red |
+| **0.25** | **3** | **neutral ✓** |
+| 0.40 | 4 | neutral |
+
+Two candidate fixes, and the `balanced` mode decides between them:
+
+1. **`MARKER_BRIGHTNESS ≥ 0.25`.** Simple, but it is a magic number tied to
+   `MARKER_COLOR` and `BRIGHTNESS` — change either and it silently lands
+   back in the collapse zone.
+2. **Clamp the marker's final value to the floor.** Robust across brightness
+   settings, and expresses the actual constraint: never emit a non-zero
+   value below the point where channels match.
+
+`balanced` mode has now answered the follow-up: the dimmest neutral is
+`(2,3,2)`, total 7 against `(3,3,3)`'s 9. So a *shaped* clamp is available
+and would let markers sit ~22% dimmer than a flat one.
+
+**Recommendation: take the flat floor of 3 first.** The shaped version costs
+a non-neutral `MARKER_COLOR` and a compensation that is itself per-strip, to
+buy 22% on an element that is meant to be barely-there anyway. And §12's
+in-bottle finding points the other way regardless — the bench-tuned
+`BRIGHTNESS = 0.15` is too dim once diffused, so markers will clear the
+floor naturally at whatever brightness the glass actually needs. Keep
+`(2,3,2)` recorded for the case where markers must be as dim as possible,
+which is not today's problem.
+
+⚠ Per-strip. Confirm the floor on the 21-LED gift-jar strip before trusting
+it there, and confirm through the glass — the bottle changes what is
+*visible*, though not what the chip emits.
+
+### Vessel comparison: the glass sets the line count (2026-08-24)
+
+`make hue-test` across three brown bottles, 8-LED stick on jumpers dropped
+in unfastened.
+
+| vessel | `even` | `tokyo` (5 lines) | verdict |
+|---|---|---|---|
+| **thick, opaque brown** | 3 OK; **4 fails** (red≈violet); 5 fails (blue≈green) | keihin_tohoku reads "faint vomit yellow/green"; ginza "looks red" | **2-3 lines** |
+| **mid brown** | 4 OK at `BRIGHTNESS=0.05` | 5 separable; orange/yellow slightly harder than clear | **4-5 lines** |
+| **clear brown** | 5 "clear, super obvious" | 5 "totally clear, easily separable" — still clear at `0.05` | **5+ lines** |
+
+### The mechanism: amber glass is a BLUE-CUT FILTER
+
+Not a general loss of saturation — a specific missing channel. Amber glass
+exists to block short wavelengths, and every failure above is that one fact:
+
+- `keihin_tohoku` `(0,178,229)`, a light **blue**, reads yellow-green: its
+  blue is absorbed, leaving only the green component.
+- Red vs violet merge at 4 hues, because **violet minus blue IS red**.
+- Blue vs green merge at 5, same cause.
+- `ginza` (orange) "looks red" — with blue already at zero, orange can only
+  slide toward red.
+
+The thick bottle does not compress the hue wheel evenly. It **collapses it
+onto the red-green axis and deletes a dimension.**
+
+### ⚠ CORRECTION to this section's earlier claim about brightness
+
+§12 previously said raising in-bottle brightness would fix both the marker
+floor and hue separation — *"the two findings share one fix."* **That is
+wrong, and the data is unambiguous:** `0.15 → 0.30` in the thick bottle gave
+"not much improvement from first run."
+
+It cannot work. Scaling brightness preserves the **ratios** between channels,
+so it can never restore one the glass is removing. The two findings are
+independent:
+
+- **Marker floor** — a property of the LED. Brightness fixes it.
+- **Hue separation** — a property of the glass. Brightness does nothing.
+
+The one compensation still untested is *disproportionate* blue gain, now
+available as `GAIN` in `hue_test.py`. There is headroom: at `BRIGHTNESS=0.30`
+keihin_tohoku's blue reaches only 68/255, so `B×3` gives 206 before clipping.
+
+### The real tension: the most beautiful vessel is the least functional
+
+Field note from the session: *"thick opaque glass provides most refraction
+and most beautiful effect."* It is also the one capped at 2-3 lines.
+
+That is a product decision, not a bug, and the options are:
+
+1. **Thick brown, 2-3 lines.** Keep the look; accept the cap. Fits the
+   project's stated thesis — this is an ambient object, not a departure board.
+2. **Clear/mid brown, 5+ lines.** Trade some of the glow for capacity.
+   `docs/glass-stone-concept.md` §3 already argues clear glass on these
+   grounds.
+3. **Thick brown + a non-colour identity channel.** If hue is capped at 2-3,
+   line identity could ride on *animation* — blink rate, pulse shape, chase
+   direction — which diffusion does not attenuate. Untested, and the most
+   interesting of the three because it makes the glass's limitation
+   irrelevant rather than accepting it.
+
+Note option 3 is only visible because the constraint was measured rather
+than assumed.
+
+Implications for the line palette:
+- **Cap the practical line count at what the glass supports**, not at what
+  the data model allows. Three widely-separated hues is plausible; six is not.
+- **Brightness needs to go up in the bottle** — the bench-tuned `0.15` is too
+  dim once diffused, consistent with `hardware.md`'s earlier note that brown
+  glass allows `BRIGHTNESS` toward `0.5`. That also lifts markers out of the
+  low-PWM danger zone above, so the two findings share one fix.
+- Clear glass would sidestep this entirely — the argument
+  `glass-stone-concept.md` §3 already makes.
+
+### Incidental, useful
+
+- **The opaque brown bottle hides the electronics well** — the "reveal" the
+  concept doc wants, confirmed on the real assembly rather than in theory.
+- **An IMU simply resting inside the bottle, unfastened, detects taps fine**
+  for testing, and stays removable. Rigid mounting can wait for the
+  permanent build; it is not a prerequisite for gesture iteration.
+
+---
+
+## 13. A corrupt filesystem can make a board look physically dead (2026-08-23)
+
+Cost most of a morning. The symptom was as severe as hardware failure gets:
+`mpremote`, `screen` and Thonny all failed to open a session, macOS showed
+**no `/dev/cu.usbmodem*`, no node in the USB tree, and no BOOTSEL device**,
+and the onboard LED sat dim instead of bright. Two cables and two ports
+behaved identically. Everything pointed at a damaged board.
+
+The board was fine. So were both cables and both ports.
+
+### The chain
+
+1. An LED strip on the 5V pin loaded the rail hard enough to brown out the
+   MCU **during a file write** (`mpremote cp`). That first event is a
+   separate, genuine power fault — see the LED-strip note below.
+2. The brownout left the **littlefs filesystem corrupt**, mid-write.
+3. On the next boot MicroPython hung in `_boot.py` **mounting** that
+   filesystem — which happens *before* USB CDC is brought up. No enumeration
+   ever occurred, so the host saw nothing at all.
+4. **Reflashing the firmware did not fix it.** Firmware and filesystem live
+   in separate flash regions and `picotool load` only writes the former, so
+   the corrupt filesystem survived every reflash intact.
+5. `picotool erase -a` followed by a reflash fixed it immediately.
+
+### Why this is worth writing down
+
+The failure impersonates dead hardware almost perfectly, and the two obvious
+recovery moves both fail in ways that *reinforce* the wrong diagnosis:
+reflashing appears to succeed and changes nothing, and swapping cables and
+ports changes nothing either. Each innocent result pushes you further toward
+"the board is damaged."
+
+**The discriminating test is BOOTSEL.** It runs from mask ROM and cannot be
+affected by anything in flash. So:
+
+| BOOTSEL enumerates? | Meaning |
+|---|---|
+| **No** | Genuinely physical — cable, port, connector, or board |
+| **Yes**, but MicroPython doesn't | Flash contents. The hardware is fine. |
+
+The second row was the case here, and it inverts the conclusion completely.
+Note the ordering trap: BOOTSEL working feels like reassurance, so it's
+tempting to read it as "board is fine, must be something else" and keep
+chasing physical causes. It is not reassurance — **it is the positive result
+that rules the physical layer out.**
+
+### What changed
+
+`make flash-micropython BOARD=... WIPE=1` now erases all of flash before
+loading (`scripts/flash_firmware.sh`). Opt-in, because it also destroys the
+on-board `config.py`. Reach for it the moment a board is unreachable over
+serial *and* BOOTSEL works — that combination is this bug until proven
+otherwise, and a plain reflash will never clear it.
+
+Also: `make upload` now writes `main.py` **last**. It's the boot script, so
+once on the device it auto-runs and competes with `mpremote` for the serial
+link — a separate failure (`could not complete raw paste: b'\x01'`) that
+truncated `config.py` and muddied this diagnosis considerably.
+
+### The underlying power fault — ✅ RESOLVED, and it was a config typo
+
+The trigger recurred: an 8-LED WS2812B strip on the XIAO's 5V pin **stopped
+the board enumerating and blocked BOOTSEL entirely**, twice. Disconnecting
+it restored both immediately.
+
+Eight LEDs should not be able to do that — `hardware.md` records 120 running
+fine off USB at `BRIGHTNESS = 0.15`. **The resolution is that `BRIGHTNESS`
+was never reaching them.** `config.py` had `LED_PIN = 3` while the strip was
+wired to GPIO1, so nothing ever addressed it — and an unaddressed WS2812B
+holds whatever state it powered up in, which here was near full white.
+Eight at full white is ≈480mA off VBUS. `hardware.md`'s 120-LED figure
+doesn't contradict this because that measurement had data arriving.
+
+Confirmed on the bench 2026-08-23: the strip lit blazing the instant it was
+connected with nothing driving it, then ran a full `make led-test` cycle —
+`fill WHITE` included — with no brownout at all once addressed at 15%.
+
+### ⚠ A wrong `LED_PIN` is a POWER fault, not a display bug
+
+This is the part worth carrying forward, because the failure is wildly
+disproportionate to its cause and nothing in the symptom points at config:
+
+```
+one wrong digit in LED_PIN
+  → strip never addressed
+  → holds power-up state (potentially full white, ~480mA)
+  → board browns out
+  → brownout lands during an mpremote write
+  → littlefs corrupted
+  → MicroPython hangs in _boot.py before USB CDC
+  → board presents as DEAD HARDWARE, survives every reflash
+```
+
+A one-character config error consumed a morning and looked like a destroyed
+board at every step. **`BRIGHTNESS` cannot protect you here** — it is a
+property of data you are not sending. The strip's idle draw is set by
+whatever it powered up holding, and it will happily sit there at maximum.
+
+Practical rules:
+
+- **Verify `LED_PIN` against `pinouts/<board>.md` before connecting a strip**,
+  not after. `make led-test` (which carries its own `DATA_PIN`) is the cheap
+  confirmation that the wiring works, independent of `config.py`.
+- **Bring a strip up under `mpremote run`, never during `make upload`.**
+  `make led-test` / `make run-file` execute from RAM and touch no files, so
+  a brownout costs you a reset. The same brownout during a write costs you
+  the filesystem.
+- **A strip lighting up before any code runs is a warning**, not a nice sign
+  that the wiring works.
+
+### A second presentation: enumerates, but never answers (2026-08-23)
+
+The same corruption recurred with a **different symptom**, worth knowing so
+it isn't mistaken for something else:
+
+| | first occurrence | second |
+|---|---|---|
+| `/dev/cu.usbmodem*` | absent | **present** |
+| BOOTSEL | worked | worked |
+| `mpremote exec` | "no device found" | **opens, then 15s of silence** |
+
+So a device node existing does **not** mean the board is reachable. The RP2
+runtime brings USB CDC up before `_boot.py` runs, so a filesystem too
+damaged to mount leaves you with an enumerated port and no Python behind it.
+
+There's a trap in how this surfaces. `make screen` interrupted with Ctrl-C
+produces a traceback ending in `self.serial.open()` → `os.open(...)`, which
+reads exactly like a busy port held by another process. It isn't — that is
+just where mpremote was waiting. Check before believing it:
+
+```bash
+lsof /dev/cu.usbmodem*        # who holds it (usually: nobody)
+ls -la /dev/cu.usbmodem*      # does the node exist at all
+```
+
+**The discriminating test is a timed probe**, not a REPL attempt:
+
+```bash
+.venv/bin/mpremote exec "print('alive')"   # under a ~15s timeout
+```
+
+Node present + no answer = this bug. Recover with `WIPE=1`.
+
+### A third presentation: the file reads back as the FILESYSTEM (2026-08-24)
+
+The worst one, because every check passes. `diag.py` uploaded, verified at
+the correct 4,011 bytes, and then failed to compile:
+
+```
+File "diag.py", line 1
+SyntaxError: invalid syntax
+```
+
+Line 1 is a comment. Reading the file on the device showed why:
+
+```python
+>>> print(repr(open('diag.py','rb').read()[:90]))
+b'\x03\x00\x00\x00\xf0\x0f\xff\xf7littlefs/\xe0\x00\x10\x01...\x11config.py...'
+```
+
+That is **littlefs's own superblock** — its magic string, then directory
+entries for other files. The inode's size was right; its data pointers were
+aimed at the filesystem's internal structures instead of the file's content.
+
+What makes this the nastiest variant so far:
+
+| | mount | size check | reads back |
+|---|---|---|---|
+| §13 original | ✗ fails, board looks dead | — | — |
+| second presentation | ✗ hangs before USB CDC | — | — |
+| **this one** | **✓ fine** | **✓ correct** | **✗ wrong data** |
+
+Nothing announces a problem. The board boots, the filesystem mounts, the
+upload verifies, and the failure surfaces as a *syntax error in your own
+source* — pointing at a code bug that does not exist.
+
+**Rule: when a reported error cannot be true of the source you wrote, stop
+debugging the source.** A SyntaxError on a line that is a comment — a
+comment byte-identical in style to ones in every module that loaded fine
+moments earlier — is not a language problem. The file being read is not the
+file you wrote.
+
+**This is why upload verification now hashes CONTENT, not size**
+(`scripts/upload.sh`). A size check passes here and actively misdirects: it
+prints `✓ verified` over a file that is entirely wrong. A check that passes
+for the wrong reason is worse than no check.
+
+**Recovery is a wipe, not a re-upload.** Do not trust a filesystem that
+returns its own superblock as file content — rewriting into a damaged
+structure is a coin flip:
+
+```
+make flash-micropython BOARD=xiao-rp2350 WIPE=1
+make upload
+```
+
+⚠ **Three corruption events in one day is not normal**, and they share a
+suspect: this board is on a breadboard, and breadboard contacts are already
+the leading explanation for the intermittent transfer failures below. Flash
+writes are the operation least tolerant of a power glitch. If it recurs
+after a wipe, treat it as evidence for soldering the unit rather than as
+bad luck.
+
+### ROOT CAUSE FOUND: the filesystem is bigger than the flash (2026-08-24)
+
+**`make doctor` on a bare XIAO RP2350 reports a 3072 KB filesystem. The chip
+has 2048 KB of flash, ~320 KB of which is the MicroPython image.** The
+filesystem is 1.78× larger than the space that physically exists.
+
+This is a **known, filed, fixed defect**, not a quirk of one unit:
+
+- **raspberrypi/pico-sdk#2834** — the XIAO RP2350 board header declares
+  `PICO_FLASH_SIZE_BYTES` as 4MB; the board ships a 2MB (16-Mbit) part.
+  Confirmed against `picotool info -a` (`flash size: 2048K`), the P25Q16H
+  datasheet, and Seeed's own documentation. The report notes it propagates
+  to anything relying on that constant — MicroPython included.
+- **micropython/micropython#18839** — the downstream issue, reproducing the
+  identical numbers: 768 blocks, 3072 KB total, 3064 KB free.
+- **Fixed** in pico-sdk 2.3.0, plus a MicroPython follow-up trimming the
+  filesystem to 1408k to match SEEED_XIAO_RP2040. Both land **after** the
+  v1.28.0 (2026-04-06) build this project was running.
+
+That a brand-new second board failed identically is exactly what a wrong
+compile-time constant predicts: it is wrong for every unit of this board.
+
+**Why this likely explains the corruption, not just the wrong number.** The
+failures land at 87–145 KB, far below any boundary, so "ran off the end of
+the chip" does not fit on its own. The stronger hypothesis is the
+filesystem's *start offset*: partition layout typically computes it as
+`flash_size − fs_size`, so a phantom 4MB figure can map the filesystem at
+the wrong physical address entirely — corrupting from early writes, at
+unpredictable points. That matches the most damning symptom exactly: a
+file's data pointer resolving to littlefs's own superblock is a **block
+address miscalculation**, not the half-written-page damage a power glitch
+produces.
+
+**Not yet confirmed.** The test is to flash a build with the corrected flash
+size and see whether corruption disappears independent of write count.
+`make doctor` now fails the board outright when the filesystem exceeds the
+physical flash, so this can never again be mistaken for bad luck.
+
+Also fixed as a direct consequence: `scripts/flash_firmware.sh` used to glob
+the firmware directory and take the **first** match, which sorts to the
+OLDEST build — it would have silently reflashed v1.28.0 over a preview
+installed specifically to test this fix. It now takes the newest, says so
+when there is a choice, and accepts `FIRMWARE=<path>` to pin one.
+
+### The variable is the NUMBER OF WRITES, not size or tool (2026-08-24)
+
+Narrowed by two experiments that finally isolated it.
+
+**`make doctor` on a freshly wiped board passes everything** — 4KB, 24KB and
+40KB written locally by the device, then the same three transferred from the
+host via `mpremote cp`, all content-verified. Six write operations, no
+failures. So flash, littlefs and the serial transport are each fine in
+isolation, at sizes larger than any real module.
+
+**Thonny hangs too.** Uploading the firmware by hand through Thonny — a
+different tool with its own transfer implementation over the same USB CDC —
+wrote clock, config, contracts, diag, gestures, leds, main and net, then
+hung on the ninth file.
+
+| | board | tool | outcome |
+|---|---|---|---|
+| `make doctor` | original | mpremote | ✓ 6 writes, all pass |
+| Thonny | original | Thonny | ✗ hung on the 9th (~145 KB in) |
+| `make upload` | **brand new, out of the box** | mpremote | ✗ died on the 6th (~87 KB in) |
+
+**A second, unused board fails the same way**, which settles it: the first
+board is not damaged, and today's three corruptions were symptom rather than
+cause. Two boards, two host tools, two cables, two USB ports, on and off the
+breadboard — the only surviving variable is the platform itself
+(MicroPython 1.28.0 on RP2350, its littlefs, and USB CDC).
+
+Note it is not a fixed file count OR a fixed byte count — 6 files/87 KB on
+one board, 9 files/145 KB on the other. Both land in the same band, which is
+what a block-reclamation pause would look like rather than a hard limit.
+
+So it is **not mpremote**, and **not the board**. What is left is the
+accumulation of flash writes within one session.
+
+The leading explanation is littlefs garbage collection: after enough writes
+it must compact and erase blocks, and on RP2 a long flash operation is
+exactly the thing that starves USB CDC. Not confirmed.
+
+**This reframes the V1.6 split's cost.** Going from 3 files to 13 did not
+make transfers *slower*, it pushed them past a threshold that had always
+been there — which is why occasional failures became reliable ones on the
+same day the module count quadrupled.
+
+Two things follow, one of which is a genuine fix:
+
+- **`make dev` avoids the problem entirely.** `mpremote mount` serves
+  `micropython/` over the serial link as the device filesystem, so the
+  firmware runs from the working copy with **zero flash writes**. For
+  iteration this is strictly better; a real standalone unit still needs
+  `make upload`.
+- **`make upload` now skips files whose content already matches**, so a
+  typical run writes one or two modules rather than thirteen — staying
+  under the threshold by doing less work.
+
+### Upload failures: free space ruled out, overwrite is the suspect
+
+The intermittent `make upload` failures outlived every physical fix — new
+cable, new port, off the breadboard entirely. Two things narrowed it:
+
+**Free space is not the cause.** `os.statvfs('/')` on the XIAO RP2350
+returned `(4096, 4096, 768, 716, 716, ...)` — 716 of 768 4KB blocks free,
+**93% empty**, both before and after a full upload. (Net-zero because the
+files already existed and were replaced.)
+
+**The pattern was: works immediately after a WIPE, fails on later uploads.**
+That points at littlefs having to erase and garbage-collect blocks in order
+to *overwrite* an existing file — flash erase on RP2350 blocks for tens of
+ms at a time, and a long enough stall breaks mpremote's raw-paste timeout.
+
+`scripts/upload.sh` now does `mpremote rm` before each `cp`. The first
+upload after that change succeeded **on the breadboard, without a wipe**,
+which had been failing consistently. That is **n=1 against an intermittent
+fault** — suggestive, not proven. If failures return, the next measurement
+is whether a tiny file succeeds while `main.py` fails; that would confirm
+write duration as the variable.
+
+Independent of the stalling, `rm`-then-`cp` is worth keeping for a
+different reason: a failed overwrite can leave a truncated blend of old and
+new content, whereas a failed write after removal leaves the file **absent**
+— which fails loudly at import instead of running as subtly-wrong code.
+
+**File size is now the strongest signal.** On the upload that triggered the
+second corruption, every smaller file went through and only the big one
+failed:
+
+| file | bytes | result |
+|---|---|---|
+| `diag.py` | 4,011 | ✓ |
+| `primitives.py` | 9,353 | ✓ |
+| `config.py` | 16,806 | ✓ |
+| `settings.py` | 23,415 | ✓ |
+| `testbench.json` | 28,582 | ✓ |
+| **`main.py`** | **122,011** | **✗ ×3** |
+
+That fits a roughly constant per-unit-time failure probability, where
+exposure scales with transfer duration — and it explains why `config.py`
+failed *sometimes* earlier rather than never. It predicts that **uploads get
+more reliable as V1.6 shrinks `main.py`**, which is a claim this project can
+confirm by construction rather than argument.
+
+Two consequences worth acting on:
+
+- **Each failed retry is another chance to corrupt the filesystem.**
+  `upload.sh` tries three times, so a doomed large write gets three
+  attempts to damage littlefs. Both corruptions to date followed a failed
+  large write.
+- **A `.mpy` shortcut exists if this stays painful.** `mpy-cross` compiles
+  to bytecode a fraction of the source size, with a tiny `main.py` shim to
+  import it. Not done — V1.6 shrinks the file anyway, and one mechanism is
+  better than two.
+
+### Rule of thumb
+
+Brownouts don't only interrupt the write in progress — they can leave
+persistent state that outlives the power event, the reflash, and every
+cable you try next. When a board goes unreachable during a write, suspect
+the filesystem before the silicon.
+
+---
+
+## 14. Living with v1.6 for 24 h — the light *is* the UX (2026-09-04)
+
+First full day of the production unit (XIAO RP2350 + DS3231 + 21 LEDs, thick
+brown opaque bottle) sitting on the dev bench. Same genre as §5, and it
+**reverses one of §5's findings**, which is the most useful thing in here.
+
+### Brightness reversed sign, and that's the enclosure talking
+
+§5 (2026-06-29): *"Too bright **even in the brown bottle**."*
+Today: **not bright enough in daylight; fine at night.**
+
+Both observations are true; they were made through different glass and at
+different ambient light. This is the evidence design-principle #16
+("brightness baseline is per-enclosure") was stubbed waiting for — and it
+needs a second clause: **per-enclosure *and* per-ambient.** A single
+`BRIGHTNESS` scalar cannot satisfy a room that changes by 2–3 orders of
+magnitude between noon and midnight, and no amount of tuning finds a value
+that is right twice.
+
+Note the trap: raising `BRIGHTNESS` to fix daylight makes night *worse*,
+and the failure at night isn't "too bright" — it's glare that destroys the
+diffusion the whole aesthetic depends on (§3). The two ends want different
+values, so the setting has to be a function of time, not a constant.
+
+### Quiet hours is a fossil
+
+`QUIET_START_HOUR` / `QUIET_END_HOUR` were designed when the display was
+*always on* and needed an off-switch overnight. Since the gesture envelope
+shipped, the display is **already dark by default** — `AWAKE_MINUTES`
+expires and it sleeps until tapped. Quiet hours now suppresses a thing that
+mostly isn't happening.
+
+What it still does, precisely: (1) refuses to wake on a tap, answering with
+`QUIET_TAP_COLOR` instead, and (2) blacks out the boot-time awake window.
+Those are real but small. What the setting is being *asked* for now is
+something it was never built to do — pick a **brightness profile** by time
+of day, the way light/dark mode does.
+
+**These are two different concepts wearing one name.** Splitting them:
+
+| Concept | Question it answers | Status |
+|---|---|---|
+| Quiet hours | may the display light up at all? | keep, shrink to a genuine deep-night gate |
+| Day/night profile | *how bright* when it does? | new |
+
+### `local_time()` throws the date away
+
+Discovered while scoping the seasonal part of day/night: `local_time()`
+returns `(minutes_since_midnight, weekday)` and nothing else.
+`ds3231_decode()` reads year/month/day off the chip and
+`_ds3231_local_time()` discards them. So:
+
+- **Fixed day/night (e.g. 07:00–17:00) is free** — it needs only `minutes`,
+  which every path already has.
+- **Seasonal drift is not free** — it needs day-of-year, which means
+  widening `local_time()`'s return, and all three sources
+  (`ds3231` / `rtc` / `ntp`) have to agree on it.
+
+Ship them as two steps, in that order.
+
+Sizing note if seasonal does get built: Tokyo's real sunrise swing is about
+**±75 min** across the year (~4:25 in June to ~6:50 in January), not the
+±15–30 min a damped version would apply. Damped is a defensible choice —
+this is a brightness profile, not an almanac — but the amplitude should be
+a config value, not a hardcoded guess, so the two can be compared on real
+glass.
+
+### A tap that resolves to nothing is the worst failure mode
+
+With one line in `schedule.json`, tap-to-cycle has nothing to cycle to.
+Today the CONFIRM jolt fires (`_handle_tap` plays it before `main.py`
+checks `len(lines) > 1`), so the unit says *"yes, done"* and then changes
+nothing. **A confident acknowledgment of a no-op is worse than no
+acknowledgment** — it makes a working device look broken, the exact inverse
+of `led-status-messages.md`'s "a broken device should look broken."
+
+The fix belongs in `_handle_tap`, not after it: one gesture should get one
+response, chosen with knowledge of whether the action is available.
+
+### Motion is the only unspent expressive channel
+
+Four channels are available and three are already load-bearing:
+
+| Channel | Currently carries | Free? |
+|---|---|---|
+| Position | time-to-leave (the whole paradigm) | no |
+| Hue | line identity + urgency — and **§12 says the brown glass allows only 2–3 hues at all** | no |
+| Brightness | urgency, anchor, marker — and now day/night | no |
+| **Motion** | boot burst, CHASE, breathe — used, never systematised | **yes** |
+
+Motion also survives the enclosure best: thick glass blurs *position* and
+filters *hue*, but change-over-time passes through diffusion intact. That
+is the argument for building the light vocabulary's next layer out of
+movement rather than more colours — a conclusion §12's colour measurements
+force rather than merely suggest.
+
+### Clock mode is two features sharing a name
+
+1. **A readable clock** — the ambient, analog-feeling one. Wants a
+   position→angle mapping, i.e. a full or known circle. Blocked on geometry
+   (LEDs at a bottle's base rarely close a circle).
+2. **A verifiable clock** — "is the RTC still right?", read off the strip
+   with no laptop. Wants precision and works at any LED count: blink out
+   the digits in sequence. Directly serves the drift work
+   (`docs/rtc-drift-theory.md`) and has **no geometry prerequisite.**
+
+Different goals, different designs, different blockers. Build (2) first;
+(1) waits on the vessel/mount decision that's open anyway.
+
+---
+
+## 15. The light language meets the glass (2026-09-13)
+
+First hardware session for `motion_sandbox.py` / `tilt_sandbox.py`. The
+vocabulary survived; two of the assumptions under it did not.
+
+### The words work, and the real question turned out to be brightness
+
+All five read clearly through the dark brown bottle — **distinguishable
+even at `BRIGHTNESS = 0.15`**, so §14's worry that diffusion might collapse
+them into one blur was unfounded. That reframes the open question: it is
+not *can you tell them apart*, it is *how present do you want the object to
+be*. A UX decision, not a legibility constraint.
+
+### Brightness: the opaque bottle compresses the whole scale
+
+| Value | Through thick dark brown |
+|---|---|
+| 0.35 | barely OK, even in low light |
+| 0.65 | totally fine |
+| 1.00 | brighter, but not unreasonable |
+| **0.50** | **settled on** |
+
+**The steps between those are perceptually smaller in an opaque bottle than
+in a clear one.** The glass compresses the top of the range — which is the
+same mechanism §12 measured for hue, arriving at the other end: thick amber
+removes information, so it takes a bigger change at the LED to make a
+visible change in the room.
+
+Practical consequence: **`BRIGHTNESS` tuning is coarse in a dark vessel and
+fine in a clear one.** Do not expect a value found in one to transfer, and
+do not expect three-decimal precision to be meaningful in brown glass.
+
+**What it costs on batteries**, from `scripts/power_budget.py` (gated strip,
+`AWAKE_MINUTES` 3, 6 taps/day, 3× AA alkaline):
+
+| `BRIGHTNESS` | per lit pixel | mAh/day | runtime |
+|---|---|---|---|
+| 0.15 | ~5 mA | 44.8 | **44.7 days** |
+| 0.50 | ~16.6 mA | 58.7 | **34.1 days** |
+
+**−24% for 3.3× the brightness** — affordable, and much cheaper than the
+linear intuition, because idle still dominates. Note the levers reorder as
+brightness rises: `taps/day 6→2` goes from +43% to +63%, while the MCU-sleep
+lever drops from +91% to +57%. **The brighter the display, the more the
+budget is about how often it wakes and the less it is about microamps** —
+which strengthens, rather than weakens, the roadmap's "chasing deep-sleep
+microamps is misallocated" finding.
+
+### Tilt: the response must be expo, not linear
+
+3.5 s to reverse through neutral felt right in the hand. The mapping did
+not. A linear map runs at half rate at half tilt, which is far too fast to
+aim with — and the useful control range collapses into the first few
+degrees off upright.
+
+What is wanted is what an RC transmitter does to a stick: **fine control
+near centre, full authority at the extremes.** Raise the normalised input
+to a power, keeping the sign. At `CURVE = 2.5`, half tilt gives 18% rate
+instead of 50%, and full tilt still reaches full rate.
+
+### Tilt: a hard tap spoofs a tilt, ~1 time in 5
+
+Stress test — bottle flat on the table, tapped hard on purpose — engaged
+sessions and read 30-40° of tilt that never physically happened.
+
+**The cause is definitional, not a bug in the filter:** an accelerometer
+measures gravity *plus* whatever else is accelerating it. A tap is briefly
+much larger than gravity, so the normalised sum points somewhere far from
+down.
+
+**The discriminator is exact and needs no tuned time constant: tilting
+preserves the magnitude, accelerating does not.** A bottle held at any
+angle, not moving, still reads |a| = 1 g. So test the magnitude *before*
+believing the direction, and drop anything outside 1 g ± 25%. Two cheaper
+gates behind it (an EMA on the direction; four consecutive samples past the
+deadzone before engaging) cover glancing knocks that land inside the window.
+
+> **Worth keeping: this is the tap recognizer's test run backwards.** Taps
+> want |a| ≫ 1 g, tilt wants |a| ≈ 1 g. One sensor stream, split by
+> magnitude — so the two gestures can coexist on one IMU without fighting,
+> and neither needs to know about the other.
+
+### Tilt neutral: the discriminator is duration, not depth
+
+Three rounds of getting this wrong, and the third one is the useful one.
+
+The reference for "upright" was first captured once at startup, which made
+neutral whatever orientation happened to be under the sensor at that
+instant — producing a bottle flat on a table reading 8.1° forever, and
+later sitting at a rock-steady 28.5°.
+
+The fix — release when the bottle stops moving, and re-learn neutral there
+— then **overshot into the same bug**: a hand holding a tilt to aim passed
+a 2° stillness test, so 25° became neutral.
+
+The proposed discriminator was *"a hand is never perfectly still; a bottle
+on a table is."* True in principle. **Measured, the instantaneous spread
+does not separate them:**
+
+| | jitter |
+|---|---|
+| table, set down | **0.11°** |
+| hand, held very steady | **0.12°** |
+| hand, typical aiming | 0.3-0.9° |
+
+Those overlap outright, so no threshold on spread alone can work — which
+is why tightening 2.0° → 0.4° moved *which* hand-steady moment slipped
+through rather than stopping it.
+
+**What separates them is how long the quiet lasts.** Across a full session
+the longest unbroken hand-held run was:
+
+| threshold | longest hand-held quiet run |
+|---|---|
+| 0.4° | 1.5 s |
+| 0.5° | 2.75 s |
+| 0.8° | 4.0 s |
+
+A bottle on a table is quiet for as long as you leave it. So the answer is
+a *longer* window, not a tighter one — 6 s at 0.5° clears every hand run
+measured.
+
+**And the cost of being wrong is asymmetric**, which is what justifies
+being conservative: releasing late is a mild annoyance, while re-baselining
+onto a hand-held angle poisons every reading afterwards. When two error
+directions cost different amounts, the threshold does not belong in the
+middle.
+
+### Telemetry that lies is worse than none
+
+`jitter 0.00°` was printed whenever the sample window was not yet full.
+It reads as *perfectly still* — the exact opposite of *no data yet* — and
+it appeared at the start of every session, which is precisely when the
+reference is most suspect. Now prints `--`.
+
+Same lesson as the rail indicator two days earlier: an instrument added to
+explain a behaviour has to be read as carefully as the behaviour.
+
+### MicroPython compiles docstrings away
+
+`demo()` labelled each word with `fn.__doc__` and died at the first one:
+`AttributeError: 'function' object has no attribute '__doc__'`. Unless the
+firmware was built with `MICROPY_ENABLE_DOC_STRING`, `__doc__` is not empty
+— **the attribute does not exist.**
+
+**The host suite structurally cannot catch this class**: pytest runs
+CPython, where `__doc__` always exists. Anything read off a function or
+class object at runtime — `__doc__`, `__name__`, `__module__` — needs
+checking on device, or replacing with an explicit table. The test that
+replaced it checks the table stays in step with what it describes, which is
+the part a host *can* verify.
+
+
+---
+
+## 16. A vocabulary's words have to be distinguishable from each other (2026-09-14)
+
+Finding `SHAKE_BOUNDS` on the bench unit turned out not to be the
+per-unit measurement it was filed as. The bottle has no label, so the
+"bounce against the label edge" rationale did not apply at all — and the
+width still mattered, for a different reason:
+
+| half-width | reads as |
+|---|---|
+| ±5 | **a short lap of `around`** — the two words blur together |
+| ±4 | borderline |
+| **±3** | **a head-shake.** Unmistakable, and it has a nice bounce |
+
+**So the constraint is not "where is the label", it is "do not look like
+another word".** That is a property of the vocabulary and it is universal;
+the label only ever decides *where* the bounce sits, never how wide it is.
+
+The two halves were tangled in one config tuple and are now split:
+
+| | kind | scope |
+|---|---|---|
+| `SHAKE_HALF_WIDTH` | measured vocabulary constant | universal — don't touch |
+| `SHAKE_CENTER` | physical fact about the vessel | per-unit, like `ARC_ORIGIN` |
+
+**The general lesson is bigger than the shake.** `light-language.md` §7
+asks whether the five words are distinguishable *through the glass* —
+diffusion was the expected threat. This is the other axis: two words can
+be perfectly legible and still collapse into each other because their
+*shapes* are too close. A vocabulary fails either way, and only one of
+those failures has anything to do with the enclosure.
+
+Worth re-checking the other pairs against it. `outward` and `inward` are
+the same path in opposite directions, which is exactly the kind of
+near-collision that just bit — they are currently distinguished by
+direction alone.
+
+---
+
+## 17. Two findings from living with motion + tilt (2026-09-14)
+
+### A tilt session fires 1-3 spurious taps
+
+Tilting produces 1-3 tap detections per session, each answered with a
+`shake` — an elegant "no" to a question nobody asked.
+
+The cause is the mirror of a problem already solved one layer down.
+`tilt.py` rejects any sample whose |a| is not ≈1 g, because a transient is
+not an orientation. **The tap trigger has no equivalent gate, and it is
+looking for exactly those transients** — the acceleration of moving the
+bottle is, to a threshold on deviation-from-baseline, indistinguishable
+from a deliberate strike.
+
+So the two halves of the "one sensor, split by magnitude" idea are not
+actually symmetric yet: tilt knows to ignore taps, taps do not know to
+ignore tilts.
+
+**The fix is mutual exclusion by STATE, not by threshold.** While
+`TiltController.engaged` is True the bottle is demonstrably being held and
+moved, so the tap trigger should be suppressed outright — no threshold
+tuning, no new features to measure. The converse already holds for free:
+`_handle_tap` blocks for its ~1.2 s capture, so tilt is not updated during
+a tap.
+
+Tuning a threshold instead would be the wrong move twice over: it is the
+approach §8 spent fifteen sessions proving does not transfer between
+bottles, and here there is a clean state signal available that costs
+nothing.
+
+### The display cannot say "there IS a train, just not near enough"
+
+At 00:29 with the next train 305 minutes out, the strip shows the anchor
+and its markers and nothing else. **Mathematically perfect, and exactly
+wrong as UX** — it is indistinguishable from a broken jar, and from a jar
+saying "no more trains ever".
+
+The mechanics are all correct in isolation, which is why nothing caught it:
+
+- `_arm_target()` returns `None` when the offset exceeds the arm, and
+  *should* — an approach contract genuinely cannot show a train further
+  out than the strip reaches.
+- `LeaveSignal.urgency` is `LEVEL_3`, not `HIDDEN`, and *should be* — there
+  are real catchable trains.
+- `_all_signals_hidden()` is therefore False, so the existing no-data
+  acknowledgment never fires.
+
+**The gap is at the stage-1/stage-2 seam: the signal doesn't know the
+renderer's reach.** And the reach is not hidden — it is
+`ARM_LEN × POSITION_MINUTES_PER_LED`, two settings already in config. On
+this unit, 10 × 2 = a 20-minute horizon.
+
+So there are **three** states being collapsed into two:
+
+| state | today | should be |
+|---|---|---|
+| trains in range | arc renders | ✓ |
+| trains exist, beyond the horizon | **looks identical to broken** | its own answer |
+| no more trains at all | anchor + markers, plus the no-data ack | ✓ |
+
+### What it should do — and one option to rule out
+
+**⚠ Not `breathe`, and not a glow.** `light-language.md` §3 is explicit
+that breathe is the one word whose energy never decays, which is precisely
+why it means *unresolved* — and "the next train is at 05:37" is completely
+resolved. Spending the error verb on the most ordinary state a timetable
+has would cost the vocabulary its only word for "something is actually
+wrong". A colour change is available but spends hue, which §12 measured
+this glass as barely having.
+
+**The principled answer is that a lit anchor is a promise.** It says "here
+is the station, and here is what's coming". Rendering it with nothing on
+the arms is a promise with nothing behind it. So the display should stop
+claiming — answer the tap, then go dark.
+
+Two ceremonies fall out of that, and the second is the better idea:
+
+1. **Goodnight.** A tap that resolves to "nothing within reach tonight"
+   gets a bounded gesture that *ends* — and then the strip goes dark
+   rather than sitting lit. Distinct from the no-data ack, because "come
+   back tomorrow" and "you missed the last train" are different facts.
+2. **Good morning, and the flower.** The insight that makes this cheap:
+   **the flower already happens.** A train crossing into the horizon lights
+   the outermost LED of an arm, then the next, with the anchor already
+   there — an arc opening from its edge inward. Nobody has ever seen it
+   because the display is asleep by then. So this is not an animation to
+   build; it is a **scheduling** question: wake shortly before
+   `first_departure − horizon − walk`, and let the existing renderer do it.
+
+That reframe matters for cost as well as elegance. A morning wake is one
+extra awake window per day, against the 6 taps/day the power budget
+already assumes — cheap, and `taps/day` is the lever that model says
+matters most, so it should be counted rather than assumed free.
+
+**Open:** whether goodnight/good-morning are time-of-day judgements or
+purely "is the next train beyond the horizon" ones. The second is simpler
+and needs no notion of "tomorrow"; the first is what a person would
+actually mean.
+
+### Built as a sunset and a sunrise (2026-09-14)
+
+Three waves each rather than one, and the reason is a distinction worth
+keeping: **one wave is a gesture, three are a ceremony.** A single
+`outward` is already the ACK — the same word at the same speed cannot also
+mean "goodbye". Duration and repetition are what separate them.
+
+So goodnight slows, dims and cools across its three; morning speeds up,
+brightens and warms. They are the same physics run in opposite directions,
+which is also the answer to "why three" — dusk has stages.
+
+**The colour drift is the part this vessel will not show, and that is
+fine.** §12 measured amber glass as a blue-cut filter, so goodnight's third
+wave arrives deep and dark rather than blue — which happens to be exactly
+what a final wave should look like. The meaning is carried by duration and
+decay, which §15 found pass through diffusion intact. The ceremony
+therefore **degrades gracefully rather than breaking**: a clear bottle gets
+a sunset, a brown one gets a fade, and neither depends on the other.
+
+That is a design property worth reusing. Anywhere hue carries meaning in
+this project, something else should carry it too — not as redundancy, but
+because the vessel is a variable and hue is the channel it takes away.
+
+
+---
+
+## 18. 24 hours with the ceremonies (2026-09-14)
+
+### The tick markers are wrong in an opaque bottle
+
+Turn them off. In thick brown glass they diffuse into a yellow haze that
+carries no information and competes with the only two things that do — the
+station and the train.
+
+**The setting already exists: `MARKER_BRIGHTNESS = 0`.** No new knob, and
+adding a `MARKERS_ENABLED` boolean alongside it would create exactly the
+two-ways-to-say-one-thing confusion `palette-model.md`'s own rule forbids.
+What was wrong was the *documentation*: the config's warning read as "never
+set this low", when it is really about the range `0 < x ≲ 0.15` — where a
+channel is lit but too dim for the channels to match. **An unlit LED has no
+hue to get wrong.** Zero is off, and off is a legitimate choice rather than
+the bug-workaround it was the first time it appeared (§12).
+
+The deeper point is about what the markers were *for*: "how far does the
+arc reach". That is a question a clear vessel raises and an opaque one
+answers for you, by making the lit region obvious against the dark. So the
+right value is **per-vessel**, like brightness (§14) and hue count (§12) —
+a third setting whose correct value is a property of the glass.
+
+### One wave, three waves, and a recoil
+
+Three ceremonies now exist and the distinction between them is the useful
+part, not the animations:
+
+| event | what it is | shape |
+|---|---|---|
+| you stopped looking (`AWAKE_MINUTES` expires) | a gesture | **one** slow `outward` |
+| the day ended (nothing within reach) | a ceremony | **three** waves, a sunset |
+| you hit a brightness rail | **not a word at all** | a recoil |
+
+Cutting straight to black on timeout is indistinguishable from a power
+loss — the same hazard quiet hours has a printed warning about, except
+nobody is reading a console at the time.
+
+**The unwind needed no new word.** "The station flickers out and unwinds
+from in to out" is exactly what `outward` already does, because its
+amplitude decays as it travels: the anchor blob leaves *and* dims. Reaching
+for a sixth word here would have been the mistake §16 warns about — words
+that are too close collapse into each other.
+
+### A rail is invisible, and the fix is physical rather than semantic
+
+"Already at maximum" looks exactly like "not working". §15 hit this on the
+bench and 24h of real use hit it again, which makes it a property of the
+control rather than of one session.
+
+**The answer came from asking what a bottle would do**, not what a message
+should say: tilted past what the table allows it stops, and you feel it
+stop. So — a recoil, and deliberately **not a word**. Words say something;
+this is a physical reaction, the same category as the ACK flash.
+
+Two choices inside it worth keeping:
+
+- **A brightness dip, not a positional bounce.** The first instinct was
+  `shake`, which is genuinely the right *meaning* ("no further"). But at a
+  brightness rail the whole ring is lit, so a blob moving two LEDs is
+  invisible against it — while the object recoiling reads at any lit state.
+  The metaphor agrees: the thing that bounces is the bottle, not a spot on
+  it.
+- **Throttled, not edge-triggered.** Holding a tilt past the rail is a
+  *continuous* request. Answering once and then going quiet is the same
+  silence the recoil exists to break.
+
+### Still open
+
+Separating pick-up from tilt. §17's spurious-tap fix (suppress the tap
+trigger while a tilt session is engaged) addresses taps-during-tilt, not
+handling-that-looks-like-tilt. That one is the ESN thread, and it stays
+parked.
+
+
+---
+
+## 19. Physics won, and it is a design principle (2026-09-14)
+
+`crawl_sandbox.py` put six train-movement styles and five station fades on
+real glass — the two animations the light language never specified, because
+every other word was derived from what glass does when struck and **there
+is no bottle-equivalent for a light moving inside glass.** The fork was
+genuine: PHYSICS (the light has mass — slides, eases, settles) versus
+AGENCY (the light is alive — hops, blinks, vanishes and reappears).
+
+**Physics won, and not narrowly.**
+
+| | winner | runner-up |
+|---|---|---|
+| station fade | **`slow_out`** — "natural, interesting, nice to look at" | `slow_in` |
+| train movement | **`crossfade`** — more fluid, less "sticky" | `ease_slide` |
+
+The interesting part is *why the agency styles lost*. They did not look
+bad. They read as **"something needs your attention"** — a firefly hop and
+a guttering fade both produce a small alarm. Which yields the principle,
+now promoted to `design-principles.md` #5:
+
+> **A thing with intent wants something from you. Physics is indifferent,
+> and indifference is what lets an object be ambient.**
+
+That is the missing half of principle #1 ("ambient, not demanding"). #1 says
+not to *notify*; this says the motion itself can notify even when nothing is
+being announced. An object can demand attention purely by seeming alive.
+
+And the framing that generalises furthest: **a bottle has no sharp edges,
+so the language is curves.** GUIs are boxes, straight lines, furniture.
+This is a break from that, and the break is the point.
+
+### ⚠ Crossfade reverses a standing decision, and the reason it looks fine
+### is the vessel
+
+`CHASE` exists *because* a brightness-blend crossfade was removed: it
+necessarily passes through low-brightness intermediates, and at
+`BRIGHTNESS = 0.15` those fell below the low-PWM floor where channels stop
+matching (§6, §12).
+
+That premise has only **partly** changed. Brightness is 0.5–0.62 now and
+dithering exists, but with `LINE_COLOR (34,139,34)` a half-faded train puts
+R and B near raw 4, and a quarter-faded one puts them **under the floor
+while G stays above it** — so the train shifts hue in transit.
+
+It looked fine anyway, and the reason is the finding: **§12 measured this
+brown glass as collapsing hue onto the red-green axis, so the vessel hides
+the very artefact crossfade creates.** Crossfade is therefore a choice
+about *this bottle*, not a general improvement — a clear one may show what
+the brown one conceals. Shipped as `TRANSITION_STYLE`, defaulting to
+`chase`, with the arithmetic written next to it.
+
+Third time the same shape has appeared: the vessel is not a container for
+the design, it is a *parameter of* it (§12 hue count, §14 brightness, §18
+markers, now this).
+
+### Smoothness at the bottom of a fade is a dithering question
+
+"As slow as a smooth LED fade will allow, without stepping" has an existing
+answer that was switched off: `DITHER`. Temporal dithering exists precisely
+to buy intermediate levels where there are few output codes left, which is
+exactly the last second of a fade — and `_write_frame`'s static/animated
+split means enabling it costs the idle LEDs nothing, since static pixels
+skip dithering entirely.
+
+Worth stating plainly because it was nearly re-solved in the curve instead:
+**if a fade steps, check `DITHER` before blaming the shape.**
+
+
+---
+
+## 20. A bottle has no front, and the data has no order (2026-09-14)
+
+Testing the whole-scene arrival sequences produced the most structural
+finding so far, and it is not about animation.
+
+### The object has no front, and everything keeps trying to give it one
+
+A bottle is radially symmetric. Like a circle or a sphere, it has **no
+geometric front, back, left or right** — and that is genuinely alien to
+humans, whose own bodies supply those axes for free. An octopus has no
+such problem. We are in that world.
+
+Two things in this design have been quietly imposing a front anyway:
+
+- **The anchor.** It has to be *somewhere*, and wherever it is becomes
+  "the front".
+- **The label.** Same effect, arrived at by manufacturing rather than by
+  us — and the bench bottle has none, which is what made this visible.
+
+So **there is no real left and right**, and a symmetric arrival sequence —
+trains sweeping in from both ends toward the middle — *performs* a
+bilateral symmetry the object does not possess. It reads as facetious:
+*"this bottle has two sides, wink wink."*
+
+**The anchor survives the critique and the sweep does not**, for a reason
+worth keeping: the anchor is an imposition that is *honest about being
+one*. It is a single declared fixed point, and it is absent 99% of the
+time. A choreographed sweep is an imposition pretending to be a property.
+
+This also explains, retroactively, why the arm A/B orientation work was so
+persistently confusing (`approach-contract.md` § "the face you view it
+from"): four combinations, none derivable from the object, and the whole
+difficulty was a *symptom*. We kept trying to give sides to a thing that
+has none.
+
+### The stronger argument is honesty about the data
+
+**The train positions are not known in advance. Not knowing where they are
+is the entire point of the device.**
+
+So a choreographed arrival asserts an order the data does not contain. A
+regulated appearance is already a facade — it implies the display knew
+something before it showed it. **Scatter asserts nothing**, which is the
+only truthful thing an arrival can do here.
+
+That is the same commitment this project keeps making elsewhere: a
+plausible wrong time is worse than a dark jar; a dark strip that looks
+like a fault gets a printed warning rather than a quiet hope. *Do not
+represent state you do not have.* Applied to motion for the first time.
+
+> **"One to two seconds of delayed mystery is not only worth the effect,
+> it's the randomness of broken glass."**
+
+Which extends the foundation rather than departing from it. `struck` glass
+rings — ordered, resonant, the same every time. `broken` glass scatters —
+disordered, unique, never repeated. **Both are glass physics**, and the
+light language now uses both.
+
+### This narrows §19 rather than contradicting it
+
+§19 concluded that anything seeming *alive* reads as "something needs your
+attention", and irregular timing is the most direct way to seem alive. But
+`firefly` and `flicker` were irregular **and discontinuous**. `scatter` is
+irregular and smooth — and it reads as pleasant, not alarming.
+
+So the discriminator is not regularity:
+
+> **Irregularity reads as ALIVE when it looks decided, and as PHYSICAL
+> when it looks unchosen.** A firefly hops because it chose to; broken
+> glass lands where it lands.
+
+Principle #5 was right as literally written — *a bottle has no sharp
+edges; the language is curves*. The gloss around it was too broad. Sharp
+edges are the problem; irregularity is not.
+
+### Shipped
+
+`fade_scene()` fades a rendered scene with per-LED scattered delays, in
+either direction, re-rolled every time — so a wake never looks the same
+twice. The station is the one exempt element: first in, last out.
+
+`leds.capture()` is what makes the fade-IN possible at all. Only the active
+contract knows the target scene, and the only way to learn it was to render
+it — which snaps it on, which is exactly what a fade-in exists to avoid.
+
+
+---
+
+## 21. The ACK shelf had never rendered (2026-09-14)
+
+Reported as *"thundering between the burst and the wrap-around"*, and the
+diagnosis is worth keeping because **every part of the description pointed
+at the wrong thing.**
+
+### What it actually was
+
+| observed | actually |
+|---|---|
+| "the startup sequence" | not the startup sequence — `_draw_startup_circle` is called only from `net.py`, so on `TIME_SOURCE = "ds3231"` there is no loading circle in the boot path at all |
+| "the burst is thundering" | the burst in isolation was fine, and always had been |
+| "then the wrap-around" | `motion.play("outward", ...)` — the wake wave. On a strip wound round a bottle, two blobs leaving the anchor for both ends *literally* wrap around |
+
+The real sequence: **burst → a spurious tap fires → ACK shelf held for the
+~1.2 s capture window → `outward` wake wave.** Nothing after the burst
+belonged to the boot ceremony; it was the gesture layer, triggered by
+plugging the unit in.
+
+### The shelf was below one output code, and always had been
+
+`SHELF_FLOOR = 0.08` is an **animated** mult, so its output is
+`BRIGHTNESS × shelf**GAMMA` — not `BRIGHTNESS × shelf`. The gamma is the
+part that hides it:
+
+```
+255 × 0.50 × 0.08**2.2 = raw 0.49
+```
+
+Below a single code. So:
+
+- **`DITHER` off** → truncates to 0 → *nothing*, for 1.2 s
+- **`DITHER` on** → lights ~half the frames, per-LED staggered → the whole
+  strip sparkling, for 1.2 s
+
+Both were reported, and both are the same number. At the older
+`BRIGHTNESS = 0.15` it was raw 0.15 — **the shelf has never once rendered
+as a shelf.** Whatever was tuned in §10 was being judged on the ACK peak
+and the CONFIRM jolt either side of it.
+
+### Why nothing caught it
+
+`palette.py` checked train, anchor and marker. The shelf is the one role
+that is **both** a product of config values **and** on the animated path,
+and it was not in the list. The checker was built in response to exactly
+this class of bug and still missed an instance of it, for the ordinary
+reason: a checker only checks what it was told about.
+
+Now included, with its gamma pre-applied so the existing floor and
+clipping tests work unchanged. `SHELF_FLOOR` raised to 0.20 → raw 3.7,
+clearing the measured floor.
+
+**And the narrow range that leaves — 0.20 to 0.25, raw 3 to 6 — is itself
+the argument for §12's deferred durable fix**: clamping any nonzero
+channel up to `LOW_PWM_FLOOR` at the point of output. Every one of these
+bugs has been the same shape, and every fix so far has been a different
+constant.
+
+### Plugging a unit in is handling
+
+The spurious tap is not a mystery. `gesture-envelope.md`'s 98.4% is
+measured against **pooled handling noise** — pickup, carry, setdown, bump —
+so a false trigger while connecting USB is the expected rate, not a fault.
+
+`GESTURE_BOOT_IGNORE_MS` (3 s) suppresses the trigger at loop start.
+Nothing a person does in the first seconds after power is a deliberate
+tap, so this costs nothing and removes a wake wave nobody asked for.
+
+### ⚠ And then the console disproved that too
+
+The shelf arithmetic above is real and the fix stands, but **it was not
+what was happening.** A boot capture showed no `(awake — tap registered)`
+line at all, which rules out a tap. What it showed instead:
+
+```
+  [SLEEP] awake window expired
+  (asleep after 0 min — tap to wake; not a fault)   ← thunder starts here
+```
+
+`BOOT_AWAKE_MINUTES = 0` sets `awake_until = now + 0`, so the unit goes
+awake → asleep on the very first tick and **the sleep ceremony fires at
+boot.** Position 2 was `fade_scene()`; the wrap-around was its `outward`
+unwind. Both mine, both added the same day.
+
+And the reason the fade was invisible-but-sparkling is a second bug in the
+same place: **`clear()` never reset `last_frame`.** `_play_startup_burst`
+ends with `clear()`, so `last_frame` still held the burst's *final* frame —
+every LED at mult ≈ 0, the end of the decay. `fade_scene` then spent 3.2 s
+scaling that toward zero: sub-code values throughout, which is sparkle with
+`DITHER` on and nothing with it off.
+
+Two fixes, and both are about honesty rather than tuning:
+
+- **`clear()` nulls `last_frame`.** A cleared strip has no scene. Saying so
+  is what makes `last_frame is not None` a usable test for "is there
+  anything to fade".
+- **The whole ceremony is gated on there being a scene**, not just the
+  fade. A goodbye for a display that never showed anything is not a
+  goodbye, it is a boot artefact.
+
+### The rule worth carrying
+
+> **A description of a bug is a description of where it was noticed, not
+> of where it is.** Four specific claims went wrong here — that it was the
+> startup sequence, that it was the burst, that the third phase was a
+> spin, and then that it was a spurious tap. Each was a reasonable reading
+> of what the strip did, and the arithmetic for the tap theory was even
+> correct on its own terms. **One line of console output disproved all of
+> them.** The shelf bug it turned up was real and worth fixing; it just
+> was not this.

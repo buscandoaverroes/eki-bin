@@ -48,10 +48,21 @@ When writing Rust code in this repo, take a teaching role:
 
 | Looking for… | File |
 |---|---|
-| Overview, quick start, every `make` target, workflows | `README.md` |
-| What's done / next / open decisions | `dev-status.md` |
+| The front door: what it is, why it exists, a menu of the docs | `README.md` |
+| Setup, the everyday loop, every `make` target, git flow | `docs/development.md` |
+| What changed per release, and what was learned | `docs/releases/` |
+| Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
+| What's true now / next / open decisions (current only) | `dev-status.md` |
+| Build-by-build history through V1.6 (frozen 2026-09-29) | `docs/archive/dev-status-history.md` |
+| **The plan: making tap + tilt coexist** — record → replay → arbiter → gyro; ML gated. *Draft; iterate before building* | `docs/imu-interaction-plan.md` |
 | Hardware roadmap: v1.1 parts, form-factor threads, NFC/power research | `docs/roadmap.md` |
+| **Form-factor proposal: the chandelier** — filaments suspended in 3D, the culmination of "the object has no front". *A proposal; nothing scheduled* | `docs/chandelier-concept.md` |
+| Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
+| **Palette checks** — `palette_problems()` / `safe_range()` / boot report; the usable BRIGHTNESS window and what binds each end | `micropython/palette.py` |
+| **Classifier approach** — which decision logic (rules shaped as a depth-2 tree + the arbiter's settlement window; no on-device model yet) and the testing ladder to get there. *Analysis, 2026-10-04* | `docs/classifier-approach.md` |
+| **On-board detection** — ESN vs the MLC, a piezo, and the gyro; why the mic wall is conceptual. *Analysis; nothing built* | `docs/on-board-detection.md` |
+| **Palette/brightness config — three proposals** to stop clipping and floor bugs being invisible. *A proposal; nothing built* | `docs/palette-model.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
 | Design rationale + full V2 hardware list | `docs/concept.md` |
 | Parts in hand, voltage compatibility | `docs/hardware.md` |
@@ -59,29 +70,79 @@ When writing Rust code in this repo, take a teaching role:
 | `schedule.json` schema + YAML pipeline | `docs/contracts/schedule-json.md` |
 | `config.py` fields + secrets handling | `docs/contracts/config.md` |
 | LED display pipeline (LeaveSignal → contracts) | `docs/contracts/display-contract.md` |
+| Positional/approach display paradigm (new, in progress) | `docs/contracts/approach-contract.md` |
+| Boot/startup LED sequence (implemented, not yet on hardware) | `docs/contracts/startup-sequence.md` |
+| Tap-gesture recognition + ACK/CONFIRM LED jolt + tap-to-cycle-line — **shipped and running on real hardware in the bottle** (XIAO C3 + IMU + 21-LED strip) | `docs/contracts/gesture-envelope.md` |
+| IMU tap wake/sleep interaction (original design — partially superseded by `gesture-envelope.md`, still correct for its state-machine/safety-gate patterns) | `docs/contracts/wake-interaction.md` |
+| LED status-message vocabulary (errors, acknowledgments — design only) | `docs/contracts/led-status-messages.md` |
+| **The light language** — struck-glass metaphor, the five motion words, the ACK-is-the-transition restructure, tilt input (design only, nothing implemented) | `docs/contracts/light-language.md` |
+| Shopping memo: strip load switch + battery pack (requirements, Japanese search terms, two traps) | `docs/shopping-battery-power.md` |
 | V1 → V2 Rust/Embassy migration map | `docs/rust-migration.md` |
 | V1 firmware | `micropython/main.py`, `micropython/led_test.py` |
-| Quick colour/animation A-B comparisons on real hardware | `micropython/led_sandbox.py` |
+| Quick colour/animation A-B comparisons + gesture-jolt shape prototyping on real hardware | `micropython/led_sandbox.py` |
+| **Crawl sandbox** — how a train moves (6 hop styles) and how the station fades (5). The physics-vs-agency fork the metaphor cannot settle | `micropython/crawl_sandbox.py` (`make crawl-sandbox`) |
+| The five motion words on real glass — eased vs linear, all five back to back, `outward` ∝ strike force | `micropython/motion_sandbox.py` (`make motion-sandbox`) |
+| **Horizon ceremonies** — goodnight when trains exist but none is in reach, and the morning wake that lets the arc be seen opening | `micropython/horizon.py` |
+| **The five motion words, as shipped** — `outward` on wake, `around` on a line change, `shake` for "nothing to change to" | `micropython/motion.py` |
+| **Tilt-to-adjust, the shipped controller** — magnitude gate, neutral re-learning, expo curve. One implementation, used by both the firmware and the sandboxes | `micropython/tilt.py` |
+| Tilt bench tests: the go-up-first overshoot (**run in the dark**) and `curve_test`'s timed target acquisition | `micropython/tilt_sandbox.py` (`make tilt-sandbox`) |
+| Tilt **freeform** — no target, logs every sample to JSONL, asks how it felt. The one that produces usable data | `micropython/tilt_freeform.py` |
+| **Wiring the current unit** — self-contained ASCII, config values, traps, bring-up order | `pinouts/v1.6-rp2350-production-unit.md` |
+| Low-PWM floor (strip property — test OUT of the bottle) | `micropython/low_pwm_test.py` (`make low-pwm-test`) |
+| Hue separation / how many lines a vessel supports (glass property — test IN it) | `micropython/hue_test.py` (`make hue-test`) |
+| Which onboard LEDs software can actually turn off | `micropython/onboard_led_test.py` (`make onboard-led-test`) |
+| Is this board healthy? flash/filesystem/transport probe | `make doctor` → `scripts/board_check.py` |
+| Run firmware from the host, zero flash writes | `make dev` → `scripts/dev.sh` |
+| DS3231 drift: the maths, and why offset ≠ drift | `docs/rtc-drift-theory.md` |
+| Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
+| IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
+| **The IMU simulator** — detect → arbiter → classify as swappable blocks, scored on recordings (`make sim`) or live beside `make imu-record` (`make sim-live`) | `scripts/sim.py` |
+| **The arbiter** — when a tap becomes real: commit on stillness, veto on handling before/after. Firmware module, driven by the sim; not yet wired into `main.py` | `micropython/arbiter.py` |
+| Guided recording — the script cues each trial (`PROTOCOL=tap-vs-grab`) | `scripts/imu_protocol.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
+| **Security posture** — public repo about a private commute; the local leak check (`make leakcheck`), open GitHub-side items | `docs/security.md` |
 
 ---
 
 ## Current focus
 
-V1 firmware is **feature-complete**: the full `time → LeaveSignal →
-DisplayContract → LEDs` pipeline (five contracts, gamma + temporal dithering,
-seamless clock, ~19 `config.py` knobs), guarded by a host test suite. Remaining
-V1 work is **in-jar tuning via `config.py`**, not features — so prefer config
-changes over firmware edits, and keep `make test` green (it runs before
-`make upload`). The **v1.2 board-portability checkpoint passed**: the XIAO
-ESP32-C3 runs the identical firmware via a `config.py` swap only — proof the
-board abstraction (`LED_PIN`, `HEARTBEAT_PIN`) holds up on real hardware.
-Current focus: **v1.1** (Qi power-path + soldering into the bottle) — see
-`docs/roadmap.md`. When touching board-specific pins, check/update
-`pinouts/<board>.md` alongside
-`config.py` — don't let pin facts drift out of that directory.
-Architecture: `docs/contracts/display-contract.md`; progress + open decisions:
-`dev-status.md`.
+**The production unit runs and has been lived with.** XIAO RP2350 (no radio)
++ DS3231 + LSM6DSV16X IMU + 21-LED strip in a brown glass bottle, USB-powered:
+correct time across power cycles, tap wakes/cycles **line**, tilt adjusts
+brightness, `ApproachContract` with per-line colour, day/night brightness,
+goodnight/morning ceremonies, and the motion vocabulary (`docs/contracts/
+light-language.md`). Firmware is eleven modules, no radio code. `make test`
+runs lint + 600+ host tests before every `make upload`; keep it green.
+`make doctor` before trusting a board — **a XIAO RP2350 needs firmware newer
+than 2026-04-06** (`docs/insights.md` §13). Wiring is self-contained in
+`pinouts/v1.6-rp2350-production-unit.md`.
+
+**Colour is measured, not guessed** (`docs/insights.md` §12): low-PWM floor is
+3; the glass sets the line count (thick brown = 2–3 hues); a neutral marker is
+impossible in brown glass. `make low-pwm-test` runs **out** of the bottle,
+`make hue-test` **in** it.
+
+**Three walls from givable** (`dev-status.md`):
+1. **Tap + tilt fight each other.** A composition problem, not a
+   classification one — the evidence that a "tap" was a grab arrives after
+   it. **Built in simulation (2026-10-26):** a vector trigger (detect) and
+   `micropython/arbiter.py` (settle on stillness, veto on handling), scored
+   by `make sim` on a guided recording. Not yet on the bottle. Blocks are
+   named **detect → arbiter → classify**; "Stage 1/2" is the *display*
+   pipeline. Plan: `docs/imu-interaction-plan.md`. **No ML yet, no new
+   sensor yet.** Ranking of the ML options: `docs/on-board-detection.md`.
+2. **A wiring harness** — leaning to a lid-mounted unit assembled outside the
+   vessel.
+3. **Power** — a battery needs a strip load switch; the chandelier/lamp form
+   (USB from the top) would dissolve it.
+
+**The form-factor fork is open and unscheduled:** strip-in-bottle now, but the
+intended end state is the **chandelier** (`docs/chandelier-concept.md`), also
+open to a bird's-nest tangle. Don't tune per-mount constants as if permanent
+— fix the *state machine* (transfers) before *thresholds* (don't; 0%
+cross-bottle). NFC / sticker-book input is real but **2–3 versions out** and not
+required for first givability. A provisioning manifest (a record per unit) is
+needed by the second unit: `docs/gift-registry.md`.
 
 ---
 

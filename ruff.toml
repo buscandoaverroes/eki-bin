@@ -1,0 +1,29 @@
+# Lint config — eki-bin
+#
+# Deliberately NARROW. The point is not style enforcement; it is catching the
+# one bug class that cost this project real time during the V1.6 split
+# (docs/v1.6-refactor.md): a name used but never imported.
+#
+# That class was INVISIBLE until V1.6 removed the star-imports. ruff and
+# pyflakes both give up on undefined-name detection in any file containing
+# `from x import *` — which is precisely why two NameErrors on the DS3231
+# boot path survived a fully green 278-test suite. Removing star-imports is
+# what made this check possible; keeping the selection narrow is what keeps
+# it actionable rather than a wall of style noise.
+
+target-version = "py37"   # MicroPython is closest to 3.7 semantics
+line-length = 100
+
+[lint]
+select = [
+    "F821",  # undefined name  ← the reason this file exists
+    "F811",  # redefinition of an unused name (caught a duplicate clear())
+    "F401",  # imported but unused — keeps the tightened imports honest
+    "E9",    # syntax / IO errors
+]
+
+[lint.per-file-ignores]
+# Bring-up scripts are executed by `mpremote run`, never imported, and set
+# module attributes dynamically on the firmware they drive.
+"micropython/gesture_sandbox.py" = ["F401"]
+"micropython/led_sandbox.py" = ["F401"]

@@ -1,0 +1,11 @@
+# Copy to .leakcheck-terms (gitignored — NEVER commit the real one).
+# One case-insensitive term per line; '#' starts a comment. Anything matching
+# in an outgoing diff, commit message, PR title or PR body blocks the push.
+#
+# Put here what you would not want a stranger to learn from a public repo:
+#   your home / nearest station names, your street or building, your SSID,
+#   your employer, family names, the exact lines you commute on.
+#
+# your-station-name
+# your-street
+# your-home-wifi-ssid

@@ -8,789 +8,524 @@
 # "What's the urgency?" is computed once per tick and is independent of "how do
 # we show it?" — swap visual strategies by changing CONTRACT in config.py.
 
-import json
-import math
 import time
 
-import config
-import network
-import ntptime
-from machine import Pin
-from neopixel import NeoPixel
+# Imported as a MODULE as well as by name below, for the same reason
+# leds.py does it: BRIGHTNESS is the one setting that is MUTATED at
+# runtime (_apply_daylight here, _cycle_brightness in gestures.py), and a
+# star/named import binds a COPY. `settings.BRIGHTNESS` is the single home;
+# a bare `BRIGHTNESS` in this file would be a stale snapshot.
+import settings
+
+# No radio imports here, deliberately. `network`/`ntptime` DO NOT EXIST on
+# a radio-less board, and they used to sit unconditionally at line 17 — so
+# main.py died with ImportError BEFORE config was read, and TIME_SOURCE
+# could not rescue it. They now live in net.py, imported LAZILY inside the
+# TIME_SOURCE == "wifi" branch of run_startup_sequence(). A XIAO RP2350
+# never reaches that line. See docs/v1.6-refactor.md and insights.md §13.
 
 # ─────────────────────────────────────────────────────────────
-# Settings (from config.py)
+# Settings — extracted to settings.py (V1.6, docs/v1.6-refactor.md)
 # ─────────────────────────────────────────────────────────────
-# WiFi creds are *required* for V1 — import directly so a missing value fails
-# loudly rather than silently defaulting to nonsense.
-WIFI_SSID = config.WIFI_SSID
-WIFI_PASS = config.WIFI_PASS
+# TRANSITIONAL star-import: the test suite reaches into `main.X`, so
+# re-exporting keeps all 265 tests passing unmodified while the split
+# proceeds. That is what makes a green suite evidence the move was
+# faithful. Replaced with explicit imports in V1.6's final step.
+from clock import (ClockUnavailable, _check_ds3231_at_boot, current_period,
+    daylight_period, fmt_time, local_time)
+from contracts import (ACTIVE_CONTRACT, ApproachContract,
+    geometry_problems)
+from diag import (_mem_checkpoint, _mem_report)
+from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
+    _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
+    _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+import gestures as _gestures  # GYRO_BIAS, gyro_check_enabled, _safe_read_gyro
+import leds
+from leds import (_heartbeat_pin, _write_frame, clear)
+from schedule import (is_quiet, load_schedule, schedule_lines)
+from settings import (AWAKE_MINUTES, BOOT_AWAKE_MINUTES, CLOCK_ERROR_COLOR, COLOR_SCHEME,
+    CONFIG_ERROR_COLOR, DAY_BRIGHTNESS, DAY_NIGHT_ENABLED, GOODNIGHT_GAP_MS,
+    GESTURE_BOOT_IGNORE_MS,
+    GOODNIGHT_ENABLED, GOODNIGHT_WAVES, MORNING_GAP_MS, MORNING_LEAD_MINUTES,
+    MORNING_WAVES, MORNING_WAKE_ENABLED, MOTION_AROUND_MS, SLEEP_UNWIND_COLOR,
+    MOTION_SCENE_FADE_MS, SLEEP_UNWIND_ENABLED, SLEEP_UNWIND_MS,
+    WAKE_FADE_ENABLED, TILT_RAIL_BOUNCE_ENABLED,
+    TILT_RAIL_DEPTH, TILT_RAIL_MS,
+    MOTION_ENABLED, STARTUP_COLOR, TILT_ENABLED,
+    DISPLAY_DIRECTION, DISPLAY_DIRECTION_B, NIGHT_BRIGHTNESS,
+    ERROR_COLOR, FRAME_MS, GESTURE_DEBUG_ENABLED, GESTURE_POLL_MS,
+    HEARTBEAT_PIN, LED_PIN, LOOP_INTERVAL_SECS, NUM_LEDS, N_TRAINS,
+    QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS, SCHEDULE_ERROR_COLOR,
+    SCHEDULE_FILE, STATUS_LED_INDEX, TAP_TRIGGER_THRESHOLD_MG, TIME_SOURCE,
+    WAKE_INTERACTION_ENABLED)
+from signals import (LeaveSignal, leave_signal, next_departures)
+import horizon
+import motion
+import palette
+from tilt import TiltController
+from status import (quiet_onboard_leds,
+    _play_startup_burst, _run_startup_failure_forever)
 
-# Everything else is optional with a default. getattr(config, "NAME", default)
-# returns the default when the field is absent, so a config.py written before a
-# knob existed keeps working — you only add the lines you want to override.
-UTC_OFFSET_HOURS = getattr(config, "UTC_OFFSET_HOURS", 9)
-LOOP_INTERVAL_SECS = getattr(config, "LOOP_INTERVAL_SECS", 30)
-SCHEDULE_FILE = getattr(config, "SCHEDULE_FILE", "schedule.json")
-
-# Which trains
-DISPLAY_DIRECTION = getattr(config, "DISPLAY_DIRECTION", "b")
-WALK_TO_STATION_MINS = getattr(config, "WALK_TO_STATION_MINS", 2.5)
-# [→ NFC] WALK could later be read from the station card, not config.
-
-# Display — hardware (changes with the physical strip: stick=8, ring=12)
-LED_PIN = getattr(config, "LED_PIN", 6)
-NUM_LEDS = getattr(config, "NUM_LEDS", 8)
-ARC_ORIGIN = getattr(config, "ARC_ORIGIN", "near")  # "near" = DIN end (index 0) is
-#   the arc origin; "far" = the other end. Logical, not physical — flip this when
-#   the strip ends up mounted upside-down, without touching any rendering code.
-
-# Display — look & feel
-BRIGHTNESS = getattr(config, "BRIGHTNESS", 0.15)
-CONTRACT_NAME = getattr(config, "CONTRACT", "sandtimer")
-COLOR_SCHEME = getattr(config, "COLOR_SCHEME", "default")
-MINUTES_PER_LED = getattr(config, "MINUTES_PER_LED", 1)
-URGENCY_THRESHOLDS = getattr(config, "URGENCY_THRESHOLDS", (2, 5))
-GAMMA = getattr(config, "GAMMA", 2.2)  # perceptual brightness curve (see gamma())
-BREATHE_PERIOD_MS = getattr(config, "BREATHE_PERIOD_MS", 8000)  # one breath, ms
-BREATHE_FLOOR = getattr(config, "BREATHE_FLOOR", 0.2)  # dim end of the breath (0..1)
-DITHER = getattr(config, "DITHER", True)  # temporal dithering for smooth dim fades
-FRAME_MS = getattr(config, "FRAME_MS", 16)  # frame duration, ms
-N_TRAINS = getattr(config, "N_TRAINS", 1)  # how many upcoming departures to show
-#   as nested arcs (1 = just the primary — the original behaviour). >1 shows
-#   further-out trains as a dimmer band beyond the primary's arc.
-BACKGROUND_BRIGHTNESS = getattr(config, "BACKGROUND_BRIGHTNESS", 0.35)  # 0..1;
-#   relative brightness of the 2nd train; the 3rd gets this squared, etc.
-#   (geometric falloff — one knob regardless of how many trains you show).
-#   Used by SandTimerContract/BreathingContract's uniform per-layer dimming.
-
-# EchoContract only (see docs/insights.md §6 for why brightness-only dimming
-# didn't work): trains beyond the primary differentiate by HUE + a brightness
-# that stays high the whole time — no low-brightness dip to flicker/lose
-# diffusion. Tuned empirically via led_sandbox.py.
-SECONDARY_HUE_SHIFT_DEG = getattr(config, "SECONDARY_HUE_SHIFT_DEG", 20)  # per
-#   train index beyond the primary (2nd = ×1, 3rd = ×2, ...)
-SECONDARY_BREATHE_PERIOD_MS = getattr(config, "SECONDARY_BREATHE_PERIOD_MS", 3000)
-SECONDARY_BREATHE_FLOOR = getattr(config, "SECONDARY_BREATHE_FLOOR", 0.7)  # high —
-#   this is a subtle differentiation pulse, not the urgency-signalling breath
-#   BreathingContract's own BREATHE_FLOOR drives; deliberately separate knobs
-#   so tuning one doesn't fight the other.
-
-# Status heartbeat LED — board-specific, unlike the WS2812B data line above.
-# "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
-# GPIO). Other boards have no such alias: set this to a GPIO number for that
-# board's onboard LED (see pinouts/<board>.md), or None to disable the heartbeat
-# entirely — the console heartbeat (●/○) still prints either way.
-HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
-
-# Quiet hours (strip dark). Stored as hours in config; minutes internally.
-QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
-QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
-
-np = NeoPixel(Pin(LED_PIN, Pin.OUT), NUM_LEDS)
+# ─────────────────────────────────────────────────────────────
+# Signals, LED output, display contracts — extracted (V1.6)
+# ─────────────────────────────────────────────────────────────
+# Transitional star-imports; see docs/v1.6-refactor.md. Import ORDER is not
+# arbitrary: contracts depends on leds, leds on primitives, all on settings.
+# `import *` skips underscores, and the tests reach into main._x.
 
 
-# ═════════════════════════════════════════════════════════════
-# STAGE 1 — time → abstract signal
-# ═════════════════════════════════════════════════════════════
 
 
-# Urgency is a *pure abstract level* — no colour, no animation. Those are
-# rendering decisions and live on the contracts (Stage 2). V1 stand-in for a
-# future Rust `enum Urgency`.
-class Urgency:
-    def __init__(self, name, level):
-        self.name = name
-        self.level = level  # 0 = hidden, 1 = most urgent … higher = more relaxed
-
-    def __repr__(self):
-        return self.name
 
 
-# Singletons — compare with `is`, like enum variants. Band edges are configurable
-# (URGENCY_THRESHOLDS); the comments show the defaults (2, 5).
-HIDDEN = Urgency("HIDDEN", 0)
-LEVEL_1 = Urgency("LEVEL 1", 1)  # below threshold[0] — go now
-LEVEL_2 = Urgency("LEVEL 2", 2)  # threshold[0]–[1] — get ready
-LEVEL_3 = Urgency("LEVEL 3", 3)  # above threshold[1] — plenty of time
 
 
-def time_to_leave(minutes_until):
-    """Departure (minutes away) → minutes until you must LEAVE the room.
-    Returns None if uncatchable (you'd miss it even leaving now)."""
-    if minutes_until is None:
-        return None
-    ttl = minutes_until - WALK_TO_STATION_MINS
-    return ttl if ttl >= 0 else None  # drop trains you've already lost
 
 
-def classify(ttl):
-    """PURE: time-to-leave (minutes) → Urgency. Band edges from URGENCY_THRESHOLDS;
-    no colour, no rendering."""
-    if ttl is None:
-        return HIDDEN
-    near, mid = URGENCY_THRESHOLDS
-    if ttl < near:
-        return LEVEL_1
-    if ttl < mid:
-        return LEVEL_2
-    return LEVEL_3
 
 
-class LeaveSignal:
-    """Per-tick snapshot of when to leave. Pure data, rebuilt every tick — owns
-    no state and survives nothing, so there's no staleness to manage.
-
-    ttls    : catchable times-to-leave, soonest first (continuous, minutes)
-    primary : ttls[0] or None — drives the headline display
-    urgency : classify(primary) — derived convenience for colour bands
-    """
-
-    def __init__(self, ttls):
-        self.ttls = ttls
-        self.primary = ttls[0] if ttls else None
-        self.urgency = classify(self.primary)
-
-
-def leave_signal(departures, now):
-    """Build a LeaveSignal from a direction's schedule and the current time."""
-    raw = next_departures(departures, now)  # minutes-until for the next few trains
-    ttls = [t for t in (time_to_leave(m) for m in raw) if t is not None]
-    return LeaveSignal(ttls)
-
-
-# ═════════════════════════════════════════════════════════════
-# STAGE 2 — signal → pixels (display contracts)
-# ═════════════════════════════════════════════════════════════
-
-# Named urgency→colour schemes. Pick one via COLOR_SCHEME in config.py; add your
-# own here. HIDDEN never appears (handled by clear()).
-#   default — calm blue (relaxed) → amber (urgent)
-#   sunset  — warm amber → magenta
-#   mono    — one hue for every level; urgency shows only via arc length
-SCHEMES = {
-    "default": {LEVEL_1: (255, 100, 0), LEVEL_2: (200, 180, 0), LEVEL_3: (0, 100, 255)},
-    "sunset": {LEVEL_1: (255, 40, 0), LEVEL_2: (255, 120, 0), LEVEL_3: (180, 0, 120)},
-    "mono": {LEVEL_1: (255, 90, 0), LEVEL_2: (255, 90, 0), LEVEL_3: (255, 90, 0)},
-}
-PALETTE = SCHEMES.get(COLOR_SCHEME, SCHEMES["default"])
-
-
-def clear():
-    """All LEDs off."""
-    for i in range(NUM_LEDS):
-        np[i] = (0, 0, 0)
-    np.write()
-
-
-def _arc_len(ttl):
-    """time-to-leave (minutes) → number of lit LEDs, MINUTES_PER_LED minutes per
-    LED, shrinking toward 1 as the deadline approaches and capped at NUM_LEDS.
-    (ttl is guaranteed ≥0 — uncatchable was dropped.)"""
-    lit = math.ceil(ttl / MINUTES_PER_LED)
-    return max(1, min(lit, NUM_LEDS))
-
-
-def _physical(logical):
-    """Map a *logical* arc position (0 = the arc's origin) to a *physical* LED
-    index, honouring ARC_ORIGIN. This is the seam a future per-hardware driver
-    would own (reversed strips, ring wrap-around, dead-pixel gaps, …) — contracts
-    stay blissfully unaware of the wiring."""
-    if ARC_ORIGIN == "far":
-        return NUM_LEDS - 1 - logical
-    return logical  # "near" (default): logical index == physical index
-
-
-def _heartbeat_pin(name):
-    """Construct the status-heartbeat Pin, or None if disabled. Pulled out as its
-    own function (rather than inline in main()) purely so it's host-testable
-    without pulling in WiFi/NTP/the live loop."""
-    return Pin(name, Pin.OUT) if name else None
-
-
-# Temporal-dither state: one carried rounding-error per (physical LED, channel).
-# It PERSISTS across frames — that's the whole point (sigma-delta), so a sub-integer
-# brightness like 1.4 averages to 1.4 over time instead of truncating to 1. The
-# staggered init decorrelates the pattern across LEDs so they don't flicker in
-# lockstep (spatial + temporal averaging → a smooth glow).
-_residual = [[((i * 3 + ch) % 5) / 5.0 for ch in range(3)] for i in range(NUM_LEDS)]
-
-
-def _quantize(value, res, ch):
-    """Round `value` (float 0..255) to an int, carrying the error to the next
-    frame via res[ch]. Over many frames, mean(output) == value. Integer inputs
-    stay exact (no flicker); only fractional values dither."""
-    v = value + res[ch]
-    q = int(v + 0.5)
-    if q < 0:
-        q = 0
-    elif q > 255:
-        q = 255
-    res[ch] = v - q
-    return q
-
-
-def _layer_mult(index):
-    """Relative brightness (0..1) for the `index`-th train layer. index 0 (the
-    primary) is always full-relative (1.0); each layer beyond it is dimmer by
-    another factor of BACKGROUND_BRIGHTNESS — geometric falloff, so N_TRAINS can
-    grow (2, 3, ...) without needing a config knob per layer."""
-    return 1.0 if index == 0 else BACKGROUND_BRIGHTNESS ** index
-
-
-def _layer_hue_shift(index):
-    """Hue-rotation degrees for the `index`-th train layer, for EchoContract.
-    index 0 (the primary) gets none; each layer beyond it rotates further
-    (2nd = ×1, 3rd = ×2, ...) — same per-index scaling idea as _layer_mult, but
-    linear rather than geometric: hue is an angle, so "further back → further
-    rotated" is the natural analogue of "further back → dimmer" for a hue
-    differentiator, not a diminishing-returns curve."""
-    return 0 if index == 0 else SECONDARY_HUE_SHIFT_DEG * index
-
-
-def _paint_layers(layers):
-    """Composite multiple (color, lit, mult) arcs onto the strip in ONE frame —
-    the paradigm-independent primitive `_paint` is built on. Each layer is a
-    logical-position count (`lit`) exactly like `_paint` takes; this is what
-    makes "N trains" work identically for a bar, a ring, or a randomized layout:
-    none of this function's geometry knowledge is paradigm-specific — that all
-    lives in `_physical()`, which every layer still goes through.
-
-    Layers are composited back-to-front: entries LATER in `layers` are painted
-    FIRST, so entries EARLIER in the list win where arcs overlap. In practice
-    `layers` is ordered primary-first (brightest, usually shortest), so the
-    primary always wins the overlap — this holds even in the edge case where two
-    trains happen to produce the same arc length. One np.write() regardless of
-    layer count, so temporal dithering stays coherent across frames (multiple
-    separate _paint() calls would each flush the strip, wasting writes and
-    fighting the dither residual)."""
-    frame = [None] * NUM_LEDS  # logical position → (color, mult) or None (dark)
-    for color, lit, mult in layers[::-1]:  # slicing, not reversed() — some
-        # MicroPython builds omit the reversed() builtin; slicing is universal
-        for logical in range(lit):
-            frame[logical] = (color, mult)
-
-    for logical in range(NUM_LEDS):
-        phys = _physical(logical)
-        entry = frame[logical]
-        if entry is None:
-            np[phys] = (0, 0, 0)
-            continue
-        color, mult = entry
-        level = BRIGHTNESS * gamma(mult)
-        if DITHER:
-            res = _residual[phys]
-            np[phys] = tuple(_quantize(color[ch] * level, res, ch) for ch in range(3))
-        else:
-            np[phys] = tuple(int(color[ch] * level) for ch in range(3))
-    np.write()
-
-
-def _paint(color, lit, mult=1.0):
-    """Light the first `lit` LEDs along the arc (logical 0 = origin) in `color`,
-    scaled by the global BRIGHTNESS ceiling × `mult`. (`mult` lets animations dim
-    the whole arc without touching the palette.) Dark LEDs off. One np.write().
-
-    A single-layer call to _paint_layers() — kept as its own function since most
-    contracts only ever need one layer, and this reads more directly than
-    wrapping every call site in a one-element list."""
-    _paint_layers([(color, lit, mult)])
 
 
 # ─────────────────────────────────────────────────────────────
-# Animation primitives  ←  YOUR PART (reusable building blocks)
+# Memory instrumentation — extracted to diag.py (V1.6)
 # ─────────────────────────────────────────────────────────────
-# Pure, LED-free helpers that contracts compose into motion. Keeping them pure
-# means they're host-testable (no hardware) and reused across every contract,
-# instead of each one re-deriving wave math. Three layers:
-#   A. phase / shape — turn elapsed time into a 0.0–1.0 wave
-#   B. envelopes     — named brightness multipliers (breathe / blink / pulse)
-#   C. colour        — interpolate / dim (r, g, b) tuples
-# Candidates to extract into a separate animations.py once they settle.
-#
-# `dim` and `lerp_color` are worked examples — they set the pattern; you draft
-# the rest. None are wired into a contract yet, so stubs are safe to leave.
 
-
-# ── A. phase / shape (all take/return 0.0–1.0) ──────────────────
-def phase_sawtooth(elapsed_ms, period_ms):
-    """Sawtooth: position within the current cycle, 0.0 → 1.0, then repeats."""
-    return elapsed_ms % period_ms / period_ms
-
-
-def phase_exp_sawtooth(elapsed_ms, period_ms):
-    """Exponential/surved Sawtooth: position within the current cycle, 0.0 → 1.0, then repeats."""
-    return ((elapsed_ms % period_ms) / period_ms) ** 2
-
-
-def phase_inv_parabola(elapsed_ms, period_ms):
-    """inverse parabolic Sawtooth: position within the current cycle, 0.0 → 1.0, then repeats."""
-    return 1 - ((elapsed_ms % period_ms) / period_ms) ** 2
-
-
-def tri01(p):
-    """Triangle from a 0..1 phase: 0 → 1 (at p=0.5) → 0."""
-    return 1 - abs(2 * p - 1)
-
-
-def sine01(p):
-    """Smooth sine from a 0..1 phase, starting at 0: 0 → 1 → 0."""
-    return 0.5 * (1 - math.cos(2 * math.pi * p))
-
-
-def square01(p, duty=0.5):
-    """Hard gate from a 0..1 phase: 1.0 while p < duty, else 0.0."""
-    return 1.0 if p < duty else 0.0
-
-
-# ── B. brightness envelopes (elapsed_ms → 0.0–1.0 multiplier) ───
-# Each composes layer A and maps into [floor, ceiling] so the arc never fully
-# dies (floor) and — new — never needs to reach full-static brightness either
-# (ceiling). Default ceiling=1.0 keeps every existing call byte-identical;
-# pass a lower ceiling for a layer that should never be mistaken for a
-# fully-lit primary at its peak (e.g. a breathing 2nd-train band — see
-# docs/insights.md §6: "don't want to mistake bright mode for all lit").
-def breathe(elapsed_ms, period_ms=8000, floor=0.2, ceiling=1.0):
-    """Smooth in/out glow."""
-    return floor + (ceiling - floor) * sine01(phase_sawtooth(elapsed_ms, period_ms))
-
-
-def breathe_exponent(elapsed_ms, period_ms=2200, floor=0.2, ceiling=1.0):
-    """exponential build in/out glow"""
-    return floor + (ceiling - floor) * sine01(phase_exp_sawtooth(elapsed_ms, period_ms))
-
-
-def breathe_inverse(elapsed_ms, period_ms=2200, floor=0.2, ceiling=1.0):
-    """inverse build in/out glow"""
-    return floor + (ceiling - floor) * sine01(phase_inv_parabola(elapsed_ms, period_ms))
-
-
-def blink(elapsed_ms, period_ms=600, duty=0.5, floor=0.2, ceiling=1.0):
-    """Hard on/off between `floor` and `ceiling` (`duty` = fraction of the cycle 'on')."""
-    return floor + (ceiling - floor) * square01(phase_sawtooth(elapsed_ms, period_ms), duty)
-
-
-def pulse(elapsed_ms, period_ms=1000, floor=0.1, ceiling=1.0):
-    """Sharp triangular ramp up/down, mapped into [floor, ceiling]."""
-    return floor + (ceiling - floor) * tri01(phase_sawtooth(elapsed_ms, period_ms))
-
-
-# ── C. colour helpers ───────────────────────────────────────────
-def dim(color, mult):
-    """Scale an (r, g, b) by mult (0.0–1.0). Worked example — the pattern."""
-    return tuple(int(c * mult) for c in color)
-
-
-def lerp_color(c0, c1, t):
-    """Blend c0 → c1 as t goes 0 → 1 (per-channel linear). Worked example.
-    Lets a contract *fade* between urgency colours instead of snapping bands."""
-    return tuple(int(a + (b - a) * t) for a, b in zip(c0, c1))
-
-
-def _rgb_to_hsv(r, g, b):
-    """(r,g,b) each 0..1 → (h,s,v) each 0..1. Standard reference algorithm
-    (same one CPython's colorsys uses — not reinvented, just inlined since
-    MicroPython doesn't ship that module)."""
-    maxc, minc = max(r, g, b), min(r, g, b)
-    v = maxc
-    if maxc == minc:
-        return 0.0, 0.0, v
-    s = (maxc - minc) / maxc
-    rc = (maxc - r) / (maxc - minc)
-    gc = (maxc - g) / (maxc - minc)
-    bc = (maxc - b) / (maxc - minc)
-    if r == maxc:
-        h = bc - gc
-    elif g == maxc:
-        h = 2.0 + rc - bc
-    else:
-        h = 4.0 + gc - rc
-    return (h / 6.0) % 1.0, s, v
-
-
-def _hsv_to_rgb(h, s, v):
-    """(h,s,v) each 0..1 → (r,g,b) each 0..1. Inverse of _rgb_to_hsv."""
-    if s == 0.0:
-        return v, v, v
-    i = int(h * 6.0)
-    f = (h * 6.0) - i
-    p = v * (1.0 - s)
-    q = v * (1.0 - s * f)
-    t = v * (1.0 - s * (1.0 - f))
-    i = i % 6
-    if i == 0:
-        return v, t, p
-    if i == 1:
-        return q, v, p
-    if i == 2:
-        return p, v, t
-    if i == 3:
-        return p, q, v
-    if i == 4:
-        return t, p, v
-    return v, p, q
-
-
-def hue_rotate(color, degrees):
-    """Shift a colour's HUE by `degrees` (can be any number, wraps mod 360),
-    keeping saturation and brightness the same — a "similar yet distinguishable"
-    variant, e.g. for a 2nd train's colour instead of dimming it (dimming alone
-    doesn't work well on bare-strip hardware — see docs/insights.md §6: at low
-    brightness, dithering runs out of headroom and diffusion runs out of light).
-    """
-    r, g, b = (c / 255.0 for c in color)
-    h, s, v = _rgb_to_hsv(r, g, b)
-    h = (h + degrees / 360.0) % 1.0
-    r, g, b = _hsv_to_rgb(h, s, v)
-    # round, not truncate — a 360° round-trip should be a lossless identity,
-    # not off-by-one from floating-point drift through the hsv conversion.
-    return (int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5))
-
-
-# ── D. perceptual correction  ←  YOUR PART ──────────────────────
-def gamma(mult, g=GAMMA):
-    """Perceptual-brightness correction for an animation multiplier (0..1 → 0..1).
-
-    Why: the eye responds ~logarithmically but WS2812B PWM is linear, so a linear
-    fade looks steppy/uneven — worst at the dim end. Raising the multiplier to a
-    power `g` (≈2.2–2.8) spreads the visible steps to match perception. This is
-    the single biggest smoothness win for the breath — bigger than frame rate.
-
-    Contract: monotonic; endpoints fixed (gamma(0)=0, gamma(1)=1); stays in [0,1].
-    Applied to `mult` in _paint (not the base colour), so static contracts — which
-    pass mult=1.0 → gamma(1.0)=1.0 — are unaffected.
-
-    TODO(you): return mult ** g   (that's the whole thing; g comes from config).
-    Currently a no-op pass-through so the display keeps working until you fill it.
-
-    ⚠ Interaction to watch: gamma pushes the dim end *down* (0.2 ** 2.2 ≈ 0.03), so
-    after you enable it the breath will dip closer to black — you may want to raise
-    BREATHE_FLOOR to keep it visible through the jar.
-    """
-    return mult ** g
-
-
-class DisplayContract:
-    """A rendering strategy. The main loop treats every contract identically:
-    it calls render(signal, phase_ms) and honours frame_ms for timing.
-
-      frame_ms = None  → static: draw one frame, then sleep the interval
-                         (deep-sleep-friendly — the V2 power path)
-      frame_ms = int   → animated: redraw every frame_ms across the interval
-                         (cannot deep-sleep while animating)
-    """
-
-    frame_ms = None
-
-    def render(self, signal, phase_ms):
-        """Draw a single frame. `phase_ms` is a monotonic ms clock (absolute
-        `time.ticks_ms()`; `0` for static contracts, which ignore it). Animated
-        contracts feed it to the phase functions, which reduce it mod their period
-        — so it flows continuously across intervals."""
-        raise NotImplementedError
-
-
-class SandTimerContract(DisplayContract):
-    """Shrinking arc, colour by urgency band, no pulse. The default.
-
-    Shows up to N_TRAINS departures as nested arcs: the primary lights up
-    bright out to its own length; each further-out train (same colour, always
-    equal-or-longer since it's further away) extends a dimmer band beyond
-    that — "and if you miss this one, you've got until here for the next."
-    """
-
-    frame_ms = None
-    COLOR = PALETTE
-
-    def render(self, signal, phase_ms):
-        if signal.urgency is HIDDEN:
-            clear()
-            return
-        color = self.COLOR[signal.urgency]  # one colour for every layer, per spec
-        layers = [
-            (color, _arc_len(ttl), _layer_mult(i))
-            for i, ttl in enumerate(signal.ttls[:N_TRAINS])
-        ]
-        _paint_layers(layers)
-
-
-class ColorContract(DisplayContract):
-    """Full bar always; only the COLOUR changes with urgency. No shrinking arc,
-    no pulse — the calmest, most abstract strategy.
-
-    Deliberately ignores N_TRAINS: it has no arc/length axis to hang a second
-    train on (the whole strip is always lit) — not every contract needs to
-    consume every signal field.
-    """
-
-    frame_ms = None
-    COLOR = PALETTE
-
-    def render(self, signal, phase_ms):
-        if signal.urgency is HIDDEN:
-            clear()
-            return
-        _paint(self.COLOR[signal.urgency], NUM_LEDS)
-
-
-class BreathingContract(DisplayContract):
-    """Arc that breathes — with configurable envelope function.
-
-    Same N_TRAINS nesting as SandTimerContract; the breath multiplier is
-    combined with each layer's falloff (_layer_mult(i) * breath), so every
-    train's band breathes together rather than independently."""
-
-    frame_ms = FRAME_MS
-    COLOR = PALETTE
-    # staticmethod so a plain function stored as a class attr doesn't bind `self`
-    # (otherwise self.breathe_fn(phase_ms) would call breathe(self, phase_ms)).
-    breathe_fn = staticmethod(breathe)
-
-    def render(self, signal, phase_ms):
-        if signal.urgency is HIDDEN:
-            clear()
-            return
-        breath = self.breathe_fn(phase_ms, BREATHE_PERIOD_MS, BREATHE_FLOOR)
-        color = self.COLOR[signal.urgency]
-        layers = [
-            (color, _arc_len(ttl), _layer_mult(i) * breath)
-            for i, ttl in enumerate(signal.ttls[:N_TRAINS])
-        ]
-        _paint_layers(layers)
-
-
-class BreathingExponentContract(BreathingContract):
-    """Same as Breathing, but with exponential curve."""
-
-    breathe_fn = staticmethod(breathe_exponent)
-
-
-class BreathingInverseContract(BreathingContract):
-    """Same as Breathing, but inverted."""
-
-    breathe_fn = staticmethod(breathe_inverse)
-
-
-class EchoContract(DisplayContract):
-    """Primary train: static, full brightness (SandTimer's treatment). Every
-    train beyond it: hue-shifted + gently breathing (never dipping below
-    SECONDARY_BREATHE_FLOOR) — "echoes" the primary rather than dimming it.
-
-    This exists because brightness-only differentiation didn't hold up on
-    real hardware (docs/insights.md §6: at low absolute brightness, dithering
-    runs out of headroom and diffusion runs out of light — flicker + visible
-    LED die instead of ambient glow). Colour + subtle motion sidesteps both
-    problems by keeping every layer near full brightness.
-
-    Composes existing primitives rather than reinventing them: _arc_len for
-    geometry (same as SandTimer/Breathing), breathe_fn for motion (same
-    envelope functions Breathing uses, just with its own period/floor so
-    tuning one doesn't fight the other), hue_rotate for colour.
-    """
-
-    frame_ms = FRAME_MS  # animated — secondary layers breathe
-    COLOR = PALETTE
-    breathe_fn = staticmethod(breathe)  # overridable per subclass, like Breathing*
-
-    def render(self, signal, phase_ms):
-        if signal.urgency is HIDDEN:
-            clear()
-            return
-        base_color = self.COLOR[signal.urgency]
-        layers = []
-        for i, ttl in enumerate(signal.ttls[:N_TRAINS]):
-            if i == 0:
-                color, mult = base_color, 1.0  # primary: static, full brightness
-            else:
-                color = hue_rotate(base_color, _layer_hue_shift(i))
-                mult = self.breathe_fn(
-                    phase_ms, SECONDARY_BREATHE_PERIOD_MS, SECONDARY_BREATHE_FLOOR
-                )
-            layers.append((color, _arc_len(ttl), mult))
-        _paint_layers(layers)
-
-
-# Registry: config's CONTRACT name → class. Add new contracts here so they're
-# selectable from config.py without touching the main loop.
-CONTRACTS = {
-    "sandtimer": SandTimerContract,
-    "color": ColorContract,
-    "breathing": BreathingContract,
-    "breathing_exponent": BreathingExponentContract,
-    "breathing_inverse": BreathingInverseContract,
-    "echo": EchoContract,
-}
-ACTIVE_CONTRACT = CONTRACTS.get(CONTRACT_NAME, SandTimerContract)()
-
-
-def is_quiet(now):
-    """True during the configured quiet hours. The window can wrap past midnight
-    (e.g. 23:00 → 06:00), so we test the gap with OR, not a simple range."""
-    return now >= QUIET_START or now < QUIET_END
 
 
 # ─────────────────────────────────────────────────────────────
-# Schedule loading
-# [→ Rust] build.rs reads schedule.json at compile time and emits
-#          const arrays — zero runtime parsing cost on device.
+# Animation primitives — extracted to primitives.py (V1.6)
 # ─────────────────────────────────────────────────────────────
-def load_schedule(filename):
-    """
-    Load schedule.json from device filesystem.
-    Returns the full parsed dict (station, weekday, weekend).
-    Halts with a clear message if file is missing or malformed.
+
+
+
+# ─────────────────────────────────────────────────────────────
+# Schedule + clock — extracted (V1.6)
+# ─────────────────────────────────────────────────────────────
+# `import *` skips underscores. run_startup_sequence() calls this, and
+# no host test reaches the ds3231 boot path — so a green suite would
+# have shipped a NameError straight to the hardware.
+def _local_time_or_die():
+    """local_time(), but a clock we can't trust ends the run.
+
+    ⚠ NEVER RETURNS if the RTC is unreadable — it enters the terminal
+    failure display, same as a WiFi failure at boot. This device's whole job
+    is telling you when to leave, so showing a plausible-looking wrong time
+    is the worst thing it can do: you miss the train while believing you
+    won't. Dark-and-obviously-broken beats confidently-wrong.
+
+    Lives here rather than in clock.py because it is a POLICY decision about
+    what to display, and clock.py only reads clocks. Keeping it there made
+    clock depend on the startup sequence, which already depends on clock.
+
     """
     try:
-        with open(filename) as f:
-            return json.load(f)
-    except OSError:
-        print(f"✗ Schedule file not found: {filename}")
-        print("  Upload it with: make upload")
-        raise
+        return local_time()
+    except ClockUnavailable as e:
+        print("  ✗ Clock unavailable: %s" % e)
+        print("    Refusing to show departures from a clock we can't trust.")
+        _run_startup_failure_forever(CLOCK_ERROR_COLOR)  # never returns
+# ─────────────────────────────────────────────────────────────
+# Status displays + gesture envelope — extracted (V1.6)
+# ─────────────────────────────────────────────────────────────
+# `import *` skips underscore names. ALL of them are re-exported here
+# during the transition because the tests reach into main._x — see
+# docs/v1.6-refactor.md. Narrowed in V1.6's final step.
+def run_startup_sequence():
+    """The whole boot ceremony. On success: connecting spin, then the
+    success burst, then returns — the main loop takes over immediately
+    after. On WiFi failure: _run_startup_failure_forever(), which NEVER
+    RETURNS (see its docstring) — this function correspondingly never
+    returns either, in that case.
+
+    TIME_SOURCE="rtc" skips WiFi and NTP entirely and trusts whatever the
+    board's RTC already holds (set it at provisioning time with
+    `make set-time`). Added because the ESP32-C3 genuinely cannot fit
+    esp_wifi alongside a MicroPython app this size — see docs/insights.md
+    §11 — so on that board this is the difference between a working unit
+    and no unit. It also happens to be the direction V2 is going anyway
+    (DS3231 RTC, no WiFi in normal operation), so this is a step toward
+    the planned architecture rather than a detour around a bug."""
+    if TIME_SOURCE == "ds3231":
+        # Terminal on failure, like WiFi. The DS3231 IS the clock on a
+        # radio-less unit — there is nothing to fall back to, and falling
+        # back to the board's volatile RTC would silently substitute a
+        # clock that resets to its epoch on every power cycle.
+        if not _check_ds3231_at_boot():
+            _run_startup_failure_forever(CLOCK_ERROR_COLOR)
+        _play_startup_burst()
+        return
+    if TIME_SOURCE == "rtc":
+        print("  TIME_SOURCE='rtc' — skipping WiFi/NTP, trusting the board clock.")
+        print("  (Set it with `make set-time`; it survives soft reset, NOT power loss.)")
+        _play_startup_burst()
+        return
+    # LAZY IMPORT — the whole point of V1.6. net.py is not uploaded to a
+    # radio-less board, so importing it at module level would resurrect the
+    # exact ImportError that made main.py unrunnable on the XIAO RP2350.
+    # Reached only when TIME_SOURCE == "wifi", which such a board never sets.
+    from net import connect_wifi, sync_ntp
+    if not connect_wifi():
+        print("  ✗ WiFi failed — check config.py. Reset to retry.")
+        _run_startup_failure_forever(ERROR_COLOR)
+    if not sync_ntp():
+        print("  Warning: time may be wrong.")
+    _play_startup_burst()
 
 
 # ─────────────────────────────────────────────────────────────
-# Time helpers
-# [→ Rust] read_rtc() reads DS3231 over I2C → (hours, minutes, weekday)
+# Gesture envelope (IMU HAL) — docs/contracts/gesture-envelope.md §2
+# The only code below that touches i2c.readfrom_mem/writeto_mem — same
+# seam the LED side already has (_paint/clear are the only code touching
+# np[i]). Register facts verified against ST's own driver source, same as
+# imu_test.py/vibration_sandbox.py — see those files' headers for the
+# reference. NOT host-testable (real I/O), same category
+# _imu_tap_detected() below already is. Lazily constructed, not built at
+# import time like `np` — this is opt-in hardware, unlike the LED strip
+# which every deployment has.
 # ─────────────────────────────────────────────────────────────
-def local_time():
-    """
-    Return (minutes_since_midnight, weekday) in local time.
-    weekday: 0=Monday … 6=Sunday (MicroPython convention)
-
-    NTP sets the Pico RTC to UTC. We add UTC_OFFSET_HOURS to get local
-    time — and also account for the day boundary, so the correct weekday
-    is used when UTC and local time are on different calendar days.
-    (e.g. UTC 22:00 Thursday = JST 07:00 Friday)
-    """
-    utc = time.localtime()  # (year, mon, mday, hour, min, sec, weekday, yearday)
-    utc_minutes = utc[3] * 60 + utc[4]
-    local_minutes_abs = utc_minutes + UTC_OFFSET_HOURS * 60
-
-    day_overflow = local_minutes_abs // (24 * 60)  # 0 or 1
-    local_minutes = local_minutes_abs % (24 * 60)
-    local_weekday = (utc[6] + day_overflow) % 7
-
-    return local_minutes, local_weekday
-
-
-def current_period(weekday):
-    """Return 'weekday' or 'weekend' for the given weekday index."""
-    return "weekend" if weekday >= 5 else "weekday"
-
-
-def fmt_time(minutes):
-    """Format minutes-since-midnight as HH:MM."""
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-# ─────────────────────────────────────────────────────────────
-# Schedule logic
-# [→ Rust] Iterator::filter().take(n) on a sorted &[u16]
-# ─────────────────────────────────────────────────────────────
-def next_departures(schedule, now, count=3):
-    """
-    Return list of up to `count` minutes-until-departure values (ints).
-    Empty list means no trains remain today.
-    """
-    return [m - now for m in schedule if m > now][:count]
-
-
-# ─────────────────────────────────────────────────────────────
-# WiFi + NTP
-# [→ Rust] embassy_net + CYW43 driver / replaced entirely by DS3231 in V2
-# ─────────────────────────────────────────────────────────────
-def connect_wifi():
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    wlan.connect(WIFI_SSID, WIFI_PASS)
-    print("  Connecting to WiFi", end="")
-    for _ in range(20):
-        if wlan.isconnected():
-            break
-        print(".", end="")
-        time.sleep(1)
-    print()
-    if wlan.isconnected():
-        print(f"  ✓ Connected  IP: {wlan.ifconfig()[0]}")
-        return True
-    print("  ✗ WiFi failed — check config.py")
-    return False
-
-
-def sync_ntp():
-    try:
-        ntptime.settime()
-        print("  ✓ NTP sync OK")
-        return True
-    except Exception as e:
-        print(f"  ✗ NTP failed: {e}")
-        return False
-
-
 # ─────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────
-def render_for_interval(contract, signal, seconds):
-    """Hand the signal to the contract for ~`seconds`. Static contracts draw once
-    and return immediately (the caller sleeps). Animated contracts get a frame
-    loop, fed the **absolute** ms clock so their phase is continuous across
-    intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The signal is
-    fixed for the interval; only the clock advances (update/render split).
+def _apply_line_color(contract, line):
+    """Point the contract at this line's colour, when both sides support it.
+
+    Same capability-probe pattern _render_dispatch uses for render_dual: a
+    contract that has no concept of a per-line colour (every arc/urgency
+    contract — their palette means URGENCY, not identity) is simply left
+    alone, as is a line that declares no colour. So this is a no-op for
+    every pre-existing config rather than something they must opt out of."""
+    color = line.get("color")
+    if color and hasattr(contract, "set_line_color"):
+        contract.set_line_color(tuple(color))
+
+
+def _recover_imu(i2c, addr, watch, now_ms, why, phase, ilog):
+    """Re-configure a sensor that reset itself, and say so — with what the
+    display was doing, because what made the sensor reset is still
+    unknown, and a supply dip from the strip would show up as recoveries
+    clustering while it is lit."""
+    ok = _gestures.imu_recover(i2c, addr)
+    watch.recovered(now_ms)
+    print("  [imu] sensor reset itself (%s) — %s (#%d since boot; %s, "
+          "brightness %.2f)" % (why, "reconfigured" if ok else "RECONFIGURE FAILED",
+                                watch.recoveries, phase, settings.BRIGHTNESS))
+    if ilog is not None:
+        ilog.event(now_ms, "imu_recover", why=why, ok=ok)
+
+
+def _imu_status_line(tap_state, tilt_ctl, counts, watch=None):
+    """One line per 30 s block saying what the IMU path actually did.
+
+    Added 2026-10-21, after the second "asleep and could not be woken"
+    episode. Taps and tilt sit behind ONE gate (phase accepts input, not
+    booting), so a single fault stops both — and the console printed
+    nothing about the IMU at all, so four different failures looked the
+    same from outside:
+
+      phase stuck waking/settling  →  reads 0, gated N   (gate shut)
+      I2C reads failing            →  failed N           (bus)
+      reads fine, nothing triggers →  taps 0             (trigger)
+      triggers, all rejected       →  taps N → 0 ok (…)  (a classifier)
+      the sensor reset itself      →  N ZERO, then "recovered" (ImuWatch)
+
+    A crashed loop is the fifth, and shows as these lines stopping.
+    Counts reset every block, so each line is the last ~30 s only."""
+    reads = "reads %d ok, %d failed, %d gated" % (counts["ok"], counts["failed"],
+                                                  counts["gated"])
+    if counts.get("zero"):
+        reads += ", %d ZERO" % counts["zero"]
+    parts = ["  imu: %s" % tap_state.phase, reads]
+    if counts["booting"]:
+        parts.append("%d in boot-ignore" % counts["booting"])
+    parts.append(_gestures.tap_stats_line())
+    if tilt_ctl is None:
+        parts.append("tilt off")
+    else:
+        parts.append("tilt %s %.1f°" % ("engaged" if tilt_ctl.engaged else "idle",
+                                        tilt_ctl.deg))
+    if _gestures.gyro_check_enabled():
+        parts.append("gyro " + _gestures.GYRO_BIAS.status())
+    else:
+        parts.append("gyro off")
+    if watch is not None and watch.recoveries:
+        parts.append("recovered %d since boot" % watch.recoveries)
+    for k in counts:
+        counts[k] = 0
+    return " · ".join(parts)
+
+
+def _apply_daylight(minutes, last_period):
+    """Set the global brightness for the time of day. EDGE-TRIGGERED.
+
+    Returns the current period, which the caller holds and hands back next
+    tick; `last_period=None` means "first call" and always applies, which
+    is what gives boot its opening brightness for free.
+
+    **Writing settings.BRIGHTNESS only on a CHANGE is the design, not an
+    optimisation.** Stamping it every tick would make a manual brightness
+    adjustment impossible — it would be overwritten within the second. On
+    a transition only, the contract is the one every OS's automatic dark
+    mode already teaches: it switches you, you may override, and the next
+    switch wins. (_cycle_brightness is unbound in v1 — the single tap is
+    CYCLE — so nothing overrides it *today*; this is what makes rebinding
+    it later a config change rather than a redesign.)
+
+    Disabled → returns None forever, and never touches BRIGHTNESS at all,
+    so a config that doesn't want this keeps whatever it set.
+    """
+    if not DAY_NIGHT_ENABLED:
+        return None
+    period = daylight_period(minutes)
+    if period != last_period:
+        settings.BRIGHTNESS = (
+            DAY_BRIGHTNESS if period == "day" else NIGHT_BRIGHTNESS
+        )
+        # Announced because a brightness change with no cause looks like a
+        # fault — the same reason the sleep transition prints (below) and
+        # the same reason quiet hours does.
+        print("  [%s] brightness → %.2f"
+              % (period.upper(), settings.BRIGHTNESS))
+    return period
+
+
+def _render_dispatch(contract, signal, signal_b):
+    """Pick render() vs render_dual() based on whether signal_b is given AND
+    the contract actually implements render_dual — phase-2 bidirectional
+    support (ApproachContract only, see DISPLAY_DIRECTION_B). Every other
+    contract, and phase-1 ApproachContract configs (DISPLAY_DIRECTION_B
+    unset, signal_b is None), fall through to the ordinary single-signal path
+    unaffected. Pulled out as its own pure function — no clock involved — so
+    this decision is host-testable in isolation from render_for_interval's
+    real-time frame loop below, which isn't (it uses actual time.ticks_ms())."""
+    if signal_b is not None and hasattr(contract, "render_dual"):
+        return lambda phase_ms: contract.render_dual(signal, signal_b, phase_ms)
+    return lambda phase_ms: contract.render(signal, phase_ms)
+
+
+def render_for_interval(contract, signal, seconds, signal_b=None):
+    """Hand the signal(s) to the contract for ~`seconds`. Static contracts draw
+    once and return immediately (the caller sleeps). Animated contracts get a
+    frame loop, fed the **absolute** ms clock so their phase is continuous
+    across intervals — no snap-back to the floor every LOOP_INTERVAL_SECS. The
+    signal(s) are fixed for the interval; only the clock advances (update/
+    render split).
 
     Safe with the huge absolute value because the envelopes do `(clock % period)`
     — the modulo runs in integer space before the divide, so no float precision is
     lost. `ticks_ms()` wraps ~every 12 days → one harmless single-frame hitch."""
+    render = _render_dispatch(contract, signal, signal_b)
     if contract.frame_ms is None:
-        contract.render(signal, 0)
+        render(0)
         return  # caller sleeps the interval
     start = time.ticks_ms()
     while time.ticks_diff(time.ticks_ms(), start) < seconds * 1000:
-        contract.render(signal, time.ticks_ms())
+        render(time.ticks_ms())
         time.sleep_ms(contract.frame_ms)
 
 
-def main():
-    led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+def _run_classic_loop(schedule_data, led):
+    """The original main loop, unchanged: schedule refresh once every
+    LOOP_INTERVAL_SECS, contract renders for the interval via
+    render_for_interval(). Used whenever WAKE_INTERACTION_ENABLED is False
+    (the default) — every deployment without an IMU wired (e.g.
+    config_friend1.py) keeps behaving exactly as it always has, byte for
+    byte. See _run_interactive_loop for the wake/sleep + status-message
+    version."""
     heartbeat = False
+    DIVIDER = "─" * 50
+    loop_count = 0
+    daylight = None  # last applied day/night period; None = not yet applied
 
-    print("\n══ eki-bin ═══════════════════════════════════════")
+    while True:
+        heartbeat = not heartbeat
+        if led:
+            led.value(heartbeat)
+        loop_count += 1
+        hb = "●" if heartbeat else "○"
 
-    schedule_data = load_schedule(SCHEDULE_FILE)
-    print(
-        f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
-        f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+        now, weekday = _local_time_or_die()
+        # Day/night applies here too. It is a property of the time, not of
+        # the interaction model, so an IMU-less deployment gets it as well
+        # — the omission would be silent and only visible at noon.
+        daylight = _apply_daylight(now, daylight)
+        period = current_period(weekday)
+        # Line 0 always: this loop has no gestures, so there is nothing to
+        # cycle with. A multi-line schedule still works, it just shows the
+        # first line — better than showing nothing, which is what reading
+        # the top level gave once departures moved inside lines[].
+        line = schedule_lines(schedule_data)[0]
+        _apply_line_color(ACTIVE_CONTRACT, line)
+        directions = line.get(period, {})
 
-        f"  N trains: {N_TRAINS} "
-        f"LEDs: {NUM_LEDS} on GP{LED_PIN}"
-    )
+        print(DIVIDER)
+        print(
+            f"  {hb}  {fmt_time(now)} JST   {period}   {schedule_data['station']}   #{loop_count}"
+        )
+        print(DIVIDER)
 
-    if not connect_wifi():
-        print("Halting: no WiFi → cannot sync time in V1.")
-        return
-    if not sync_ntp():
-        print("Warning: time may be wrong.")
+        if not directions:
+            print(
+                f"  No schedule for {period!r} — run: make schedule && make upload"
+            )
+        else:
+            for direction, departures in directions.items():
+                upcoming = next_departures(departures, now)
+                marker = "  ← ring" if direction == DISPLAY_DIRECTION else ""
+                print(f"\n  {direction}{marker}")
+                if not upcoming:
+                    print("    —  no more trains today")
+                    continue
+                for i, until in enumerate(upcoming):
+                    arrow = "→" if i == 0 else " "
+                    print(
+                        f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
+                    )
 
-    print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop\n")
+        # ── Drive the LED ring ───────────────────────────────────
+        # One ring → one direction (no magnetometer in V1) — or two, for
+        # phase-2 bidirectional ApproachContract (DISPLAY_DIRECTION_B).
+        # Build the abstract signal(s), then let whichever contract is
+        # active interpret them.
+        signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
+        if signal.ttls:
+            leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
+            print(f"\n  ring: leave in [{leaves}] min  →  {signal.urgency.name}")
+        else:
+            print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
 
+        signal_b = None
+        if DISPLAY_DIRECTION_B is not None:
+            signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+            if signal_b.ttls:
+                leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+            else:
+                print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
+
+        # Night → dark + sleep. Otherwise the contract renders for the interval
+        # (static returns at once → we sleep; animated runs its own frame loop).
+        if is_quiet(now):
+            print("  (quiet hours — display off)")
+            clear()
+            time.sleep(LOOP_INTERVAL_SECS)
+        else:
+            render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS, signal_b)
+            if ACTIVE_CONTRACT.frame_ms is None:
+                time.sleep(LOOP_INTERVAL_SECS)
+
+
+def _run_interactive_loop(schedule_data, led):
+    """Tap interaction + LED status messages — active when GESTURE_ENABLED
+    (or the legacy WAKE_INTERACTION_ENABLED) is True. See
+    docs/contracts/gesture-envelope.md §11 for the shipped contract and
+    docs/contracts/led-status-messages.md for the acknowledgments.
+
+    Structurally different from _run_classic_loop: ONE fast tick drives
+    everything — schedule refresh, gesture trigger, and rendering — as
+    elapsed-time-gated tasks, rather than one iteration per
+    LOOP_INTERVAL_SECS. The cooperative "super-loop" the wake-interaction
+    doc's concurrency section settled on: no RTOS, no threads.
+
+    ⚠ The tick is GESTURE_POLL_MS (4ms), NOT FRAME_MS (16ms), and the
+    render is a time-gated task on top of it. That asymmetry is load
+    bearing: every validated recognizer number was measured at 4ms/240Hz,
+    and polling the trigger at FRAME_MS is a documented cause of missed
+    taps (gesture_sandbox.py's header). Rendering still happens at
+    FRAME_MS — animations don't need 250fps and the strip write isn't free.
+
+    Formerly drove _TapClassifier/_WakeState against a stubbed
+    _imu_tap_detected(), which meant it had never once worked on hardware.
+    It now drives the real recognizer end to end."""
+    heartbeat = False
     DIVIDER = "─" * 50
     loop_count = 0
 
-    try:
-        while True:
+    tap_state = _TapCycleState()
+    was_awake = True  # for announcing the AWAKE->ASLEEP edge, see below
+    tap_state.awake = True  # boot = the first wake trigger, same rule
+    tap_state.phase = "awake"  # _WakeState's constructor used to do this
+    # BOOT window, not the tap window — see settings.py. Defaults to the
+    # same value, so this is a seam rather than a behaviour change.
+    tap_state.awake_until = time.ticks_ms() + BOOT_AWAKE_MINUTES * 60_000
+    status_message = _StatusMessage()
+
+    # Gestures degrade gracefully: no IMU found = the display still runs,
+    # it just never receives a tap. Better than refusing to boot over a
+    # peripheral, and it keeps this loop usable on an IMU-less unit.
+    i2c, imu_addr = _get_imu()
+    if imu_addr is None:
+        print("  ⚠ No IMU found — display runs, taps won't register.")
+    trigger_buffer = []
+    last_error_print = time.ticks_ms()
+    last_render = None
+
+    # Which line is on show. CYCLE advances it (gesture-envelope.md §11) —
+    # the station is fixed (the bin lives in one room), so the line is what
+    # varies. Kept as a plain index, wrapped at use, so a schedule reload
+    # with fewer lines can't leave it dangling.
+    lines = schedule_lines(schedule_data)
+    line_index = 0
+    _apply_line_color(ACTIVE_CONTRACT, lines[0])
+    if len(lines) > 1:
+        print(f"  Lines: {', '.join(l.get('name', '?') for l in lines)}  (tap to cycle)")
+
+    last_refresh = None
+    loop_started = time.ticks_ms()
+    # Counted per 30 s block and printed by _imu_status_line. These are the
+    # numbers that tell "the IMU is not being read" from "it is read and
+    # nothing triggers" from "it triggers and everything is rejected" —
+    # which looked identical from outside, twice.
+    imu_counts = {"ok": 0, "failed": 0, "gated": 0, "booting": 0, "zero": 0}
+    imu_watch = _gestures.ImuWatch()
+    now = 0
+    daylight = None  # last applied day/night period; None = not yet applied
+    morning_armed = False  # self-arming: set when we SEE everything out of
+    #   reach, cleared when we act on it. No calendar, no "has it fired
+    #   today" bookkeeping — the condition that arms it cannot recur until
+    #   the trains have gone out of reach again, which is once a night.
+    tilt_ctl = TiltController() if TILT_ENABLED else None
+    tilt_ms = time.ticks_ms()
+    gyro_ms = time.ticks_ms()
+
+    # Phase 0 recording (docs/imu-interaction-plan.md). Observes only: every
+    # call below is guarded, and with INTERACTION_LOG off none of it exists.
+    ilog = None
+    if settings.INTERACTION_LOG and imu_addr is not None:
+        import gestures
+        import interlog
+        ilog = interlog.Stream(i2c, imu_addr, settings.INTERACTION_LOG_LEVEL)
+        if settings.INTERACTION_LOG_LEVEL != "rate":
+            gestures.capture_observer = ilog
+        ilog.start(time.ticks_ms(), interlog.snapshot(settings))
+        print("  [interlog] recording on (%s) — streaming to the host"
+              % settings.INTERACTION_LOG_LEVEL)
+    signal = LeaveSignal([])
+    signal_b = None
+
+    while True:
+        tick_now = time.ticks_ms()
+
+        # ── slow task: schedule refresh, ~LOOP_INTERVAL_SECS ──────────
+        if last_refresh is None or time.ticks_diff(tick_now, last_refresh) >= LOOP_INTERVAL_SECS * 1000:
+            last_refresh = tick_now
             heartbeat = not heartbeat
             if led:
                 led.value(heartbeat)
             loop_count += 1
             hb = "●" if heartbeat else "○"
 
-            now, weekday = local_time()
+            now, weekday = _local_time_or_die()
+            # Immediately after the clock read, and before anything renders:
+            # the very first pass is also what gives boot its brightness.
+            daylight = _apply_daylight(now, daylight)
             period = current_period(weekday)
-            directions = schedule_data.get(period, {})
+            line = lines[line_index % len(lines)]
+            directions = line.get(period, {})
 
             print(DIVIDER)
             print(
-                f"  {hb}  {fmt_time(now)} JST   {period}   {schedule_data['station']}   #{loop_count}"
+                f"  {hb}  {fmt_time(now)} JST   {period}   "
+                f"{schedule_data['station']}/{line.get('name', '?')}   #{loop_count}"
             )
             print(DIVIDER)
 
@@ -812,9 +547,6 @@ def main():
                             f"    {arrow}  {fmt_time(now + until)}   in {until:2d} min"
                         )
 
-            # ── Drive the LED ring ───────────────────────────────────
-            # One ring → one direction (no magnetometer in V1). Build the abstract
-            # signal, then let whichever contract is active interpret it.
             signal = leave_signal(directions.get(DISPLAY_DIRECTION, []), now)
             if signal.ttls:
                 leaves = ", ".join("{:.1f}".format(t) for t in signal.ttls)
@@ -822,16 +554,405 @@ def main():
             else:
                 print(f"\n  ring: {signal.urgency.name}  (no catchable trains)")
 
-            # Night → dark + sleep. Otherwise the contract renders for the interval
-            # (static returns at once → we sleep; animated runs its own frame loop).
-            if is_quiet(now):
-                print("  (quiet hours — display off)")
-                clear()
-                time.sleep(LOOP_INTERVAL_SECS)
+            signal_b = None
+            if DISPLAY_DIRECTION_B is not None:
+                signal_b = leave_signal(directions.get(DISPLAY_DIRECTION_B, []), now)
+                if signal_b.ttls:
+                    leaves_b = ", ".join("{:.1f}".format(t) for t in signal_b.ttls)
+                    print(f"  ring B: leave in [{leaves_b}] min  →  {signal_b.urgency.name}")
+                else:
+                    print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
+
+            if imu_addr is not None:
+                # The slow check: a reset whose outputs froze at a non-zero
+                # value would never trip the zero detector. One register
+                # read every 30 s covers it.
+                if _gestures.imu_config_lost(i2c, imu_addr):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "settings lost", tap_state.phase, ilog)
+                    trigger_buffer = []
+                print(_imu_status_line(tap_state, tilt_ctl, imu_counts, imu_watch))
+
+            # ── the morning flower ────────────────────────────────
+            # Arms itself whenever everything is out of reach, and fires
+            # when the soonest train is about to cross in. The flower is
+            # NOT drawn here: waking is the whole feature, and the
+            # ordinary renderer opens the arc from its outer edge inward
+            # over the following minutes (insights.md §17).
+            if MORNING_WAKE_ENABLED and not tap_state.awake:
+                if horizon.beyond_horizon(signal, signal_b):
+                    morning_armed = True
+                elif morning_armed:
+                    _mins = horizon.minutes_until_visible(signal, signal_b)
+                    if _mins is None or _mins <= MORNING_LEAD_MINUTES:
+                        print("  [MORNING] first train crossing into view")
+                        tap_state.wake(tick_now)
+                        morning_armed = False
+                        if MOTION_ENABLED:
+                            motion.play_sequence(MORNING_WAVES,
+                                                 gap_ms=MORNING_GAP_MS)
+                        last_render = None
+
+        # ── fast task: gesture trigger, polled at GESTURE_POLL_MS ─────
+        # This is why the loop ticks faster than it renders: the
+        # recognizer's validated accuracy was measured at 4ms/240Hz, and
+        # polling at FRAME_MS was documented as a real cause of missed
+        # taps (gesture_sandbox.py's header). Render is time-gated below.
+        quiet_now = is_quiet(now)
+
+        phase_change = tap_state.advance(tick_now)
+        if phase_change == "asleep":
+            print("  [SLEEP] awake window expired")
+            if ilog is not None:
+                ilog.event(tick_now, "asleep")
+
+        # Plugging a unit in IS handling, and handling is what the
+        # recognizer's 98.4% is measured against — so a false trigger in
+        # the first seconds is expected, not surprising. It used to wake
+        # the display and play a wake wave nobody asked for.
+        _booting = time.ticks_diff(tick_now, loop_started) < GESTURE_BOOT_IGNORE_MS
+
+        if imu_addr is not None and _booting:
+            imu_counts["booting"] += 1
+        elif imu_addr is not None and not tap_state.accepts_input():
+            imu_counts["gated"] += 1
+
+        if imu_addr is not None and tap_state.accepts_input() and not _booting:
+            raw, last_error_print = _safe_read_accel(
+                i2c, imu_addr, tick_now, last_error_print
+            )
+            imu_counts["ok" if raw is not None else "failed"] += 1
+            # A sensor that reset itself answers every read with (0,0,0) —
+            # no error, so this is the only place it shows. Never pass a
+            # zero sample on, and after ~0.2 s of them, re-configure.
+            if raw is not None and imu_watch.dead(raw):
+                imu_counts["zero"] += 1
+                if imu_watch.due(tick_now):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "reading zeros", tap_state.phase, ilog)
+                    trigger_buffer = []   # the next real sample would read
+                    #   as a 1 g step against whatever is left in here
+                raw = None
+            if raw is not None:
+                if ilog is not None:
+                    ilog.sample(tick_now, raw)
+                if _gestures.gyro_check_enabled():
+                    # Keep the gyro's resting baseline current, so the tap
+                    # check can measure rotation against it (GyroBias).
+                    _g = _gestures._safe_read_gyro(i2c, imu_addr)
+                    if _g is not None:
+                        _gestures.GYRO_BIAS.update(
+                            _g, time.ticks_diff(tick_now, gyro_ms))
+                        gyro_ms = tick_now
+                # Tilt and taps share one sample, split by magnitude: taps
+                # want |a| >> 1g, tilt wants |a| ≈ 1g, and tilt.py's gate
+                # enforces its half. Neither needs to know about the other,
+                # and a second I2C read would cost battery for nothing.
+                #
+                # Only while AWAKE — accepts_input() is already the gate for
+                # that — because adjusting a brightness you cannot see is
+                # not an interaction, and because a jar being carried to
+                # another room should not quietly re-tune itself.
+                if tilt_ctl is not None and not quiet_now:
+                    tilt_state = tilt_ctl.update(
+                        raw, tick_now, time.ticks_diff(tick_now, tilt_ms))
+                    tilt_ms = tick_now
+                    if ilog is not None:
+                        ilog.tilt(tick_now, tilt_state, tilt_ctl)
+                    if tilt_state in ("up", "down"):
+                        last_render = None   # repaint at the new brightness
+                    if (tilt_ctl.rail_bounce is not None
+                            and TILT_RAIL_BOUNCE_ENABLED and MOTION_ENABLED):
+                        motion.recoil(STARTUP_COLOR, TILT_RAIL_MS,
+                                      TILT_RAIL_DEPTH)
+                        last_render = None
+
+                mag = _gesture_magnitude_mg((tick_now,) + raw)
+                baseline = None
+                if len(trigger_buffer) >= _GESTURE_TRIGGER_BUFFER_LEN:
+                    baseline = _gesture_median(trigger_buffer)
+                trigger_buffer.append(mag)
+                if len(trigger_buffer) > _GESTURE_TRIGGER_BUFFER_LEN:
+                    trigger_buffer.pop(0)
+
+                if baseline is not None and abs(mag - baseline) >= TAP_TRIGGER_THRESHOLD_MG:
+                    dev = abs(mag - baseline)
+                    if ilog is not None:
+                        ilog.event(tick_now, "trigger", dev=dev,
+                                   quiet=quiet_now)
+                    # Quiet hours short-circuits BEFORE the ~1.2s capture —
+                    # led-status-messages.md says quiet hours is checked
+                    # first, and honouring that here also means quiet-hours
+                    # taps cost nothing instead of stalling the loop.
+                    if quiet_now:
+                        status_message.show(
+                            tick_now, QUIET_TAP_COLOR, QUIET_TAP_DURATION_MS
+                        )
+                        trigger_buffer = []
+                    else:
+                        response = _handle_tap(
+                            i2c, imu_addr, tick_now, dev, tap_state,
+                            signal, signal_b, status_message,
+                            can_cycle=len(lines) > 1,
+                        )
+                        if ilog is not None:
+                            ilog.event(time.ticks_ms(), "tap_response",
+                                       response=response)
+                        # No `len(lines) > 1` guard here any more: the
+                        # response is now correct BY CONSTRUCTION, because
+                        # _handle_tap was told whether the action exists
+                        # before it chose how to answer.
+                        if (response == "wake" and WAKE_FADE_ENABLED
+                                and MOTION_ENABLED
+                                and not horizon.beyond_horizon(signal, signal_b)):
+                            # Fade UP into the scene rather than snapping
+                            # on behind the wave. capture() builds the
+                            # contract's frame without latching it —
+                            # rendering it to find out what it is would
+                            # be the snap this exists to avoid.
+                            _target = leds.capture(
+                                _render_dispatch(ACTIVE_CONTRACT, signal,
+                                                 signal_b), tick_now)
+                            if _target is not None:
+                                motion.fade_scene(_target,
+                                                  MOTION_SCENE_FADE_MS,
+                                                  rising=True)
+                                last_render = tick_now
+                        if (response == "wake" and GOODNIGHT_ENABLED
+                                and horizon.beyond_horizon(signal, signal_b)):
+                            # Trains exist, none within reach. Say so, then
+                            # go dark — staying lit would render the empty
+                            # promise this exists to replace.
+                            print("  [GOODNIGHT] nothing within %d min — "
+                                  "next in %d" % (horizon.horizon_minutes(),
+                                                  min(signal.ttls or [0])))
+                            motion.play_sequence(GOODNIGHT_WAVES,
+                                                 gap_ms=GOODNIGHT_GAP_MS)
+                            tap_state.sleep(tick_now)
+                            morning_armed = True
+                            last_render = None
+                        if response == "cycle":
+                            line_index = (line_index + 1) % len(lines)
+                            # Recompute NOW rather than waiting up to
+                            # LOOP_INTERVAL_SECS for the slow task: a tap
+                            # whose effect appears half a minute later reads
+                            # as a broken tap, not a slow one.
+                            last_refresh = None
+                            _apply_line_color(ACTIVE_CONTRACT, lines[line_index])
+                            if MOTION_ENABLED:
+                                # `around` AFTER the new line is applied, in
+                                # the NEW line's colour — so the motion
+                                # delivers the new state instead of
+                                # announcing that one is coming
+                                # (light-language.md §4). Two events, not
+                                # three, and the motion carries continuity
+                                # across the capture gap in a way the
+                                # brightness shelf never could.
+                                color = lines[line_index].get("color")
+                                motion.play("around",
+                                            tuple(color) if color else STARTUP_COLOR,
+                                            MOTION_AROUND_MS)
+                            print(f"  [LINE] {lines[line_index].get('name', '?')}")
+                        trigger_buffer = []  # the window covered this stretch
+                        last_render = None  # force a repaint after the jolt
+
+        # ── render, time-gated to FRAME_MS ──────────────────────────
+        if last_render is not None and time.ticks_diff(tick_now, last_render) < FRAME_MS:
+            time.sleep_ms(GESTURE_POLL_MS)
+            continue
+        last_render = tick_now
+
+        # A dark strip is indistinguishable from a fault — the same hazard
+        # quiet hours already prints for. Sleeping after AWAKE_MINUTES is
+        # correct behaviour and looks exactly like the unit having died, so
+        # say so once on the transition rather than every tick.
+        if tap_state.awake != was_awake:
+            if tap_state.awake:
+                print("  (awake — tap registered)")
             else:
-                render_for_interval(ACTIVE_CONTRACT, signal, LOOP_INTERVAL_SECS)
-                if ACTIVE_CONTRACT.frame_ms is None:
-                    time.sleep(LOOP_INTERVAL_SECS)
+                print("  (asleep after %d min — tap to wake; not a fault)"
+                      % (BOOT_AWAKE_MINUTES if loop_count <= 1 else AWAKE_MINUTES))
+                # Unwind rather than cut to black. ONE wave: you stopped
+                # looking, which is a smaller fact than the day ending.
+                # ⚠ THE WHOLE CEREMONY IS GATED ON THERE BEING A SCENE,
+                # not just the fade. With BOOT_AWAKE_MINUTES = 0 the unit
+                # is "awake" for zero milliseconds, so this transition
+                # fires on the very first tick — and a goodbye for a
+                # display that never showed anything is not a goodbye, it
+                # is a boot artefact. clear() nulls last_frame, so the
+                # burst ending cleanly is exactly what makes this False.
+                if (SLEEP_UNWIND_ENABLED and MOTION_ENABLED
+                        and leds.last_frame is not None):
+                    # Fade the scene that IS on the strip — trains
+                    # scattered, station last to let go — then the unwind.
+                    motion.fade_scene(leds.last_frame,
+                                      MOTION_SCENE_FADE_MS, rising=False)
+                    motion.play("outward", SLEEP_UNWIND_COLOR,
+                                SLEEP_UNWIND_MS)
+            was_awake = tap_state.awake
+
+        if status_message.active(tick_now):
+            frame = [None] * NUM_LEDS
+            frame[STATUS_LED_INDEX] = (status_message.color, 1.0, "static")
+            _write_frame(frame)
+        elif quiet_now or not tap_state.awake:
+            clear()
+        else:
+            if ilog is not None:
+                _r0 = time.ticks_us()
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+                ilog.render_cost(time.ticks_diff(time.ticks_us(), _r0))
+            else:
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+
+        time.sleep_ms(GESTURE_POLL_MS)
+
+
+def _run_startup_and_mark():
+    """run_startup_sequence() + a checkpoint. Wrapped because that function
+    NEVER RETURNS on WiFi failure (persistent breathe), so a checkpoint
+    written after the call site would silently not happen on the very path
+    where memory is most likely to be the culprit."""
+    run_startup_sequence()
+    _mem_checkpoint("after time source")
+
+
+def main():
+    print("\n══ eki-bin ═══════════════════════════════════════")
+    # Baseline: everything main.py's import already cost — bytecode,
+    # module globals, the NeoPixel buffer, _residual. Every later delta is
+    # relative to this.
+    _mem_checkpoint("after import")
+
+    if GESTURE_DEBUG_ENABLED:
+        # No WiFi/schedule/boot-ceremony needed — this validates the
+        # gesture envelope in isolation, same "standalone, no dependency
+        # beyond the IMU" property the sandbox tools already have. Early
+        # return, deliberately bypassing everything below rather than
+        # threading a flag through the existing schedule/WiFi/boot flow.
+        try:
+            _run_gesture_debug_loop()
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # Config-value errors get an LED cue too. _heartbeat_pin is the known
+    # offender (HEARTBEAT_PIN="LED" is a Pico-2W-only alias; on any other
+    # board Pin("LED") raises ValueError) but this guards the whole class:
+    # a bad config value used to crash here, BEFORE run_startup_sequence()
+    # below ever runs, so nothing lit up at all. On USB you'd see the
+    # traceback; on a wall adapter the unit just looked dead.
+    #
+    # ⚠ Not everything is catchable here: LED_PIN/NUM_LEDS are consumed at
+    # IMPORT time to build `np`, so getting those wrong fails before main()
+    # is entered and no LED feedback is possible by construction. Those two
+    # stay a serial-console diagnosis.
+    # Only ApproachContract consumes the anchor/arm geometry, so only it can
+    # be broken by a mismatch — failing on it for an arc contract that never
+    # reads those values would be a false alarm.
+    quiet_onboard_leds()   # the MCU's own LEDs — invisible on a bench,
+    #                        very visible inside a glass jar. status.py.
+
+    if isinstance(ACTIVE_CONTRACT, ApproachContract):
+        # Palette is checked BEFORE geometry, deliberately: a bad geometry
+        # crashes the render loop and a bad palette merely looks wrong, so
+        # the one that will never announce itself goes first. Reported, not
+        # fatal — a hue that reads off is a real problem and not a reason to
+        # refuse to tell someone when their train is.
+        for _line in palette.describe():
+            print(_line)
+        _pal = palette.palette_problems()
+        if _pal:
+            print("\n  ⚠ PALETTE PROBLEMS (display only — not fatal):")
+            for _p in _pal:
+                print("     • %s" % _p)
+            print("     docs/contracts/config.md § How the brightness values"
+                  " compose\n")
+
+        _geo = geometry_problems()
+        if _geo:
+            print("  ✗ ApproachContract geometry doesn't fit NUM_LEDS=%d:"
+                  % NUM_LEDS)
+            for _problem in _geo:
+                print("      %s" % _problem)
+            print("    Previously this only appeared as `IndexError: list index")
+            print("    out of range` inside the render loop, several calls deep")
+            print("    and long after a clean boot — pointing nowhere near config.")
+            _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
+
+    try:
+        led = _heartbeat_pin(HEARTBEAT_PIN)  # None on boards with no onboard-LED alias
+    except (ValueError, TypeError) as e:
+        print(f"  ✗ Bad config value: HEARTBEAT_PIN={HEARTBEAT_PIN!r} ({e})")
+        print("    Pico 2W accepts \"LED\"; every other board needs a GPIO number")
+        print("    or bare None. See pinouts/<board>.md.")
+        _run_startup_failure_forever(CONFIG_ERROR_COLOR)  # never returns
+
+    try:
+        # ⚠ ORDERING IS MEMORY-DRIVEN, NOT ARBITRARY — do not move WiFi back
+        # below load_schedule(). On the ESP32-C3, esp_wifi_init() needs
+        # ~40KB, and ~26KB of that must come from ONE specific SRAM region
+        # (measured: it drains regions 2 and 4 to 4 and 32 bytes free while
+        # leaving 111KB untouched in region 3, which can't satisfy its
+        # DMA/internal capability requirements). At a bare boot that region
+        # has just 26,448 bytes free against WiFi's 26,416 — **32 bytes of
+        # margin**. Anything allocated before WiFi comes up competes for it.
+        #
+        # Parsing schedule.json first cost ~5.5KB of exactly that region and
+        # made connect_wifi() raise `OSError: Wifi Out of Memory`. Bringing
+        # the radio up first lets MicroPython's heap grow into whatever's
+        # left over instead of the other way round.
+        #
+        # This buys margin; it does not create headroom. See
+        # docs/insights.md §11 for the real fix (stop compiling a 115KB
+        # module on-device) — this reorder is the cheap half.
+        _run_startup_and_mark()  # boot ceremony + WiFi/NTP — never returns on
+        #   WiFi failure (persistent red breathe instead), so everything
+        #   below only ever runs after a successful connect + burst.
+
+        try:
+            print("  loading %s…" % SCHEDULE_FILE)   # a slow load must not
+            #   look like a hang — see schedule.load_schedule
+            schedule_data = load_schedule(SCHEDULE_FILE)
+            # The parked multi-line question in concrete terms: this delta
+            # IS the schedule's real cost, object graph included, rather
+            # than the estimate dev-status.md currently records.
+            _mem_checkpoint("after schedule load")
+        except (OSError, ValueError):
+            # Different failure CAUSE, different colour — see
+            # docs/contracts/led-status-messages.md. A missing/corrupt
+            # schedule.json used to crash here with a console print and no
+            # LED indication at all; now gets the same persistent-failure
+            # treatment WiFi/NTP failure already had, just its own colour.
+            print("  ✗ Schedule failed to load. Reset to retry.")
+            _run_startup_failure_forever(SCHEDULE_ERROR_COLOR)  # never returns
+
+        print(
+            f"  Station: {schedule_data['station']}   Ring: {DISPLAY_DIRECTION!r}\n"
+            f"  Contract: {type(ACTIVE_CONTRACT).__name__}   Scheme: {COLOR_SCHEME!r}   "
+
+            f"  N trains: {N_TRAINS} "
+            f"LEDs: {NUM_LEDS} on GPIO{LED_PIN}"
+        )
+        print(f"  Loop interval: {LOOP_INTERVAL_SECS}s  |  Ctrl+C to stop")
+        # Say when gestures are OFF. A wired IMU that is simply never read
+        # is indistinguishable from a broken one, and the only previous
+        # signal was the ABSENCE of the "Lines: … (tap to cycle)" banner —
+        # which you cannot notice if you have never seen it present. Cost
+        # three rounds of hardware debugging on 2026-08-24; the sensor was
+        # fine the whole time and GESTURE_ENABLED was simply unset.
+        if not WAKE_INTERACTION_ENABLED:
+            print("  Gestures: OFF — set GESTURE_ENABLED = True in config.py "
+                  "to enable taps")
+        print()
+
+        _mem_checkpoint("entering loop")
+        _mem_report()
+
+        if WAKE_INTERACTION_ENABLED:
+            _run_interactive_loop(schedule_data, led)
+        else:
+            _run_classic_loop(schedule_data, led)
     except KeyboardInterrupt:
         pass
     finally:

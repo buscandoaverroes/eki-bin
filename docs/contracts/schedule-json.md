@@ -35,6 +35,88 @@
 
 ---
 
+## Multiple lines at one station (✅ SHIPPED)
+
+Implemented and running: `schedule.schedule_lines()` normalizes both shapes,
+`ApproachContract.set_line_color()` applies the per-line colour, and a tap
+cycles between them (`docs/contracts/gesture-envelope.md` §11).
+
+**A file WITHOUT `lines` is not deprecated.** It is a single-line station, and
+the document itself is that line — `schedule_lines()` returns a one-element
+list for it, so every pre-existing schedule keeps working untouched. Add
+`lines` only when a station actually has more than one.
+
+⚠ **How many lines you can usefully show is set by the GLASS, not by this
+format.** Measured 2026-08-24: a thick opaque brown bottle supports **2-3**
+distinguishable hues, mid brown 4-5, clear brown 5+ — amber glass absorbs
+blue, so it collapses the hue wheel onto the red-green axis. Choose the
+palette for the vessel. `docs/insights.md` §12.
+
+The device sits in one room, so the **station is fixed** — what varies is
+which **line** at that station. Lines and directions are orthogonal axes:
+
+- **Direction** is already solved by `ApproachContract` — it renders both
+  directions simultaneously on arms A and B (`docs/contracts/approach-contract.md`).
+- **Line** is what a tap cycles (`docs/contracts/gesture-envelope.md` §11).
+
+```json
+{
+  "station": "mystation",
+  "lines": [
+    {
+      "name": "yamanote",
+      "color": [154, 205, 50],
+      "weekday": { "a": [302, 314], "b": [325, 333] },
+      "weekend": { "a": [337], "b": [302] }
+    }
+  ]
+}
+```
+
+| Key | Type | Notes |
+|---|---|---|
+| `lines` | array | **Optional.** Absent → the whole document is one unnamed line, so **every existing schedule keeps working untouched** (design principle #12, "backward-compatible configuration") |
+| `lines[].name` | str | Display/debug label |
+| `lines[].color` | `[r, g, b]` | The line's **nominal** colour — see the split below |
+| `lines[].weekday` / `weekend` | object | Same shape as the single-line form: direction keys → minute arrays |
+
+### Where colour lives, and why it's split
+
+**Nominal line colour belongs here; per-enclosure correction belongs in
+`config.py`.** A line's colour is a fact about the world — Yamanote *is*
+green — while how it must be driven to look green *through your particular
+bottle* is a fact about your hardware. Keeping them separate means one
+schedule file works across differently-tinted jars, and matches design
+principle #10 ("config is intent; firmware is logic").
+
+### ⚠ Tinted glass constrains the palette — pick colours that survive it
+
+Coloured glass is a **subtractive filter**, so compensation is partial, not
+total: you can boost an absorbed channel only as far as 255, and past that
+the glass wins. The reachable gamut through a tinted bottle is strictly
+smaller than the LEDs' native gamut and compressed toward the glass's
+transmission peak.
+
+This is measured, not theoretical. `docs/insights.md` §3 (brown jar):
+**"Adjacent lit LEDs make red vs. orange ambiguous."** That is exactly the
+line-palette failure case — a red line and an orange line would be
+indistinguishable, which is a real Tokyo pairing, not a contrived one.
+`docs/hardware.md` records the measured shifts (white → orange-white,
+forest green → yellow-green, gray → yellow).
+
+Practical consequences when choosing `color` values:
+
+- **Favour fewer lines with widely-separated hues.** Three at ~120° apart
+  survive; six at ~60° will not.
+- **Calibrate per enclosure**, like every other number in this project —
+  bench values have never once transferred unchanged into a bottle.
+- **Consider a second, non-hue axis** (brightness or pulse). `insights.md`
+  §3 already predicted this: *"May end up leaning on brightness / pulsing
+  more than hue in thick jars."*
+- Judge separability **through the real glass, across the room**, using
+  `micropython/led_sandbox.py` — no WiFi, schedule, or main loop needed,
+  so this work is not blocked on anything else.
+
 ## Minutes-since-midnight & post-midnight trains
 
 Values are minutes since 00:00 local (JST). Post-midnight departures use
@@ -68,3 +150,8 @@ trivial: *find the first entry greater than the current minute-of-day.*
 
 Full pipeline: edit YAML → `make schedule` → `schedules/<station>.json` →
 `make upload` (lands on the device as `schedule.json`).
+
+**Privacy:** a real timetable reveals where someone lives, so everything in
+`schedules/` is gitignored except the `*.example.yaml` template, and that
+template is **synthetic**: `make example-schedule` regenerates it, so it's
+never anyone's real station. See [`docs/security.md`](../security.md).

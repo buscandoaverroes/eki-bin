@@ -1,0 +1,325 @@
+# Measuring DS3231 drift — the maths
+
+_Why `make rtc-drift` reports what it reports, and what each number does and
+does not mean. Written 2026-08-25 after three days of measurements that were
+mostly noise, to stop the same confusions recurring._
+
+---
+
+## The one distinction that matters
+
+**`offset` is not drift.**
+
+```
+offset  =  how wrong the chip is RIGHT NOW          (one measurement)
+drift   =  how fast that wrongness CHANGES          (two measurements)
+```
+
+Everything below follows from keeping those apart.
+
+---
+
+## 1. Where the chip's error comes from
+
+Two independent contributions, and only one of them is interesting:
+
+```
+  chip_error(t)   =   seed_error        +        drift_rate × elapsed
+                      ^^^^^^^^^^                 ^^^^^^^^^^^^^^^^^^^^
+                      fixed, inherited            what we actually
+                      at provisioning             want to measure
+```
+
+`seed_error` arrives through the provisioning chain, and **nothing in it ever
+checks against real time**:
+
+```
+   macOS clock  ──►  mpremote rtc --set  ──►  board RTC  ──►  DS3231
+        │                                                       │
+        │  measured +4.140 s off true time (2026-08-24)         │
+        │           +2.136 s off true time (2026-08-25)         │
+        └──────────── that error is copied straight through ────┘
+```
+
+So this project's DS3231 was seeded from a Mac that was itself **seconds**
+wrong, and it inherited that. Its `offset` of about **−1.9 s** is
+overwhelmingly `seed_error`, not accumulated drift.
+
+> **This answers the obvious misreading.** An `offset` of −1.963 s does *not*
+> mean the chip drifted two seconds since the baseline. It means the chip is
+> two seconds from true time, almost all of which it started with.
+
+---
+
+## 2. Why the seed error cancels
+
+Drift is a *difference of two offsets*, and `seed_error` is the same constant
+in both:
+
+```
+  offset(t₁) = seed_error + rate·t₁
+  offset(t₂) = seed_error + rate·t₂
+  ─────────────────────────────────  subtract
+  Δoffset    =              rate·(t₂ − t₁)          ← seed_error is GONE
+
+              Δoffset
+  rate  =  ─────────────  ×  10⁶     (parts per million)
+             t₂ − t₁
+```
+
+**This is why the tool never tries to correct the absolute offset.** It does
+not need to. The same argument retires two other worries:
+
+- **Transfer latency** between the device printing and the host timestamping
+  is a roughly constant bias → cancels.
+- **Timezone.** A chip holding UTC against a JST host shows a constant −9 h
+  offset → cancels. The tool is deliberately indifferent to which is stored.
+
+Anything constant at both ends is invisible to a difference. Only things that
+**change between samples** can corrupt the result — which is the entire story
+of §4.
+
+---
+
+## 3. Measuring `offset` precisely: catch the EDGE
+
+Reading the seconds register tells you the time to the nearest second — far
+too coarse, since 2 ppm is 0.173 s/day and would need a week to outgrow ±1 s
+of reading error.
+
+Instead, poll until the register **changes**:
+
+```
+   register value:   ...  04    04    04    04  │  05    05   ...
+                                                 ▲
+                                 the instant it flips to 05, the
+                                 chip's true time is EXACTLY 05.000
+                                 — no fractional part to guess
+
+   host records its own time at that instant  ──►  offset to ±(poll + USB)
+```
+
+Measured jitter on this rig: **±4 ms**, ~250× better than reading the
+register. The DS3231 double-buffers its time registers, so a read cannot tear
+mid-tick.
+
+---
+
+## 4. The reference is the hard part
+
+The measurement is `chip − reference`. If the *reference* moves, that motion
+appears as fake drift. macOS disciplines its clock against NTP and steps it
+across sleep/wake, so the host clock is **not** a fixed yardstick:
+
+```
+   what we want                      what we had
+   ────────────                      ───────────
+   chip ──── true time               chip ──── macOS clock ~~~ wandering
+        (fixed reference)                             ↑
+                                          moved 2 s in 24 h; observed
+                                          707 ms of scatter about the fit,
+                                          against 4 ms of jitter — 168×
+```
+
+Two host-referenced figures from that period: **+11.94 ppm**, then
+**−3.66 ppm**. Both were the Mac, not the chip.
+
+**Fix: ask NTP directly at sample time.** The four-timestamp form cancels
+symmetric network latency:
+
+```
+   host   t₁ ──────────────► t₂   server
+                                  (receive)
+                                    │
+   host   t₄ ◄────────────── t₃   server
+        (receive)                 (transmit)
+
+              (t₂ − t₁) + (t₃ − t₄)
+   offset  =  ─────────────────────      ← seconds to ADD to the host clock
+                        2
+```
+
+Latency cancels **only if it is symmetric**, so the residual error is
+round-trip *asymmetry*. That varies per packet, which is why the tool takes
+the **median of several queries** — one badly-delayed packet gets outvoted
+rather than averaged in.
+
+> Samples record which reference they used, and a fit **never mixes them**. A
+> host-referenced and an NTP-referenced sample differ by whatever the host was
+> wrong by at the time — mixing them reinjects exactly the error NTP removes.
+
+---
+
+## 5. How long you must wait
+
+Drift has to outgrow the reference noise:
+
+```
+                   reference_error
+   t_needed  =  ─────────────────────
+                  drift_rate
+
+   at 2 ppm (= 2×10⁻⁶ s/s):
+
+     reference error │  time to equal it  │  5:1 confidence
+     ────────────────┼────────────────────┼─────────────────
+       707 ms (host) │       98 h         │     491 h
+        20 ms (NTP)  │      2.8 h         │      14 h
+         4 ms (ideal)│      0.6 h         │       3 h
+```
+
+The tool refuses to report a figure when the scatter about its own fit
+exceeds ~5× the measured jitter, because that means the samples do not
+describe a constant drift at all — and a long elapsed time alone is *not*
+evidence that they do.
+
+---
+
+## 6. Result on this unit
+
+```
+  2026-08-24 22:59  offset −1.9132 s   (ntp)
+  2026-08-25 21:40  offset −1.9632 s   (ntp)
+  ────────────────────────────────────────────
+  Δoffset  −0.0500 s   over  22.69 h
+
+  drift = −0.0500 / 81683 × 10⁶  =  −0.61 ppm
+                                    ±0.35 ppm  (~20 ms reference error)
+
+  = −0.053 s/day  ≈  −19 s/year        DS3231 spec: ±2 ppm
+```
+
+**Within spec, running very slightly slow.** Two samples give no scatter
+check, so a third is needed before this is trustworthy — but it is the first
+figure here not dominated by the reference.
+
+### Update — 2026-09-29, 26 days on
+
+```
+  baseline (epoch 1 seed)  2026-09-03 19:54  offset −0.8517 s  (ntp)
+  now                      2026-09-29 21:47  offset −2.0140 s  (ntp, host +0.197 s off true)
+  ────────────────────────────────────────────────────────────────────
+  Δoffset  −1.162 s   over  625.9 h  (2.253 × 10⁶ s)
+
+  drift = −1.162 / 2.253e6 × 10⁶  =  −0.52 ppm
+        = −0.045 s/day  ≈  −16 s/year          DS3231 spec: ±2 ppm
+```
+
+**Consistent with the first figure.** −0.52 ppm now against −0.61 ± 0.35 ppm
+from 22.7 h in August: same sign, same size, and the short measurement's error
+bar contains the long one. That agreement across an epoch boundary (a re-seed
+in between) is better evidence that this is the crystal, and not the reference,
+than either number alone. Over 26 days the spec allows about ±4.5 s of drift;
+the chip used about a quarter of that.
+
+**Still only two samples** in the epoch, so no scatter check yet (the tool says
+so). The reference is now much smaller than the signal: a ~20 ms NTP error over
+626 h is ±0.01 ppm, against 0.52.
+
+**Practical:** a minute of accumulated error is about **3.6 years** away
+(60 s ÷ 0.045 s/day = 1,333 days), on top of the ~2 s the display already
+carries from the seed. The display resolves to 2 minutes per LED, so nothing is
+visible. The tool suggests an aging-register trim of about −5 LSB. It is not
+worth doing: it means writing the chip, for a gain measured in seconds a year,
+and the sign convention is the kind of thing this project has been wrong about.
+Reseed at the next battery change instead, which resets the error for free.
+
+### Guarantee over correction (2026-09-29)
+
+A stable, linear drift is best used as a **guarantee interval, not a
+correction.** Correcting it in firmware would be open loop — with no radio
+there is no reference to notice a wrong ppm — and the gain is seconds a year
+against a 2-minute-per-LED display. What linearity buys is being able to *say
+something true about each unit*: 60 s of error at −0.045 s/day is ~3.6 years
+out, so a unit can carry a **"reseed by" date**. That belongs in the per-unit
+record (`docs/gift-registry.md`), where a `make units` check can flag a unit
+whose age or measured drift has left its budget. Linearity itself is only
+established once three or more samples spread over weeks fit a line within the
+tool's scatter check; two samples always fit perfectly and prove nothing.
+
+For a one-minute-granularity display, −19 s/year is invisible. The chip would
+take **roughly three years** to accumulate a single minute of error, which is
+comparable to the CR1220's own life.
+
+---
+
+## 7. Practical notes
+
+- **The log is worktree-stable.** `data/` is gitignored, so each git worktree
+  has its own — a campaign run from two directories silently splits into two
+  logs, each too short to yield a figure. The script resolves the *main*
+  worktree deliberately. (This happened, and cost a day's sample.)
+- **`--history`** prints every sample with running deltas: the campaign view.
+- **`--unit` is required to write**, and has no default on purpose — see
+  "A seed you didn't record" below.
+- **`data/rtc-drift-corrections.json`** holds post-hoc fixes (a unit for old
+  entries, voided samples, seeds discovered later), applied at read time. The
+  log is never edited — the same rule the IMU recordings follow.
+- **`data/rtc-drift-summary-<unit>.json`** is rewritten from the whole log on every
+  run — the key figures in machine-readable form, for plotting or for pulling
+  a number into a doc without re-deriving it. The `.jsonl` is the *record*
+  (append-only, never edited); the summary is the *answer* (regenerable, safe
+  to delete). Both gitignored.
+
+  It reports **`within_spec` and `trustworthy` separately**, because they
+  answer different questions. A figure can sit inside the ±2 ppm band and
+  still be meaningless — two samples always fit a line perfectly, so zero
+  scatter proves nothing. This project has already published two confident
+  numbers (+11.94 and −3.66 ppm) that were the host clock rather than the
+  chip, and `why` says which case you are in.
+- **Re-seeding destroys the baseline.** `--mark-seed` starts a new epoch;
+  drift only ever fits within one.
+- **Check the host before seeding a unit you care about.** `rtc-drift`'s first
+  line reports the host's NTP offset. Seconds rather than milliseconds means
+  fix the Mac first — that error becomes permanent in the unit.
+
+
+---
+
+## A seed you didn't record looks like the rate changing (2026-10-21)
+
+The third sample of bottle-01's epoch 1 came back at **−3.868 s**, against a
+constant-rate prediction of −3.00 s. The script flagged 223 ms of scatter and
+blamed the host clock. **That diagnosis was wrong here:** every sample is
+measured against NTP, not the Mac (`arrived = time.time() + clock_offset`), and
+the Mac's logged offset only moved 0.16 s across all three. The departure was
+real.
+
+Two readings of the same three numbers:
+
+| | requires |
+|---|---|
+| one chip, seeded Sep 3, undisturbed | the rate to nearly **double**: −0.52, then −0.97 ppm |
+| a re-seed on Sep 13 nobody logged | **one rate**, −0.97 ppm, through both later samples, and a −0.67 s seed offset — in line with the −0.85 s seen just after the Sep 3 seed |
+
+On 2026-09-13 the bottle's setup read `2000-01-01` with OSF set and *was*
+seeded — the "second chip" the manifest discussion was about — and no seed
+event was ever written. The owner is ~70% sure that chip is the one now in the
+bottle. The second reading is simpler; the first isn't impossible (a TCXO's
+residual moves with temperature, both rates are in spec, and September to
+October is a real cooling).
+
+**The general shape, worth recognising next time: an unrecorded re-seed is
+indistinguishable from a drift-rate change.** Both appear as a kink in an
+otherwise straight line. The scatter check sees a kink and has only one
+explanation available — the reference — so it will reach for that even when
+the reference is already corrected out.
+
+What changed as a result:
+
+- **`--unit` is required to write**, checked before NTP or the board are
+  touched. No default: a DS3231 has no ID, so a default would file every
+  chip under one name. The flag makes the unit *asserted*, not *verified*.
+- **The fix lives beside the log.** `data/rtc-drift-corrections.json` assigns
+  `bottle-01` to the pre-unit entries and adds the Sep 13 seed with
+  `confidence: 0.7`. Epochs are now **derived from seed events**, not trusted
+  from the stored field, so adding that one seed regrouped the two samples
+  after it — and deleting it restores the original grouping exactly.
+- **A figure from an inferred baseline says so.** The summary carries
+  `baseline_inferred`, and the run prints a warning, because −0.97 ppm
+  measured from an observed seed and from a guessed one are different claims
+  that look identical as numbers.
+
+Current state: bottle-01 epoch 2, two samples over 22 days, −0.97 ppm,
+`trustworthy: false` — two samples admit no scatter check. The next sample
+decides it.

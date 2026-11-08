@@ -1,33 +1,52 @@
 # Makefile — eki-bin
 # Usage:
 #   make setup             — create .venv, install Python tools
-#   make flash-micropython — flash MicroPython to the Pico 2W (picotool + .uf2)
-#   make flash-esp32-c3    — flash MicroPython to the XIAO ESP32-C3 (esptool + .bin)
+#   make flash-micropython — flash MicroPython to any supported board.
+#                             Optionally BOARD=pico2w|esp32c3|xiao-rp2350;
+#                             omit it for an interactive picker.
+#                             FIRMWARE=<path> pins a specific .uf2;
+#                             otherwise the NEWEST build in firmware/ wins.
+#                             WIPE=1 also erases the filesystem (RP2350 only —
+#                             the ESP32 path always does). Reach for it when the
+#                             board is unreachable over serial: a plain reflash
+#                             leaves main.py in place, so a main.py that blocks
+#                             the REPL survives it.
 #   make schedule          — convert schedules/*.yaml → minutes arrays
 #   make led-test          — run the WS2812B bring-up sketch
+#   make imu-test          — run the LSM6DSV16X (IMU) bring-up sketch
+#   make i2c-scan          — find I2C devices without knowing pins/bus first
+#   make doctor            — is the board healthy? flash/fs/transport probe
+#   make rtc-seed          — ⚠ WRITE the DS3231 (the only writer; runbook §5b)
+#   make rtc-drift         — measure DS3231 drift vs true time (edge-timed)
 #   make upload            — copy main.py + config.py + schedule.json to the board
 #   make run               — run main.py without saving (good for iteration)
+#   make dev               — run from the HOST filesystem; zero flash writes
 #   make screen / repl     — open the MicroPython REPL (Ctrl+] to exit)
+#   make motion-sandbox    — the five motion words, on real glass
+#   make crawl-sandbox     — how a train HOPS, how the station FADES
+#   make tilt-sandbox      — tilt-to-adjust; run it IN THE DARK
+#   make clear-vibes       — list + confirm + delete vibration_sandbox.py /
+#                             handling_test.py data files on the device's flash
 #
 # upload/run/led-test/screen/repl all go through mpremote, which is board-
 # agnostic — the only board-specific step is the initial firmware flash, since
-# the Pico (mass-storage .uf2) and ESP32-C3 (serial bootloader) use different
-# protocols. Hence two separate flash targets rather than one auto-detecting
-# target: which board you're holding is something you already know, and
-# guessing it from bootloader state before any firmware is even running is
-# more fragile than just naming it.
+# RP2350 boards (mass-storage .uf2 via picotool) and ESP32 boards (serial
+# bootloader via esptool) use different protocols. That dispatch now lives in
+# scripts/flash_firmware.sh. Still NOT auto-detected: which board you're
+# holding is something you already know, and guessing it from bootloader state
+# before any firmware is running is more fragile than just naming it.
 
 VENV     := .venv
 PYTHON   := $(VENV)/bin/python
 MPREMOTE := $(VENV)/bin/mpremote
 ESPTOOL  := $(VENV)/bin/esptool
 
-FIRMWARE_DIR   := firmware
-PICO_FIRMWARE  := $(wildcard $(FIRMWARE_DIR)/RPI_PICO2_W-*.uf2)
-ESP32_FIRMWARE := $(wildcard $(FIRMWARE_DIR)/SEEED_XIAO_ESP32C3-*.bin)
+# Firmware filenames/globs deliberately live ONLY in
+# scripts/flash_firmware.sh now — duplicating them here is what let the
+# XIAO RP2350 target check the wrong board's file.
 SRC_DIR      := micropython
 
-STATION ?= mystation
+STATION ?= testbench
 
 
 # ── Setup ─────────────────────────────────────────────────────────
@@ -36,71 +55,273 @@ setup: requirements.txt
 	python3 -m venv $(VENV)
 	$(PYTHON) -m pip install --quiet --upgrade pip
 	$(PYTHON) -m pip install --quiet -r requirements.txt
+	@git config core.hooksPath .githooks && echo "✓ pre-push leak check enabled (.githooks)"
 	@echo "✓ .venv ready — mpremote at $(MPREMOTE)"
 
 # ── Firmware ──────────────────────────────────────────────────────
+# One target for every board. Pass BOARD= to skip the prompt:
+#   make flash-micropython BOARD=pico2w
+#   make flash-micropython BOARD=esp32c3
+#   make flash-micropython BOARD=xiao-rp2350
+#   make flash-micropython                  ← interactive picker
+#
+# The board table, the two flashing protocols (picotool/.uf2 for RP2350
+# boards, esptool/.bin for ESP32), and the firmware-file lookup all live in
+# the script — previously these were three near-duplicate targets that had
+# already drifted (the XIAO RP2350 one validated the PICO's firmware
+# variable while flashing the XIAO's, so a missing .uf2 passed the guard and
+# then ran picotool with an empty path).
 .PHONY: flash-micropython
 flash-micropython:
-	@command -v picotool > /dev/null 2>&1 \
-		|| (echo "✗ picotool not found — run: brew install picotool" && exit 1)
-	@test -n "$(PICO_FIRMWARE)" \
-		|| (echo "✗ No .uf2 found in $(FIRMWARE_DIR)/ — download from micropython.org/download/RPI_PICO2_W/" && exit 1)
-	@echo "→ Flashing: $(PICO_FIRMWARE)"
-	picotool load $(PICO_FIRMWARE) --force
-	picotool reboot
-	@echo "✓ Done — Pico rebooting into MicroPython"
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh $(BOARD)
 
-# Flash MicroPython to the XIAO ESP32-C3. Different tool/procedure from the
-# Pico above — ESP32 uses a serial bootloader protocol (esptool), not a
-# mass-storage drag-and-drop. Erases first (standard MicroPython flashing
-# advice — avoids stale partition/NVS state from a previous firmware).
-#
-# Note: esptool's CLI has changed across major versions. This targets the
-# modern (v5.x) `erase-flash` / `write-flash` subcommand syntax; if it errors
-# with an unrecognized command, run `esptool --help` to check your version's
-# exact syntax.
+# Kept so existing docs, scripts and muscle memory don't break. The old
+# names were also inconsistent with each other — one named for the firmware
+# (flash-micropython), one for the board (flash-esp32-c3).
 .PHONY: flash-esp32-c3
 flash-esp32-c3:
-	@test -f $(ESPTOOL) \
-		|| (echo "✗ esptool not found in .venv — run: make setup" && exit 1)
-	@test -n "$(ESP32_FIRMWARE)" \
-		|| (echo "✗ No .bin found in $(FIRMWARE_DIR)/ — download from micropython.org/download/SEEED_XIAO_ESP32C3/" && exit 1)
-	@PORT=$$(bash scripts/detect_port.sh) && \
-		echo "→ Erasing flash on $$PORT…" && \
-		$(ESPTOOL) --port $$PORT --chip esp32c3 erase-flash && \
-		echo "→ Flashing: $(ESP32_FIRMWARE)" && \
-		$(ESPTOOL) --port $$PORT --chip esp32c3 write-flash 0x0 $(ESP32_FIRMWARE) && \
-		echo "✓ Done — XIAO C3 rebooting into MicroPython"
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh esp32c3
+
+.PHONY: flash-xiao2350
+flash-xiao2350:
+	@ESPTOOL=$(ESPTOOL) WIPE=$(WIPE) FIRMWARE=$(FIRMWARE) bash scripts/flash_firmware.sh xiao-rp2350
 
 # ── Python files ──────────────────────────────────────────────────
 
 # ── Tests ─────────────────────────────────────────────────────────
 # Host-side logic tests. Run automatically before `upload`.
 .PHONY: test
-test:
+test: lint
 	$(PYTHON) -m pytest -q
+
+# Narrow by design — see ruff.toml. Skips (loudly) rather than failing when
+# ruff isn't installed, so an existing .venv keeps working until `make setup`.
+.PHONY: lint
+lint:
+	@if [ -x $(VENV)/bin/ruff ]; then \
+		$(VENV)/bin/ruff check micropython/ scripts/ tests/ ; \
+	else \
+		echo "… ruff not installed — run 'make setup' to enable lint checks"; \
+	fi
 
 .PHONY: upload
 upload: test _check-mpremote
 	@test -f $(SRC_DIR)/config.py \
 		|| (echo "✗ $(SRC_DIR)/config.py missing — cp $(SRC_DIR)/config.example.py $(SRC_DIR)/config.py and fill it in (or edit on-board via Thonny)" && exit 1)
-	$(MPREMOTE) cp micropython/main.py :main.py
-	$(MPREMOTE) cp micropython/config.py :config.py
-	$(MPREMOTE) cp schedules/$(STATION).json :schedule.json
-	@echo "✓ Uploaded: main.py, config.py, schedule.json ($(STATION))"
+	@# Copy order, retries and size verification all live in the script.
+	@# An UNVERIFIED cp is the dangerous case: a truncated write corrupted
+	@# the filesystem and bricked a board for a morning (insights.md §13).
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) STATION=$(STATION) WIFI=$(WIFI) \
+		bash scripts/upload.sh
 
 .PHONY: run
 run: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/main.py
 
-# Hardware bring-up: cycle colours + chase across the 8-LED stick.
+# Run ANY script once via mpremote without a full flash — for ad-hoc bring-up
+# (e.g. a NUM_LEDS-tweaked led_test.py) so you don't have to drop into Thonny.
+#   make run-file FILE=micropython/led_test.py
+.PHONY: run-file
+run-file: _check-mpremote
+	@test -n "$(FILE)" || (echo "✗ usage: make run-file FILE=<path/to/script.py>" && exit 1)
+	@test -f "$(FILE)" || (echo "✗ not found: $(FILE)" && exit 1)
+	$(MPREMOTE) run "$(FILE)"
+
+# Copy any script to the device AS main.py so it auto-runs on the next boot /
+# power-up — needed for standalone (USB-less) tests like a Qi-powered brightness
+# run, where `run-file` can't help because there's no live mpremote session.
+#   make upload-file FILE=micropython/led_test.py
+# Overwrites the device's main.py; re-run `make upload` to restore real firmware.
+.PHONY: upload-file
+upload-file: _check-mpremote
+	@test -n "$(FILE)" || (echo "✗ usage: make upload-file FILE=<path/to/script.py>" && exit 1)
+	@test -f "$(FILE)" || (echo "✗ not found: $(FILE)" && exit 1)
+	$(MPREMOTE) cp "$(FILE)" :main.py
+	@echo "✓ Copied $(FILE) → :main.py — auto-runs on next boot / power-up (e.g. on the Qi pad)"
+
+# Hardware bring-up: cycle colours + chase across the LED strip.
 .PHONY: led-test
 led-test: _check-mpremote
 	$(MPREMOTE) run $(SRC_DIR)/led_test.py
 
+# Board-agnostic I2C discovery: finds devices WITHOUT being told which pins
+# or bus ID to use. On RP2 boards this needs no configuration at all — it
+# enumerates the chip's legal pin/ID combinations and reports the config
+# values to paste. Start here when a device doesn't show up; imu-test and
+# rtc-test verify a chip WORKS, this one finds whether it's there at all.
+.PHONY: i2c-scan
+i2c-scan: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/i2c_scan.py
+
+# Colour bring-up: find the LOW-PWM FLOOR — the smallest raw value at which
+# equal R=G=B actually reads neutral. Answers why marker ticks at (1,1,1)
+# read warm yellow (docs/insights.md §12) and whether MARKER_BRIGHTNESS = 0
+# can stop being a workaround. Writes RAW values: no gamma, no BRIGHTNESS.
+# Edit MODE at the top of the file to switch between ramp/channels/balanced.
+.PHONY: low-pwm-test
+low-pwm-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/low_pwm_test.py
+
+# Colour bring-up: HOW MANY LINES CAN THE GLASS SUPPORT? Shows candidate line
+# colours side by side to judge hue separation THROUGH A VESSEL. Unlike
+# low-pwm-test (a property of the LED, answerable on a bench), this one needs
+# the actual glass — diffusion and tint change what is distinguishable
+# without changing what the chip emits. Edit MODE/COUNT/BRIGHTNESS at the top
+# of the file. docs/insights.md §12.
+.PHONY: hue-test
+hue-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/hue_test.py
+
+# The five words of the light language, on real glass — the motion
+# vocabulary gets DECIDED here before any of it is wired into main.py
+# (docs/contracts/light-language.md). Runs the demo: all five in order,
+# labelled. `ab("around")` is the one that matters most — eased vs linear,
+# i.e. "physical rotation" vs "loading spinner". Edit ACTIVE at the bottom
+# of the file, or call run/ab/force_demo from the REPL.
+.PHONY: motion-sandbox
+motion-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/motion_sandbox.py
+
+# The two animations the light language never specified, and could not:
+# every other word was derived from what glass does when struck, and there
+# is NO bottle-equivalent for a light moving inside glass. So the fork is
+# real — PHYSICS (the light has mass: slides, eases, settles) vs AGENCY
+# (the light is alive: hops, blinks, vanishes and reappears). Six hop
+# styles and five station fades, labelled, side by side. Reasoning cannot
+# pick between them; the bottle can.
+#
+# ⚠ Also the place to test DITHER. A low-brightness fade steps visibly
+# without it, and the static/animated split means turning it on costs the
+# idle LEDs nothing.
+.PHONY: crawl-sandbox
+crawl-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/crawl_sandbox.py
+
+# Tilt as a continuous input — the bottle-native alternative to sliding a
+# finger up and down it (light-language.md §6). ⚠ RUN IT IN THE DARK: the
+# open question is whether "you must brighten before you can dim" is a
+# glare flash you can live with, and at noon it will feel fine and tell
+# you nothing. Every session prints its overshoot.
+#
+# TWO MODES. Set ACTIVE at the bottom of the file:
+#   ACTIVE = run          the overshoot test (default, whole ring)
+#   ACTIVE = curve_test   the CURVE tuning test — land a bar on a marker,
+#                         timed, across several curve values. Turns a feel
+#                         parameter into a measurement instead of an
+#                         edit-reflash-retry loop.
+.PHONY: tilt-sandbox
+tilt-sandbox: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/tilt_sandbox.py
+
+# Which onboard indicators exist, and which can software actually turn off?
+# Walks every controllable LED through known states with pauses — anything
+# still lit during the ALL-OFF steps is hardwired to the rail and needs a
+# PHYSICAL fix, which matters before a unit is sealed in glass. Colour tells
+# you nothing here; only "does it change when driven" does (insights.md §13).
+.PHONY: onboard-led-test
+onboard-led-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/onboard_led_test.py
+
+# Hardware bring-up: scan I2C, confirm the LSM6DSV16X IMU, stream accel data.
+.PHONY: imu-test
+imu-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/imu_test.py
+
+# Hardware bring-up: scan I2C, confirm the DS3231 RTC, read/optionally-set
+# time, watch it tick. See the file header for the power-cycle workflow —
+# that's the actual point, not just "does it respond on the bus."
+.PHONY: rtc-test
+rtc-test: _check-mpremote
+	$(MPREMOTE) run $(SRC_DIR)/rtc_test.py
+
+# Measure DS3231 drift against this Mac's clock, precisely enough to be
+# worth doing: it catches the seconds-register EDGE rather than reading the
+# register, which is what makes +/-2 ppm resolvable in hours instead of a
+# week. Appends to data/rtc-drift.jsonl (gitignored) -- run it once to set a
+# baseline, again later for a figure. Pass --mark-seed after re-setting the
+# chip, since that destroys the baseline.
+#   make rtc-drift UNIT=bottle-01                    (XIAO RP2350 defaults)
+#   make rtc-drift UNIT=bottle-01 ARGS="--mark-seed"
+#   make rtc-drift UNIT=bottle-01 ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+#   make rtc-drift ARGS="--history"                  every unit, no fit
+# ⚠ UNIT is REQUIRED to write, and has no default on purpose. A DS3231 has no
+# ID register, so the tool cannot tell two chips apart; a default would file
+# every chip under one name. That is how a second chip's sample landed in
+# bottle-01's fit (2026-09-29). Post-hoc fixes: data/rtc-drift-corrections.json.
+.PHONY: rtc-drift
+rtc-drift: _check-mpremote
+	$(PYTHON) scripts/rtc_drift.py $(if $(UNIT),--unit $(UNIT),) $(ARGS)
+
+# ⚠ WRITES the DS3231 — the only target that does. Seeding, verifying and
+# measuring are three different intents, and they used to share two scripts
+# plus a hand-edited flag (rtc_test.py's SYNC_DS3231_FROM_BOARD_RTC), which
+# you had to remember to set back. Forgetting meant every later run silently
+# overwrote the chip's kept time — destroying the one thing a DS3231 is for.
+# Now the destructive one has to be asked for by name.
+#   make rtc-seed     WRITES        make rtc-test  reads    make rtc-drift  measures
+# Full procedure, including checking the HOST clock first: runbook §5b.
+#
+# ⚠ `rtc --set` IS CHAINED INTO THE SAME mpremote INVOCATION, not left to a
+# separate `make set-time`. The board's own RTC is VOLATILE — it has no
+# battery, and any reset returns it to 2021-01-01. Run as two commands there
+# is a window between them, and on 2026-09-13 a board really did reset inside
+# it: set-time confirmed 2026-09-13 21:10, and the very next command read
+# 2021-01-01 00:00:04 — four seconds of uptime. The seed guard caught it and
+# refused, which is the system working, but the window should not exist.
+# One invocation, no window. The guard stays as defence in depth.
+.PHONY: rtc-seed
+rtc-seed: _check-mpremote
+	$(MPREMOTE) rtc --set run $(SRC_DIR)/rtc_seed.py
+
+# Set the board's RTC from this Mac's clock. Needed when TIME_SOURCE="rtc"
+# (no WiFi/NTP) — the only way to run a full unit on the XIAO ESP32-C3,
+# which can't fit esp_wifi alongside an app this size (docs/insights.md §11).
+# ⚠ The RTC survives a soft reset but NOT a power cycle — re-run after
+# unplugging. A DS3231 is the permanent answer (V2).
+.PHONY: set-time
+set-time: _check-mpremote
+	$(MPREMOTE) rtc --set
+	@$(MPREMOTE) rtc
+	@echo "✓ Device RTC set from host clock — re-run after any power cycle"
+
+# Is this board healthy enough to trust? Probes flash, filesystem and the
+# serial transport with disposable data, BEFORE real firmware goes on.
+# Crucially it separates a LOCAL write (device writes its own file) from a
+# TRANSFER (host sends one) — if local passes and transfer fails, the flash
+# is fine and the transport is at fault. That split was impossible all
+# through the 2026-08-24 corruptions, where every failure was seen through
+# a full upload with both in play. See docs/insights.md §13.
+.PHONY: doctor
+doctor: _check-mpremote
+	@MPREMOTE=$(MPREMOTE) $(PYTHON) scripts/board_check.py
+
+# Run the firmware STRAIGHT FROM THE HOST — zero flash writes.
+# `mpremote mount` serves micropython/ over the serial link as the device's
+# filesystem, so main.py and every module are read from your working copy.
+# Edit, Ctrl-C, re-run: no upload, no flash erase cycle, and therefore none
+# of the corruption risk that comes with writing (docs/insights.md §13).
+#
+# ⚠ The unit CANNOT run standalone this way — unplug the cable and there is
+# nothing on the board. Use `make upload` for a real unit. Reads are also
+# slower, since every import crosses the serial link.
+.PHONY: dev
+dev: _check-mpremote
+	@test -f schedules/$(STATION).json \
+		|| (echo "✗ schedules/$(STATION).json missing — run: make schedule" && exit 1)
+	@cp schedules/$(STATION).json $(SRC_DIR)/schedule.json
+	@MPREMOTE=$(MPREMOTE) SRC_DIR=$(SRC_DIR) bash scripts/dev.sh
+
 .PHONY: repl
 repl: _check-mpremote
 	$(MPREMOTE)
+
+# Lists + confirms + deletes vibration_*.json(l) / handling_*.json(l) files
+# left on-device by vibration_sandbox.py / handling_test.py sessions
+# (mpremote cp only copies them off, never deletes the originals — they
+# accumulate until flash fills up).
+.PHONY: clear-vibes
+clear-vibes: _check-mpremote
+	@MPREMOTE=$(MPREMOTE) bash scripts/clear_vibes.sh
 
 SCHEDULE_SOURCES := $(wildcard schedules/*.yaml)
 
@@ -111,6 +332,76 @@ schedule:
 	@for f in $(SCHEDULE_SOURCES); do \
 		$(PYTHON) scripts/convert_schedule.py $$f; \
 	done
+
+# Scan what is about to be published (diff + commit messages) for credentials
+# and personal details. The repo is PUBLIC. Personal terms live in the
+# gitignored .leakcheck-terms — see scripts/leakcheck.sh.
+.PHONY: leakcheck hooks
+leakcheck:
+	@scripts/leakcheck.sh $(if $(RANGE),--range $(RANGE),)
+
+# Enable the pre-push leak check for this clone (make setup does this too).
+hooks:
+	@git config core.hooksPath .githooks && echo "✓ core.hooksPath = .githooks"
+
+# Push this branch and open its PR against dev (see scripts/pr.sh header).
+#   make pr [BODY=file] [TITLE="..."] [BASE=main] [DRAFT=1] [YES=1]
+.PHONY: pr
+pr:
+	@BASE="$(BASE)" TITLE="$(TITLE)" BODY="$(if $(BODY),$(BODY),.pr-body.md)" DRAFT="$(DRAFT)" YES="$(YES)" scripts/pr.sh
+
+# Phase 0 of docs/imu-interaction-plan.md: run the real firmware from the Mac
+# with recording on, and label failures with one keypress. Streams to
+# data/interaction-<unit>-<time>.jsonl — nothing is written to the board's
+# flash. UNIT is required: a recording of an unnamed bottle is unusable later.
+#   make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [LEVEL=full|rate] [NOTE="..."]
+.PHONY: interaction-log
+interaction-log: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/interaction_log.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(LEVEL),--level $(LEVEL),) $(if $(NOTE),--note "$(NOTE)",)
+
+# The raw-sensor sandbox: stream accel + gyro at the sensor's rate and label
+# what you DID (taps, knocks, lifts, rests, tilts). Runs none of the firmware;
+# everything the firmware would decide is replayed on the Mac afterwards.
+#   make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=wood] [NOTE="..."]
+#                   [PROTOCOL=tap-vs-grab [REST=4] [START_AT=n]]   ← guided: the script cues each trial
+.PHONY: imu-record
+imu-record: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=...] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(GYRO_FS),--gyro-fs $(GYRO_FS),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(REST),--rest $(REST),) $(if $(START_AT),--start-at $(START_AT),)
+
+# Where do the stream's missing samples go? Five 8 s phases of the same poll
+# loop (no output / gc off / no allocation / printing b64 / printing text),
+# one summary line each. Diagnostic only; nothing recorded or flashed.
+.PHONY: imu-bench
+imu-bench: _check-mpremote
+	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/imu_bench.py
+
+# Phase 1: replay raw recordings through the REAL tap/tilt code on the Mac and
+# score its decisions against the labels. Every data/imu-*.jsonl marked
+# use:true in data/imu-sessions.json, unless FILES= is given.
+#   make replay [LOOP_HZ=57,139,240] [CSV=features.csv] [FILES="data/imu-....jsonl ..."]
+.PHONY: replay
+replay:
+	$(PYTHON) scripts/replay.py $(FILES) --loop-hz $(if $(LOOP_HZ),$(LOOP_HZ),57) $(if $(CSV),--csv $(CSV),)
+
+# The IMU pipeline with swappable blocks (scripts/sim.py): what ships fills
+# every slot; swap one block at a time and re-score on the same recordings.
+# sim-live runs it on the recording `make imu-record` is making right now —
+# start the recording, then this in a second terminal.
+#   make sim [DETECT=magnitude,vector] [ARBITER=capture,settle] [CLASSIFY=firmware,accept] [LOOP_HZ=240,145] [IDEAL=1] [FILES=...]
+#   make sim-live [DETECT=vector] [ARBITER=settle] [LOOP_HZ=145]
+.PHONY: sim sim-live
+sim:
+	$(PYTHON) scripts/sim.py $(FILES) $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(IDEAL),--ideal,)
+sim-live:
+	$(PYTHON) -u scripts/sim.py --follow $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(UNIT),--unit $(UNIT),)
+
+# Regenerate the committed, SYNTHETIC schedule template (public repo — the
+# example must not be anyone's real timetable). Deterministic.
+.PHONY: example-schedule
+example-schedule:
+	@$(PYTHON) scripts/make_test_schedule.py --example
 
 .PHONY: screen
 screen: _check-mpremote

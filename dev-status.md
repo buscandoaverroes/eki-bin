@@ -1,231 +1,154 @@
 # eki-bin — Dev Status
-_Updated manually. Running log of what's done, what's next, and open decisions._
+_What is true now, what is next, what is open. Rewritten 2026-09-29; the
+build-by-build history through V1.6 is frozen in
+`docs/archive/dev-status-history.md`._
 
 ---
 
-## Current phase: V1 firmware **feature-complete** → v1.2 ✅ **board checkpoint passed** → v1.1 (Qi)
+## Where we are
 
-V1 is a stable freeze point: full `time → LeaveSignal → DisplayContract → LEDs`
-pipeline, five display contracts, the animation/smoothing stack (gamma + dither +
-seamless clock), ~19 config knobs, and a host test suite guarding it. Remaining V1
-work is **tuning and in-jar validation**, not features.
+**The production unit runs and has been lived with.** XIAO RP2350 (no radio)
++ DS3231 + LSM6DSV16X IMU + 21-LED WS2812B strip in a brown glass bottle,
+powered over USB. Correct time from the RTC across power cycles; tap wakes and
+cycles **line**; tilt adjusts brightness; the display renders
+`ApproachContract` with per-line colour; day/night brightness; goodnight and
+morning ceremonies for "trains exist but none in reach". Firmware is split
+across eleven modules with no radio code. `make test` runs lint + 600+ host
+tests before every `make upload`. Wiring: `pinouts/v1.6-rp2350-production-unit.md`.
 
-**v1.2 — passed (2026-07-05)**: the XIAO ESP32-C3 runs the exact same firmware
-as the Pico 2W — `config.py` swap only (`LED_PIN=2`, `HEARTBEAT_PIN=None`), zero
-`main.py` changes beyond the already-landed board-abstraction knobs. WiFi
-connect, NTP sync, and the full display pipeline (`BreathingInverseContract`,
-schedule loading, urgency classification) all confirmed working. Board swap
-took under an hour, start to finish — the firmware's board-agnostic design held
-up under real hardware, not just in theory. Chip + lights now both physically
-fit inside the bottle (unsoldered) — the mechanical core of v1.1, proven ahead
-of the Qi coil arriving. Full writeup: `docs/roadmap.md`; pin mapping:
-`pinouts/xiao_esp32c3.md`.
+**Recent arc (Aug 22 → Sep 14):** DS3231 bring-up + integration → V1.6
+single-target split → colour is measured, not guessed (`insights.md` §12) →
+the light language: five motion words, tilt controller, palette checks,
+horizon ceremonies, crawl sandbox, `scatter` (`insights.md` §14–§21,
+`docs/contracts/light-language.md`).
 
----
+**The project's centre of gravity has moved** from "does it work" to "is it
+givable" and "is this the right costume". Two things follow.
 
-## V1 — MicroPython on Pico 2W
+## The walls between here and a givable bottle
 
-### ✅ Done
-
-- [x] MicroPython v1.28.0 flashed via picotool
-- [x] WiFi connection + NTP time sync working
-- [x] Schedule loaded from `schedule.json` on device filesystem
-- [x] Weekday/weekend detection (UTC→JST day boundary handled correctly)
-- [x] Urgency logic: `time_to_leave` → `classify` → `Urgency` (superseded the
-      original DIM BLUE / GREEN / AMBER / RED string model)
-- [x] Console output: heartbeat ●/○, timestamp, period, next 3 departures per direction
-- [x] `config.py` / `config.example.py` split (creds gitignored)
-- [x] Schedule pipeline: YAML (human) → `convert_schedule.py` → JSON (device)
-- [x] Makefile: `setup`, `flash-micropython`, `schedule`, `led-test`, `test`, `upload`, `run`, `screen`
-- [x] `make screen` with device auto-select / interactive picker (bash 3.2 compatible)
-- [x] Contracts documented: `schedule-json.md`, `config.md`, `display-contract.md`
-- [x] `CLAUDE.md` written for Claude Code handoff (Rust phase)
-- [x] Hardware memo: `docs/hardware.md`
-
-### ✅ LED integration (Steps 1–2 done; Step 3 in-jar tuning ongoing)
-
-**Step 1: Hello world blink (AE-WS2812B-STICK8)** ✓
-- [x] Wire stick to Pico 2W: VBUS→VCC, GND→GND, GP6→DIN
-- [x] Verify 3.3V signal drives stick reliably — works on breadboard
-- [x] `micropython/led_test.py` — colour cycle + fading chase; `make led-test`
-
-**Step 2: Integrate LED output into main.py** (architecture in `docs/contracts/display-contract.md`)
-- [x] Two-stage pipeline: `time → LeaveSignal → DisplayContract → LEDs`
-- [x] Stage 1: `time_to_leave` (subtract `WALK_TO_STATION_MINS`, drop uncatchable)
-      → `classify` → `Urgency` → `LeaveSignal` (pure, host-tested)
-- [x] Stage 2: `DisplayContract` strategy + working `SandTimerContract` (shrinking
-      arc, colour by urgency); update/render split via `frame_ms` + `phase_ms`
-- [x] Night gate: quiet hours (configurable; default 23:00–06:00, no LDR yet)
-- [x] Lift tuning to `config.py` via `getattr` defaults: brightness, walk time,
-      `URGENCY_THRESHOLDS`, `MINUTES_PER_LED`, `COLOR_SCHEME`, `CONTRACT`,
-      `LED_PIN`/`NUM_LEDS`, quiet hours (back-compatible — old config.py still works)
-- [x] Color schemes: `default` / `sunset` / `mono` selectable from config
-- [x] `ARC_ORIGIN` flag + `_physical()` HAL seam — flips the arc for an
-      upside-down strip without touching contracts (verified near→[0,1,2], far→[5,6,7])
-- [x] Animation primitives complete (phase/shape, envelopes, colour helpers,
-      `gamma`) — pure + host-tested; see layering diagram in `docs/contracts/display-contract.md`
-- [x] Five contracts: `sandtimer`, `color`, `breathing` (+ `_exponent` / `_inverse`)
-- [x] Smoothing stack: `gamma()` (perceptual curve) + temporal dithering (`DITHER`,
-      sigma-delta in `_paint`) for low-end banding — both config-driven + tested
-- [x] Seamless breath: envelope phase driven by the **absolute** `ticks_ms()` clock,
-      so it no longer snaps back to the floor each `LOOP_INTERVAL_SECS`
-- [x] All display tuning is config-driven (~19 knobs): `FRAME_MS`, `GAMMA`,
-      `BREATHE_PERIOD_MS`/`_FLOOR`, `DITHER`, palette, thresholds, arc geometry…
-
-_Remaining V1 (polish, not blocking a freeze):_
-- [ ] Tune `URGENCY_THRESHOLDS` / brightness / scheme in the brown jar (ongoing)
-- [x] ~~Two-train contract~~ — see **v1.3** below
-
-**Step 3: Validate in-jar (pre-solder)** — ongoing (findings in `docs/insights.md` §3, §5)
-- [x] Pico + stick placed in jar via ~10cm jumpers; brown jar = V1 reference
-- [x] Diffusion / colour UX assessed across clear / medium / thick jars
-- [ ] Dial in brightness + contract + scheme for the brown jar (live tuning)
-- [ ] Flip `ARC_ORIGIN` once mounting is decided (strip currently hangs upside-down)
-
----
-
-## V1.2 — Board Portability Checkpoint ✅ PASSED (2026-07-05)
-
-Full scope + exit criteria: `docs/roadmap.md`. Pin mapping: `pinouts/`.
-
-- [x] `HEARTBEAT_PIN` config knob — `Pin("LED")` was Pico-2W-only (CYW43 alias);
-      now board-configurable (GPIO number or `None`), console heartbeat unaffected
-- [x] `pinouts/` directory created — `pico2w.md` and `xiao_esp32c3.md`,
-      **both ✅ verified** against physical silkscreen (5V/GND/3V3/D10–D7 on the
-      XIAO's right side, D0–D6 on the left — read clockwise from top-right)
-- [x] USB-serial enumeration widened — `scripts/detect_port.sh` (shared by
-      `make screen` and the new `make flash-esp32-c3`) globs `usbmodem*` +
-      three common ESP32 USB-serial bridge prefixes, not just `usbmodem*`
-- [x] `make flash-esp32-c3` — esptool-based flash target for the XIAO (the Pico
-      target stays picotool-based; `esptool` added to `requirements.txt`).
-      Firmware in hand: a "preview" build (expected — no stable release yet)
-- [x] Flashed MicroPython, wired per `pinouts/xiao_esp32c3.md`, `make led-test`
-      confirmed the stick lights up on D0/GPIO2 (after fixing `led_test.py`'s
-      hardcoded `DATA_PIN` — it's a standalone bring-up script, deliberately
-      not config-driven; a one-line manual edit per board, by design)
-- [x] Caught a real footgun: `HEARTBEAT_PIN = "none"` (quoted string, not
-      Python's `None`) is truthy → `main()` would try `Pin("none", ...)` and
-      fail. Added `test_heartbeat_pin_not_a_null_like_string` to
-      `tests/test_real_config.py` — runs before every `make upload`
-- [x] `make upload` + `make run`: WiFi connected, NTP synced, full pipeline
-      confirmed live (`BreathingInverseContract`, schedule loading, urgency
-      classification `LEVEL 3` for `leave in [6.5, 9.5] min` — all correct)
-
-**Exit criteria met.** Zero `main.py` changes beyond the board-abstraction knobs
-landed during this checkpoint (`LED_PIN`, `HEARTBEAT_PIN`, `_heartbeat_pin()`,
-the widened USB glob) — everything else (Stage 1/2 logic, WiFi/NTP, NeoPixel)
-ported unchanged. Board swap, start to finish: under an hour.
-
-**Deferred, non-blocking** (optional polish, not required for v1.1):
-- [ ] Confirm/correct onboard-LED GPIO for XIAO C3 (not among the 14 broken-out
-      pins found on the silkscreen — `HEARTBEAT_PIN = None` is a perfectly fine
-      permanent choice for this board, not just a placeholder)
-
-**Next**: v1.1 proper — Qi coil (in transit) + reverse-diode + soldering the
-XIAO/stick into the bottle permanently. See `docs/roadmap.md`.
-
----
-
-## V1.3 — Multiple upcoming trains (firmware feature, no hardware)
-
-Motivated by a live UX pain point, not a nice-to-have: *"OK I won't make this
-next one, but what's the one after?"* Built while waiting on the Qi coil.
-
-- [x] `N_TRAINS` config (default `1` — original single-arc behaviour unchanged)
-      + `BACKGROUND_BRIGHTNESS` (geometric brightness falloff per train index)
-- [x] `_paint_layers(layers)` — new paradigm-independent compositing primitive;
-      `_paint` is now a single-layer convenience call into it. Zero changes to
-      Stage 1 (`LeaveSignal.ttls` was already a plain list — designed for this)
-- [x] Nested-band rendering: further-out trains extend a dimmer band beyond the
-      primary's arc (not separate/competing arcs — later trains always have
-      equal-or-longer arcs, so nesting is the natural composite). Same colour
-      across layers, per spec
-- [x] Wired into `SandTimerContract` and `BreathingContract` (+ its exponent/
-      inverse variants, via inheritance); `ColorContract` deliberately left
-      alone — no arc/length axis to layer a 2nd train onto
-- [x] Compositing is overlap-safe: verified the primary wins even when two
-      trains round to the *same* arc length (a real edge case, not just the
-      common monotonically-nested case)
-- [x] 7 new tests in `tests/test_multi_train.py` (falloff math, nested bands,
-      equal-extent overlap, `N_TRAINS=1` regression, short-`ttls` no-crash,
-      `ColorContract` correctly ignores it, breathing × layer-falloff composition)
-- [x] `docs/contracts/display-contract.md` given a proper pass while in there —
-      several stale references fixed (old primitive names, "stub" labels on
-      long-finished contracts, a leftover duplicated section, an outdated
-      tuning-knobs table missing half the real knobs)
-
-**Paradigm-independence, the actual design question**: every layer is a
-`(color, lit, mult)` tuple flowing through the *same* `_physical()` seam a
-single-train render already used — a ring or a randomized "cosmos" layout would
-only ever need to change `_physical()`, never this compositing logic. See
-`docs/contracts/display-contract.md` § Multiple trains.
-
-**Field-testing finding (see `docs/insights.md` §6)**: brightness-only
-differentiation (`BACKGROUND_BRIGHTNESS`) didn't hold up on real hardware —
-flicker at low dithered brightness + visible LED die instead of ambient glow,
-confirmed with both static and animated contracts. Resolved by building a new
-differentiation axis:
-
-- [x] `hue_rotate(color, degrees)` — new colour primitive (proper HSV
-      round-trip), preserves saturation/brightness, only shifts hue
-- [x] `ceiling` param added to all envelope functions (`breathe*`, `blink`,
-      `pulse`) — caps how bright a layer's peak can get, defaulting to `1.0`
-      (fully backward-compatible)
-- [x] `micropython/led_sandbox.py` — new general-purpose tool, `import main`s
-      the real primitives for fast side-by-side A/B comparisons on real
-      hardware without WiFi/schedule/the full loop
-- [x] **`EchoContract`** (`CONTRACT = "echo"`) — primary static/full brightness,
-      trains beyond it hue-shifted + gently breathing near-full brightness.
-      Genuinely new per-layer render logic (not expressible via the existing
-      uniform-per-layer modifier), composing existing primitives
-      (`_arc_len`, `breathe`, `hue_rotate`) rather than duplicating them
-- [x] New config: `SECONDARY_HUE_SHIFT_DEG` (20), `SECONDARY_BREATHE_PERIOD_MS`
-      (3000), `SECONDARY_BREATHE_FLOOR` (0.7) — kept separate from
-      `BreathingContract`'s own `BREATHE_*` knobs on purpose
-- [x] 6 new tests in `tests/test_echo_contract.py` + 6 more for `hue_rotate`/
-      `ceiling` in `test_primitives.py` (50 total, all passing)
-
----
-
-## V1.5 — Round PCB LED ring (still MicroPython)
-
-- [ ] Solder OSTW3535C1A SMD chips onto AE-27mm-TH round PCB in ring formation
-- [ ] Test 3.3V IO tolerance on OSTW3535C1A (spec min 3.5V — may need level shifter)
-  - If needed: 74AHCT125 buffer, 3.3V→5V, ~¥50 at Akizuki
-- [ ] Same GP6 data line — NeoPixel chain just gets longer
-- [ ] Fit round PCB into jar, secure with cork or mounting hardware
-
----
-
-> **Hardware roadmap** (v1.1 Qi/XIAO build, form-factor threads, standalone/NFC
-> power research, clock-paradigm notes): see `docs/roadmap.md`.
-
----
-
-## V2 — Rust (Embassy) on Pico 2W or ESP32-C3
-
-> Prerequisite: V1 hardware validated, all LED behaviours confirmed in MicroPython.
-> Migrate to Rust as a learning exercise. See `CLAUDE.md` for teaching directive.
-
-### Firmware rewrite targets
-
-- [ ] Embassy project scaffolding (`rust/` directory, `Cargo.toml`, `.cargo/config.toml`)
-- [ ] Blink onboard LED in Embassy (hello world)
-- [ ] WS2812B output via PIO (RP2350 has PIO; better than bit-banging)
-- [ ] Replace WiFi+NTP with DS3231 RTC over I2C
-- [ ] Deep sleep between updates (30s → `Timer::after` in Embassy)
-- [ ] Schedule as `const` arrays compiled in from JSON via `build.rs`
-- [ ] NFC (PN532) for schedule card reads and time sync taps
-- [ ] Magnetometer (QMC5883L) for orientation/mode selection
-- [ ] E-ink display (Waveshare 2.9") for departure time label
-
-### MCU decision (open)
-| Option | Pro | Con |
+| wall | state | doc |
 |---|---|---|
-| Stay on Pico 2W (RP2350) | Already have it; Embassy RP2350 support mature; PIO for WS2812B | WiFi chip different from final V2 concept |
-| Move to ESP32-C3 | Matches final design doc; smaller | Embassy ESP32 support less mature; no PIO |
+| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. Decided: a tap with a hand on the bottle doesn't count (design principle 18). Rest so far, 70 min over two days: **0 false taps** with the arbiter (3 without it, all sideways table bumps), so < 2.6/h. **Next: ~1.8 h more rest, in busier conditions**, then wire into `main.py`, deciding the ACK flash (vector detect makes it fire ~9/h at rest). | `docs/imu-interaction-plan.md` |
+| **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
+| **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
 
-**Tentative:** stay on Pico 2W for V2 Rust learning; migrate hardware later if needed.
+**The IMU resets itself — it's the wiring (2026-10-26).** The "asleep and
+cannot be woken" episodes were the LSM6DSV16X dropping back to power-on
+defaults while the board ran on, reading `(0,0,0)` with no error. `ImuWatch`
+now notices and re-configures. The guided session pinned the cause: 12
+resets in 11 minutes, all while the bottle was being handled, none during
+taps, 8 of 12 with the bottle leaning one way. A loose wire, fixed by the
+harness. The first rest session then reset once with the bottle untouched,
+so handling makes it frequent but isn't required.
+`docs/imu-interaction-plan.md` has the trail.
+
+And one *process* item that is not a wall but bites at the second unit:
+**a provisioning manifest** (§ below).
+
+## The form-factor fork (open, and it dissolves two walls)
+
+The LED strip is a good-for-now display, not the destination. The intended
+end state is the **chandelier** (`docs/chandelier-concept.md`): filament
+LEDs suspended in 3D — or a bird's-nest tangle of them — with everything in a
+neck/lid unit and **USB power from the top**. Reframing the object as a
+*lamp* (always on, on a cord) rather than a *bottle* (should be wireless and
+asleep) retires the battery wall, makes the lid-mounted harness natural, and
+lets the MCU run always-on models a battery build could never afford — so the
+IMU wall and the power wall trade off against each other.
+
+Nothing here is scheduled. What it changes *now*: **do not tune per-mount
+constants for the bottle-base IMU as if permanent** (cross-bottle tap accuracy
+is 0%, `insights.md` §8; a lid mount is a different signal). Fix the
+*state machine* — which transfers — before the *thresholds* — which do not.
+Design language and principles (`light-language.md`, `design-principles.md`)
+carry over; hue-dependent parts degrade gracefully by design (`insights.md` §17).
+
+Long-term but explicitly **2–3 versions out, not required for first
+givability**: NFC / sticker-book input (`docs/nfc-provisioning.md`).
+
+---
+
+## Next up
+
+**1. The interaction plan** — `docs/imu-interaction-plan.md`. Firmware only, no
+new hardware. Recorded ✓ (guided, `PROTOCOL=tap-vs-grab`) → simulator ✓
+(`make sim`, `make sim-live`) → vector detect + arbiter ✓ in simulation →
+hand-on-bottle decided ✓ → **rest-heavy sessions (~3 h in total) → wire
+into `main.py` behind `ARBITER_ENABLED` → a session in the bottle.** ML
+(MLC / ESN) is gated on the arbiter failing against recorded data, not
+scheduled.
+
+**2. Small, independent, cheap**
+- Re-test whether the RP2350's third onboard indicator can be turned off in
+  software (`insights.md` §13 concluded "no"; new information on 2026-09-14
+  suggests otherwise — start from `make onboard-led-test`,
+  `pinouts/xiao_rp2350.md`). The current answer is desoldering a part on
+  every unit before sealing it in glass.
+- Raise `DAY_BRIGHTNESS` on real glass (the day/night profile ships flat).
+  Seasonal drift still needs day-of-year, which `local_time()` discards.
+- `--unit` flag on `scripts/rtc_drift.py` (see manifest, below).
+
+**3. Hardware track, gated on parts and on the form-factor fork**
+- Bottle-mouth measurement (serves the harness *and* the battery holder).
+- Strip load switch + battery pack, *if* the bottle stays wireless.
+- Forward-voltage measurement for filaments (`hardware.md` § Filament array)
+  — the gate on the chandelier.
+
+## Two things that need a conversation before code
+
+### A wiring harness
+Fixing the IMU to the base took ~20 minutes, nearly all managing loose wires
+through the mouth. The battery build adds a pack, a load switch and a gated
+rail through the same opening. The chandelier/lid form fixes it by
+construction (assemble outside, lower in) — which is also the roadmap's
+"cork-mounted sensor cluster". Constraint shared with the battery holder: the
+bottle-mouth measurement. Side effect to plan for: moving the IMU changes the
+tap signal; expect to re-collect.
+
+### A provisioning manifest
+Multiple DS3231s exist and nothing distinguishes them (no unique-ID register,
+no user SRAM). **The hazard happened, probably on 2026-09-29:** a chip seeded
+2026-09-13 (never recorded) was sampled into bottle-01's history, which made
+its drift appear to double (−0.52 → −0.97 ppm). Caught 2026-10-21 by a
+reading 0.87 s off the constant-rate prediction. **`--unit` is now required
+to write** (`make rtc-drift UNIT=bottle-01`), summaries are per unit, and the
+inferred seed lives in `data/rtc-drift-corrections.json` at confidence 0.7 —
+the log itself untouched. Write-up: `docs/rtc-drift-theory.md` § "A seed you
+didn't record". The flag makes the unit *asserted*, not *verified*: the tool
+still cannot tell two chips apart. The larger answer is still a record per
+physical unit — `docs/gift-registry.md` (proposal, not built). It must also
+hold `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, IMU mount location,
+`TAP_ENERGY_THRESHOLD` — per-unit facts established by hand, not derivable
+from code.
+
+---
+
+## Parked, with a reason
+
+- **On-board ML for gestures** (ESN, MLC decision trees, a piezo disc) —
+  `docs/on-board-detection.md`. Ranked *after* the arbiter and the gyro,
+  because the failures being hit are composition bugs. The one new argument
+  from the form-factor fork: with USB power, always-on inference becomes
+  affordable. Still needs recorded data and per-unit calibration first.
+- **Clock mode** — verification variant first (blink the digits); the ambient
+  "solar dial" waits on the vessel/mount decision.
+- **Glass stone on a stand (eki-ishi)** — `docs/glass-stone-concept.md`. A
+  parallel form-factor proposal; the chandelier now competes with it for
+  "what's the real destination".
+- **NFC provisioning** — on hold; candidate path (USB reader + `nfcpy` writing
+  NTAG stickers) unverified. A timetable does not fit on an NTAG sticker
+  (`nfc-provisioning.md` §8.6a). See above: later versions.
+- **Repo hygiene** — branch protection on `main`, a CI workflow running
+  `make schedule` then `make test`, pruning ~20 stale local branches.
+  Tabled to do comprehensively in one go.
+- **V1.5 round PCB ring** — needs a level-shifter test (OSTW3535C1A wants
+  ≥3.5 V logic). Superseded in spirit by the chandelier; revive only if a ring
+  form is chosen.
+- **Rust / Embassy V2** — the learning goal, unstarted. Module boundaries from
+  the V1.6 split are the crate boundaries. RP2350 is now the target board
+  (it is the production board). Embedded Swift/Matter is the competing
+  candidate (solves provisioning via the Home app; experimental toolchain).
 
 ---
 
@@ -233,24 +156,35 @@ differentiation axis:
 
 | Decision | Status | Notes |
 |---|---|---|
-| Level shifter for OSTW3535C1A | ⏳ test first | 3.3V may work in practice |
-| Jar form factor | ⏳ leaning thick+coloured | Brown jar = V1 reference; clear/medium read badly (see `docs/insights.md` §3) |
-| Cork vs screw cap | 🔲 open | Cork aesthetic; screw cap practical for access during dev |
-| LED direction / HAL abstraction | 🔲 open | Logical arc origin + reverse; full `led_drivers/` HAL deferred to ring arrival (`docs/insights.md` §4) |
-| Multi-train modality | 🔲 open | Spare LEDs show 2nd-closest train; data already in `LeaveSignal.ttls` |
-| MCU for V2 | ⏳ tentatively Pico 2W | See above. ESP32-C3 now in hand for v1.1/v1.2 (MicroPython) — real board-portability data from that checkpoint may inform this, though V2 Rust/Embassy support maturity is the separate deciding factor |
-| E-ink source in Japan | 🔲 open | Waveshare 2.9" on Amazon.co.jp; flex version TBD |
-| Station card storage | 🔲 open | Dish / card holder / pinned to noticeboard |
+| Form factor: strip-in-bottle vs chandelier vs glass stone | 🔲 open — leaning chandelier | See above. Gated on filament forward-voltage measurement and the IMU work |
+| Vessel | 🔲 open | Thick brown is best-looking and most limiting (2–3 hues). `insights.md` §12 |
+| Tilt: always-on sense vs. a mode entered by a gesture | 🔲 open, in the plan | `docs/imu-interaction-plan.md` §4 |
+| Multi-line schedule memory: hold all vs load one | 🔲 deferred | Measured: ~21 KB JSON for 3–4 lines vs 8 KB for one. Fine on RP2350 (492 KB free); revisit if lines grow. Measure with `gc.mem_free()`, don't estimate |
+| Cork vs screw cap | 🔲 open | Moot if the unit lives in a lid |
+| LED direction / HAL abstraction | 🔲 open | `_physical()` seam exists; full `led_drivers/` deferred until a new display arrives (`insights.md` §4) |
+| E-ink / station-card storage | 🔲 open, low | Not on the path to first givability |
+
+**Resolved since the old table** (kept out of the live list): board upgrade
+(RP2350 chosen and shipped), DS3231 (integrated), WiFi memory headroom
+(retired — the radio is gone), multi-train modality (`N_TRAINS`, shipped),
+Qi viability and full-brightness ceiling (`hardware.md`), NFC iOS-app rows
+(moot while on hold). History: `docs/archive/dev-status-history.md`.
 
 ---
 
 ## Known issues / notes
 
-- `OSTW3535C1A` IO voltage min is 3.5V; Pico outputs 3.3V. Test before assuming compatibility.
-- WiFi creds in `config.py`: gitignored plaintext, edited by hand (or on-board via Thonny). Encrypted/vault storage tabled for V1 — acceptable for a single-user device with no secure enclave.
-- Schedule JSON is gitignored (generated from YAML). CI would need to run `make schedule` first.
-- No soldering iron yet — V1 hardware is breadboard-only until that changes.
-- **Quiet hours gotcha:** after `QUIET_START_HOUR` (default 23:00) the strip is dark by design — looks identical to a bug. The loop now prints `(quiet hours — display off)`; to test at night set `QUIET_START_HOUR=24, QUIET_END_HOUR=0`. Regression-tested in `tests/test_quiet_hours.py`.
-- Host test suite in `tests/` (`make test`, runs before `make upload`). Covers Stage 1, render geometry, primitives, quiet hours, and validates the real `config.py` selectors. Physical/brightness/diffusion behaviour is **not** unit-testable — that stays a hardware judgement call.
-- LED strip hangs **upside-down** inside the jar (jumpers from breadboard) — fine for testing, needs the LED-direction abstraction before a real unit.
-- REPL poking via `make screen` lands in a fresh namespace; use `import main` (not bare names). `main.py` is the boot script so it auto-runs the loop — consider a `scratch.py` for visual iteration.
+- ⚠ **XIAO RP2350 needs firmware newer than 2026-04-06**, or its filesystem is
+  sized past the physical flash and littlefs corrupts silently. `make doctor`
+  fails such a board. `insights.md` §13.
+- `schedules/*.json` is gitignored and generated; CI would need `make schedule`
+  before `make test`.
+- WiFi creds / `config.py` are gitignored plaintext. Never read `config.py`.
+- **Quiet-hours gotcha:** after `QUIET_START_HOUR` the strip is dark by design
+  and looks identical to a bug. To test at night set `QUIET_START_HOUR=24,
+  QUIET_END_HOUR=0`.
+- **The display cannot say "a train exists, just not near enough"** — *fixed*
+  by goodnight/morning ceremonies (`horizon.py`, `insights.md` §17–§18).
+- Host tests cover logic, not brightness/diffusion/feel. Those stay a hardware
+  judgement call.
+- REPL poking via `make screen` lands in a fresh namespace; use `import main`.

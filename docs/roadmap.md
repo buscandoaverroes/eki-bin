@@ -7,17 +7,16 @@ threads. Complements `dev-status.md` (near-term what/next) and `docs/concept.md`
 
 ---
 
-## Current State
+## Current State (2026-09-29)
 
-- **v1 architecture**: Pico 2 W (MicroPython) on breadboard, sitting outside the
-  bottle on a shelf, connected via jumper wires to an AE-WS2812B-STICK8 LED strip
-  inside the bottle. WiFi + NTP for time sync.
-- **Working now**: schedule loading, urgency classification (`LeaveSignal`),
-  display-contract pipeline, config-driven tuning, colour schemes, quiet hours,
-  animation primitives (breathing, gamma) + host test suite.
-- **Verdict on v1 as-is**: genuinely fine to keep running as the dev/proof-of-
-  concept rig. "MCU outside, only lights inside" is a legitimate way to keep the
-  dev loop fast — sequencing the constraints, not cheating them.
+- **Production unit:** XIAO RP2350 + DS3231 + IMU + 21-LED strip in a brown
+  glass bottle, USB-powered, no radio. Runs `ApproachContract` with tap-to-cycle
+  lines, tilt brightness, ceremonies. See `dev-status.md`.
+- **What stands between it and givable:** the tap/tilt interaction problem, a
+  wiring harness, and power — and the form-factor fork (strip-in-bottle vs
+  chandelier) that could dissolve the last two.
+- The v1 Pico-on-breadboard rig and the v1.1 XIAO C3 + Qi build below are
+  historical stages, kept for their findings.
 
 ---
 
@@ -44,7 +43,7 @@ Treated as **separate parallel research threads**, not sequential steps.
 
 ---
 
-## Immediate Next Step: v1.1 (Qi-powered, in-bottle, WiFi retained)
+## v1.1: Qi-powered, in-bottle — ✅ confirmed 2026-07-13 (historical spec)
 
 **Goal**: kill the visible wire, keep everything else the same. Always-on
 lighting (no LiPo in the main power path).
@@ -91,74 +90,12 @@ board-portability checkpoint** below validates before the Qi work lands.)
 
 ## v1.2 — Board Portability Checkpoint ✅ PASSED (2026-07-05)
 
-**Goal**: prove the firmware runs identically on the XIAO ESP32-C3 *before* the
-Qi power-path work lands, so integrating Qi isn't also a first-time board
-bring-up. Scoped narrowly on purpose — if something breaks during v1.2, it's
-unambiguously a board/firmware issue, not tangled with power changes.
-
-**Result**: passed, start to finish in under an hour. `make upload` + `make run`
-on the XIAO — same `main.py`, `config.py` swap only (`LED_PIN=2`,
-`HEARTBEAT_PIN=None`) — connected to WiFi, synced NTP, and ran the full
-`time → LeaveSignal → DisplayContract → LEDs` pipeline correctly
-(`BreathingInverseContract`, `LEVEL 3` urgency for a real schedule, correct ring
-direction). Two real bugs surfaced and got fixed along the way (see below) —
-neither was a firmware-logic problem, both were config/tooling gaps, exactly as
-the narrow scoping was meant to isolate. Chip + LED stick now both physically
-fit inside the bottle (unsoldered) — the mechanical core of v1.1, proven ahead
-of the Qi coil's arrival.
-
-- **Same rig, board swap only**: same breadboard, same LED stick, swap
-  Pico 2W ↔ XIAO C3, swap only `config.py`. Confirm WiFi connect, NTP sync, and
-  visual output via the active `DisplayContract` are indistinguishable.
-- **Explicitly out of scope**: Qi coil, diode, second LED strip — anything
-  power-path. That's v1.1 proper, after this checkpoint passes.
-- **Mechanical approach**: no soldering yet — spring-loaded test clips / pogo-pin
-  grabbers on the XIAO's castellated pads, reversible. A second XIAO C3 as a
-  sacrificial dev unit is cheap insurance if clip leads prove fiddly enough that
-  soldering starts to look necessary.
-- **Structure**: one shared `main.py` (unchanged), one `config.py` per board
-  swapped in by hand at upload time — **not** a `boards/` directory, and `upload`
-  /`run`/`screen`/`led-test` stay untouched (they go through `mpremote`, which is
-  already board-agnostic). The one genuinely new Makefile target is
-  `flash-esp32-c3` — firmware flashing is the one step that *is* board-specific
-  (ESP32 uses a serial bootloader via `esptool`; the Pico uses `picotool` +
-  mass-storage `.uf2`), so it gets an explicit second target rather than an
-  auto-detecting one. This is a temporary two-board swap to *retire* the Pico rig
-  once the XIAO is validated, not an ongoing multi-rig setup; a `boards/`
-  directory is worth building only if a third board or a genuinely different
-  display type shows up and ≥2 rigs need to stay alive long-term (same reasoning
-  as deferring the LED `led_drivers/` HAL until the ring hardware actually
-  arrives — see `docs/insights.md` §4).
-- **Two things likely to surprise you, neither a firmware bug**:
-  - ~~`scripts/select_port.sh` only globs `/dev/cu.usbmodem*`~~ — **fixed**:
-    port detection now lives in `scripts/detect_port.sh` (shared with
-    `flash-esp32-c3`), globbing `usbmodem*`, `wchusbserial*`, `SLAB_USBtoUART*`,
-    and `usbserial*`. Still worth an `ls /dev/cu.*` with the board plugged in to
-    confirm which prefix it actually uses.
-  - WS2812B timing is port-specific under the hood (RP2 uses PIO; ESP32 typically
-    uses RMT) — same `neopixel` API, different signal-generation backend. **Turned
-    out to be a non-issue**: the stick lit up correctly on GPIO2 on the first try,
-    even on a "preview" (non-stable) firmware build — no colour/timing glitches.
-  - `micropython/led_test.py` is **not** config-driven (`DATA_PIN` is a hardcoded
-    module constant) — **this one did bite**: `make led-test` "succeeded" with no
-    error while silently driving the wrong physical pin (`DATA_PIN` was still `6`,
-    which is D4/SDA on the XIAO, not the D0/GPIO2 wired to DIN). No LEDs, no
-    error message — the giveaway was that identical, unmodified code "worked" on
-    the Pico only because `6` happened to coincide with its real wiring. Fix:
-    hand-edit `DATA_PIN` per board — deliberately not made config-driven, since
-    this is a one-off bring-up script, not part of the pipeline.
-
-**A second bug, not predicted in advance**: `HEARTBEAT_PIN = "none"` (a quoted
-string) is truthy, so `main()` tried `Pin("none", Pin.OUT)` instead of treating
-it as Python's `None`. Caught by `tests/test_heartbeat_pin_not_a_null_like_string`
-in `tests/test_real_config.py`, which now runs before every `make upload`.
-
-**Exit criteria — met**: XIAO C3, its own `config.py`, zero `main.py` changes
-beyond the board-abstraction knobs that landed during this checkpoint
-(`LED_PIN`, `HEARTBEAT_PIN`, `_heartbeat_pin()`, widened USB-serial glob),
-connected to WiFi, synced NTP, and rendered the active `DisplayContract`
-indistinguishably from the Pico 2W. Ready to receive the Qi coil and move into
-v1.1's power-path integration without a board-bring-up variable in the mix.
+XIAO ESP32-C3 ran the identical firmware via a `config.py` swap only (under an
+hour). It proved **pin** assignments abstract across boards; it did *not* prove
+**capability** differences do (no radio is a different program shape — that was
+V1.6). Full log, including the `HEARTBEAT_PIN = "none"` and hardcoded
+`led_test.py` `DATA_PIN` footguns:
+`docs/archive/dev-status-history.md` § V1.2. Pin maps: `pinouts/`.
 
 ---
 
@@ -179,6 +116,64 @@ where a (possibly annular) Qi coil would sit anyway.
 
 ## Hard Variant: Standalone / Battery-Only — Open Problems
 
+### Battery power — the arithmetic (2026-08-25)
+
+Modelled in `scripts/power_budget.py`. Run it rather than trusting the
+numbers below; every unmeasured input is marked ESTIMATE in the file.
+
+**The finding that decides the whole question: a WS2812B draws current when
+it is BLACK.** Each pixel's constant-current driver IC is powered whenever
+VDD is present, regardless of the colour latched in — roughly 0.7-1.0 mA
+each. Twenty-one of them is **~17 mA continuously, displaying nothing.**
+
+| configuration | idle | per day | 3× AA alkaline |
+|---|---|---|---|
+| strip permanently powered | **17.8 mA** | 504 mAh | **4 days** |
+| strip on a load switch | 1.0 mA | 126 mAh | 16 days |
+| + `AWAKE_MINUTES` 15→3, 4 taps/day, 2 lit | 1.0 mA | 36 mAh | **55 days** |
+
+So a battery build **requires a P-MOSFET or load-switch IC cutting VDD to
+the strip while idle.** That is not an optimisation, it is the difference
+between four days and two months. (It also explains something already
+observed: an unaddressed strip browned out the board — `insights.md` §13.
+Same root cause, the strip draws on its own terms.)
+
+**The second-largest lever is `AWAKE_MINUTES`, and it is free.** 15 → 3
+minutes is +181% runtime, larger than any hardware change available. A tap
+means "am I about to leave?", and that question is answered in well under
+three minutes. Worth revisiting even on a mains-powered unit.
+
+By contrast, MCU sleep current is worth only ~19% across a 10× improvement,
+and lit-pixel count ~14%. **Effort spent chasing deep-sleep microamps is
+misallocated** until the strip is gated and the wake window is short.
+
+**Voltage constrains the pack.** WS2812B wants ≥3.5 V, so 2× cells is out
+without a boost converter. 3× alkaline (4.5 V fresh, sagging to ~3 V) or
+4× NiMH (4.8 V) are the practical arrangements — and NiMH's flat discharge
+curve suits a fixed-threshold load better than alkaline's slope.
+
+**What this buys beyond runtime**, which is the actual argument: Qi needs a
+flat bottom (roughly 1 bottle in 5 qualifies), and a cable needs either a
+cord out the top or a hole drilled in glass — no local fab has the tooling.
+**Batteries free the vessel choice entirely**, which the colour work
+(`insights.md` §12) has just made a first-class design variable rather than
+a detail.
+
+Cells fit through the mouth of even a narrow bottle and can be daisy-chained;
+inverting the jar drops the pack out for replacement, needing no fixture.
+The DS3231 keeps its own coin cell, so **the clock survives every pack
+change** — which is what makes a months-long replacement interval tolerable
+rather than a re-provisioning event.
+
+### ⚠ Qi concern worth testing, not dismissing
+
+Observed: the transmitter appears to keep delivering power with the MCU
+asleep, and the giving side heats the glass noticeably. Neither is surprising
+— Qi transmitters ping continuously to detect a receiver, and coupling losses
+become heat — but the long-term effect of sustained local heating on glass,
+and on a coin cell sitting inside, is untested. **Not a reason to abandon Qi;
+a reason to run a multi-day thermal test before committing a gift to it.**
+
 ### Power
 - **PN532 is the wrong NFC chip for battery** — ~100 mA standby (not a typo),
   dropping to µA only via finicky power-down/wake. For "passively wait for a tap
@@ -196,27 +191,14 @@ where a (possibly annular) Qi coil would sit anyway.
 
 ### Givability / Onboarding (the actually hard problem)
 Giving the jar to a friend: they'd need to (a) load a station schedule, (b) sync
-time once — both **without an app.**
-
-**Resolution direction (worth prototyping next)**:
-- **iOS Shortcuts has a built-in "Set NFC Tag" action** — writes plain text/URL
-  NDEF natively, no third-party app. Plausibly covers:
-  1. **Station data transfer** — high confidence, standard use.
-  2. **Time sync** — same action writing a Unix timestamp. *Lower confidence*:
-     needs the *jar* to present as a writable NFC target (tag-emulation on the
-     reader chip). **Flagged as the one thing to test early on real hardware.**
-  3. **Direct settings editing** (brightness, pattern — currently `config.py`) —
-     one Shortcut branching to JSON payloads tagged by a `type` field.
-- **Android**: Web NFC — a browser API, tap-to-write from a page, no install.
-- **Ideal omiyage flow**: *"Here's the bottle, and this Shortcuts file if you want
-  to change settings — tap the time one once a year."* No app/account/dev env.
-- **Softer fallback**: giver pre-loads station cards before gifting (like a
-  preloaded gift card); recipient never writes a tag. Given <1 min/yr drift, time
-  correction may not need solving within a gift's lifespan.
-
-**Next concrete step**: get an LPCD-capable reader (CLRC663 plus or ST25R391x),
-confirm low idle current in practice, and test whether an iPhone Shortcut can
-*write into it* (tag-emulation) — the crux of the no-app plan.
+time once. The DS3231 removed the time-sync half of this. The schedule half is
+the NFC workstream — **on hold and explicitly 2–3 versions out**; first
+givability ships with a pre-loaded schedule (like a preloaded gift card).
+The no-app "iOS Shortcuts" idea was ruled out on the bench (Shortcuts has no
+NDEF content read/write action, and generic NDEF breaks on the ISO-15693 tag).
+Bench record and the current candidate path: `docs/nfc-provisioning.md`. The
+LPCD-reader research (CLRC663 plus, ST25R391x) is a separate, later variant for
+a fully-encapsulated build.
 
 ---
 
@@ -248,6 +230,46 @@ confirm low idle current in practice, and test whether an iPhone Shortcut can
 | E-ink (existing plan) | ~0 W | 3–5 mA for 0.3–1.5 s/refresh | ~10-min partial-refresh cadence is fine on a coin cell (~2 yr) *if* true partial refresh (not full-flash) |
 | **Sharp Memory LCD (LS013B7DH03)** | 5–60 µW static | 15 µW at 1 Hz | 1.28", 128×128, 3 V, FPC. No flash on update (unlike e-ink), updates frequently. Specific serial protocol + COM toggle — more setup than e-ink |
 | Lavet stepper + dial | ~0 between steps | µJ/step | Most literally "analog metaphor"; most fun to build |
+| **Filament LED array** | n/a (lit) | continuous PWM | Not a drop-in — a filament is *one* light. Full design, cross-fade maths and the step-zero forward-voltage measurement already written up: `docs/hardware.md` § "Filament array" |
+
+### The chandelier — a display with no orientation (2026-09-14)
+
+Filament LEDs twisted into a suspended 3D form inside a larger bottle. The
+culmination of design-principle #6 ("the object has no front"): not a
+better mapping of time onto a line, but a display with no line to map
+onto. Wired and always-on, which removes the wake/sleep model and turns a
+tap from "wake" into "tell me more".
+
+Needs no change to stage 1 — a new `DisplayContract` emitting (count,
+temperature) rather than (position), which is the two-stage split earning
+its keep on exactly the case it was designed for.
+
+Gated on `hardware.md`'s forward-voltage measurement, and downstream of
+the IMU work. Full write-up: `docs/chandelier-concept.md`.
+
+### Hiding a display behind the label (2026-09-04)
+
+A rigid rectangular display is the hardest thing to reconcile with design
+principle #2 ("the reveal only works when the technology is hidden by the
+material") — glass shows it for exactly what it is. **Except where a label
+already is.** The label is a pre-existing opaque rectangle on an otherwise
+organic vessel, socially invisible because every bottle has one, and it is
+the one place a screen can sit without reading as a gadget bolted to a jar.
+
+Two ways to use it, and they are very different products:
+
+- **Behind, shining through** — a bright segment/matrix display whose *light*
+  penetrates the label while the display body stays hidden. Needs a
+  translucent-enough label stock and enough brightness to survive it; the
+  payoff is that it still reads as glowing glass.
+- **As the label** — an e-ink or Memory LCD sized and framed to *be* the
+  label. Sharper, far lower power, but it stops being "light in glass" and
+  becomes a small screen on a bottle. Whether that's a different product or
+  the same one is a real fork, not a detail.
+
+Untested. Cheapest falsification is the label stock, not the display: hold
+any bright LED behind the actual label and see whether legible structure
+survives it.
 
 ---
 
@@ -265,11 +287,24 @@ confirm low idle current in practice, and test whether an iPhone Shortcut can
 
 ## Open Questions / Next Experiments (priority order)
 
-1. ~~**v1.2 board-portability checkpoint**~~ — ✅ **passed 2026-07-05.**
-2. **v1.1 build**: swap breadboard USB power for the Qi module, everything
-   inside the bottle. *(Now next — waiting on the Qi coil to arrive.)*
-3. **NFC chip test**: get an LPCD-capable reader; confirm low idle current; test
-   whether an iPhone Shortcut can *write into it* (tag-emulation). Crux of the
-   no-app givability plan.
-4. Prototype the stepper-hand clock branch — independent, can run in parallel.
-5. Custom PCB for the cork-mounted sensor cluster — later, once Qi/NFC validated.
+> Live status is `dev-status.md`. This list is the *hardware* ordering.
+
+1. **Interaction: tap + tilt coexistence** — firmware, no hardware.
+   `docs/imu-interaction-plan.md`. Blocks calling any unit givable.
+2. **Wiring harness / lid-mounted unit** — conversation before code. Assemble
+   outside the vessel, lower in. Shares the bottle-mouth measurement with the
+   battery holder. Custom PCB for the cork/lid-mounted sensor cluster follows.
+3. **Form-factor fork: bottle vs chandelier** — `docs/chandelier-concept.md`.
+   A USB-powered lamp form dissolves the battery/Qi wall (see below) instead of
+   engineering it away, and makes always-on sensing affordable.
+4. **Battery + strip load switch** — only if the unit stays a wireless bottle.
+   `docs/shopping-battery-power.md`.
+5. **Provisioning manifest** — a record per physical unit.
+   `docs/gift-registry.md`.
+6. **NFC / sticker-book input** — 2–3 versions out, not needed for first
+   givability. `docs/nfc-provisioning.md`.
+7. **Stepper-hand clock branch** — independent research thread, can run in
+   parallel.
+
+Done: ~~v1.2 board portability~~ (2026-07-05), ~~v1.1 Qi power path~~
+(2026-07-13; one caveat — full-brightness headroom — in `hardware.md`).

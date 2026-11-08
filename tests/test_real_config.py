@@ -62,3 +62,32 @@ def test_numeric_ranges_sane():
     for attr in ("QUIET_START_HOUR", "QUIET_END_HOUR"):
         if hasattr(cfg, attr):
             assert 0 <= getattr(cfg, attr) <= 24
+
+
+def test_geometry_fits_the_configured_strip(load_main):
+    """ANCHOR_INDEX/ARM_*_LEN must fit NUM_LEDS in the REAL config.py.
+
+    `make upload` runs `make test` first, so this stops a broken geometry
+    reaching hardware. It exists because the failure is so badly signposted:
+    on 2026-08-23 a 21-LED geometry on an 8-LED strip booted cleanly, read
+    the right time, printed the right timetable, and only then died with a
+    bare `IndexError: list index out of range` three calls deep in the
+    render loop. Nothing in that pointed at config.py.
+
+    Only checked for ApproachContract — it is the sole consumer of the
+    anchor/arm geometry, so a mismatch is harmless under an arc contract.
+    """
+    cfg = _real_config()
+    m = load_main()
+    if getattr(cfg, "CONTRACT", None) != "approach":
+        pytest.skip("geometry only applies to ApproachContract")
+    n = getattr(cfg, "NUM_LEDS", None)
+    if n is None:
+        pytest.skip("NUM_LEDS not set in config.py")
+    problems = m.geometry_problems(
+        num_leds=n,
+        anchor=getattr(cfg, "ANCHOR_INDEX", 0),
+        arm_a=getattr(cfg, "ARM_A_LEN", n - 1),
+        arm_b=getattr(cfg, "ARM_B_LEN", 0),
+    )
+    assert problems == [], "config.py geometry doesn't fit: " + "; ".join(problems)

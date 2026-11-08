@@ -1,0 +1,783 @@
+# micropython/settings.py — eki-bin
+# Every value main.py reads out of config.py, with its default, in one
+# place. Extracted verbatim from main.py during the V1.6 split
+# (docs/v1.6-refactor.md) — the code below was MOVED, not rewritten.
+#
+# Everything else imports from here, so this module must depend on nothing
+# but `config` itself. Keep it that way: the moment settings.py imports a
+# sibling, the extraction order in the runbook stops working.
+#
+# ⚠ TRANSITIONAL: main.py currently does `from settings import *` so the
+# 265 host tests, which reach into `main.X`, keep passing unchanged while
+# the rest of the split happens. That re-export is deliberate and temporary
+# — see the runbook's "one rule that keeps this safe". Tightening it is the
+# LAST step of V1.6, not an improvement to make early.
+#
+# Note `import *` does not export underscore-prefixed names, so
+# _UTC_OFFSET_APPLIED is imported explicitly by main.py.
+
+import config
+
+# ─────────────────────────────────────────────────────────────
+# Settings (from config.py)
+# ─────────────────────────────────────────────────────────────
+# WiFi creds are required only when TIME_SOURCE = "wifi" (the default), so
+# they can't be a hard `config.WIFI_SSID` any more — a deliberately
+# WiFi-free unit (TIME_SOURCE="rtc", the only way to run on the XIAO
+# ESP32-C3; see docs/insights.md §11) has no reason to carry credentials,
+# and a bare attribute read would AttributeError at import before main()
+# could explain why. Default to None and let connect_wifi() do the
+# complaining, where there's an LED path to complain THROUGH.
+WIFI_SSID = getattr(config, "WIFI_SSID", None)
+WIFI_PASS = getattr(config, "WIFI_PASS", None)
+
+# Everything else is optional with a default. getattr(config, "NAME", default)
+# returns the default when the field is absent, so a config.py written before a
+# knob existed keeps working — you only add the lines you want to override.
+UTC_OFFSET_HOURS = getattr(config, "UTC_OFFSET_HOURS", 9)
+LOOP_INTERVAL_SECS = getattr(config, "LOOP_INTERVAL_SECS", 30)
+SCHEDULE_FILE = getattr(config, "SCHEDULE_FILE", "schedule.json")
+
+# Which trains
+DISPLAY_DIRECTION = getattr(config, "DISPLAY_DIRECTION", "b")
+DISPLAY_DIRECTION_B = getattr(config, "DISPLAY_DIRECTION_B", None)  # phase 2 —
+#   bidirectional ApproachContract only. Set to a SECOND schedule.json
+#   direction key (DISPLAY_DIRECTION feeds arm "a", this feeds arm "b") to show
+#   one train per arm. None (default) = single-direction, phase 1 unchanged.
+#   Ignored entirely by every other contract (see render_for_interval()).
+WALK_TO_STATION_MINS = getattr(config, "WALK_TO_STATION_MINS", 2.5)
+# [→ NFC] WALK could later be read from the station card, not config.
+
+# Display — hardware (changes with the physical strip: stick=8, ring=12)
+LED_PIN = getattr(config, "LED_PIN", 6)
+NUM_LEDS = getattr(config, "NUM_LEDS", 8)
+ARC_ORIGIN = getattr(config, "ARC_ORIGIN", "near")  # "near" = DIN end (index 0) is
+#   the arc origin; "far" = the other end. Logical, not physical — flip this when
+#   the strip ends up mounted upside-down, without touching any rendering code.
+
+# Display — look & feel
+BRIGHTNESS = getattr(config, "BRIGHTNESS", 0.15)
+CONTRACT_NAME = getattr(config, "CONTRACT", "sandtimer")
+COLOR_SCHEME = getattr(config, "COLOR_SCHEME", "default")
+MINUTES_PER_LED = getattr(config, "MINUTES_PER_LED", 1)
+URGENCY_THRESHOLDS = getattr(config, "URGENCY_THRESHOLDS", (2, 5))
+GAMMA = getattr(config, "GAMMA", 2.2)  # perceptual brightness curve (see gamma())
+BREATHE_PERIOD_MS = getattr(config, "BREATHE_PERIOD_MS", 8000)  # one breath, ms
+BREATHE_FLOOR = getattr(config, "BREATHE_FLOOR", 0.2)  # dim end of the breath (0..1)
+DITHER = getattr(config, "DITHER", True)  # temporal dithering for smooth dim fades
+FRAME_MS = getattr(config, "FRAME_MS", 16)  # frame duration, ms
+N_TRAINS = getattr(config, "N_TRAINS", 1)  # how many upcoming departures to show
+#   as nested arcs (1 = just the primary — the original behaviour). >1 shows
+#   further-out trains as a dimmer band beyond the primary's arc.
+BACKGROUND_BRIGHTNESS = getattr(config, "BACKGROUND_BRIGHTNESS", 0.35)  # 0..1;
+#   relative brightness of the 2nd train; the 3rd gets this squared, etc.
+#   (geometric falloff — one knob regardless of how many trains you show).
+#   Used by SandTimerContract/BreathingContract's uniform per-layer dimming.
+
+# EchoContract only (see docs/insights.md §6 for why brightness-only dimming
+# didn't work): trains beyond the primary differentiate by HUE + a brightness
+# that stays high the whole time — no low-brightness dip to flicker/lose
+# diffusion. Tuned empirically via led_sandbox.py.
+SECONDARY_HUE_SHIFT_DEG = getattr(config, "SECONDARY_HUE_SHIFT_DEG", 20)  # per
+#   train index beyond the primary (2nd = ×1, 3rd = ×2, ...)
+SECONDARY_BREATHE_PERIOD_MS = getattr(config, "SECONDARY_BREATHE_PERIOD_MS", 3000)
+SECONDARY_BREATHE_FLOOR = getattr(config, "SECONDARY_BREATHE_FLOOR", 0.7)  # high —
+#   this is a subtle differentiation pulse, not the urgency-signalling breath
+#   BreathingContract's own BREATHE_FLOOR drives; deliberately separate knobs
+#   so tuning one doesn't fight the other.
+
+# ApproachContract only — positional paradigm, see docs/contracts/approach-contract.md.
+# ANCHOR_INDEX/ARM_*_LEN are one arm-generic mechanism: phase 1 (this build) sets
+# ARM_B_LEN=0 for a single direction; phase 2 (bidirectional) is the same code
+# path with different config, not a second contract.
+ANCHOR_INDEX = getattr(config, "ANCHOR_INDEX", 0)
+ARM_A_LEN = getattr(config, "ARM_A_LEN", NUM_LEDS - 1)
+ARM_B_LEN = getattr(config, "ARM_B_LEN", 0)
+ANCHOR_COLOR = getattr(config, "ANCHOR_COLOR", (255, 200, 120))  # warm white/amber —
+#   distinct from both LINE_COLOR and MARKER_COLOR so the anchor never
+#   reads as "a very close train" or "an empty tick".
+ANCHOR_BRIGHTNESS = getattr(config, "ANCHOR_BRIGHTNESS", 1.6)  # relative to a normal
+#   "full" position (mult=1.0) — >1.0 makes the anchor genuinely brighter than
+#   the BRIGHTNESS ceiling everything else tops out at, not just relying on
+#   colour alone to read as "the fixed one". Rendered via the STATIC path (see
+#   _write_frame), so this scales BRIGHTNESS LINEARLY — no gamma reshaping.
+POSITION_MINUTES_PER_LED = getattr(config, "POSITION_MINUTES_PER_LED", 1)
+# The train's own colour is fixed, NOT urgency-banded like PALETTE: in this
+# paradigm distance-to-anchor already encodes urgency continuously, so colour
+# is freed up to mean "this line" instead of re-encoding the same signal a
+# second way (same reasoning MARKER_COLOR-not-dimmed already uses below).
+LINE_COLOR = getattr(config, "LINE_COLOR", (34, 139, 34))  # forest green
+LINE_SATURATION = getattr(config, "LINE_SATURATION", 1.0)  # 1.0=unchanged;
+#   lower = a genuinely MUTED (desaturated) LINE_COLOR, not just a dimmer one
+#   — see desaturate()'s docstring for why those are different transforms.
+#   Applied once at class-definition time (ApproachContract.line_color).
+# Where the train currently is renders at BRIGHTNESS directly (mult=1.0,
+# STATIC path, always — see the CHASE transition below, which never dims a
+# train at all). Two independent brightness surfaces total:
+# ANCHOR_BRIGHTNESS (the "0") and MARKER_BRIGHTNESS (the idle ticks, below) —
+# BRIGHTNESS itself is the train's, with no separate scalar on top.
+# Default RAISED from 0.15 to 0.25 on 2026-08-24. The old value put markers
+# at raw 1 per channel — MARKER_COLOR 80 x BRIGHTNESS 0.15 x 0.15 — which is
+# exactly where WS2812B channel matching collapses and neutral reads RED.
+# Measured floor on this strip is 3; 0.25 lands on it. docs/insights.md §12.
+# ⚠ The floor is per-strip, and this is a magic number tied to MARKER_COLOR
+# and BRIGHTNESS: change either and markers can silently fall back into the
+# collapse zone. A clamp on the final value is the durable fix (§12).
+MARKER_BRIGHTNESS = getattr(config, "MARKER_BRIGHTNESS", 0.25)  # LINEAR multiplier
+#   of BRIGHTNESS for the idle "tick" LEDs — every position that ISN'T the
+#   anchor or the train right now (the gaps on the thermometer). Rendered via
+#   the STATIC path (see _write_frame) — direct linear, no gamma. Needs to
+#   clear ~1 output code per MARKER_COLOR channel or it truncates invisibly
+#   to black. 0 = idle LEDs fully off.
+# ⚠ PER-STRIP MEASUREMENT, not a universal constant. The raw PWM value
+# below which WS2812B channels stop matching, so equal R=G=B stops reading
+# neutral and takes on an unpredictable hue. Measured at 3 on the
+# AE-WS2812B-STICK8 (insights.md §12); `make low-pwm-test`, OUT of the
+# bottle, re-measures it for a given strip. Every check in palette.py takes
+# this as its input, so a wrong value here makes those checks confidently
+# wrong — record the measured number in the unit's registry entry alongside
+# ARC_ORIGIN and SHAKE_CENTER.
+LOW_PWM_FLOOR = getattr(config, "LOW_PWM_FLOOR", 3)
+
+MARKER_COLOR = getattr(config, "MARKER_COLOR", (80, 80, 80))  # dim neutral — NOT a
+#   dimmed LINE_COLOR (see docs/contracts/approach-contract.md § Marker ticks)
+TRANSITION_MS = getattr(config, "TRANSITION_MS", 4000)  # crossfade duration; 0 = instant
+# How a train MOVES between two positions. Judged on real glass
+# (`make crawl-sandbox`, insights §19) and **crossfade won** — it reads as
+# more fluid and less "sticky" than an eased slide, and both beat a cut.
+#
+# ⚠ THIS REVERSES A STANDING DECISION, so read before switching. CHASE
+# exists BECAUSE an earlier brightness-blend crossfade was removed: it
+# necessarily passes through low-brightness intermediates, and at
+# BRIGHTNESS 0.15 those fell below the low-PWM floor where channels stop
+# matching. That premise has partly changed (BRIGHTNESS is 0.5-0.62 now,
+# and DITHER exists) but it has NOT gone away — with LINE_COLOR (34,139,34)
+# a half-faded train puts R and B near raw 4, and a quarter-faded one puts
+# them under the floor while G stays above it. The train shifts hue in
+# transit.
+#
+# Why it looked fine anyway: §12 measured this brown glass as collapsing
+# hue onto the red-green axis, so it HIDES the very artefact crossfade
+# causes. That makes crossfade a choice about THIS VESSEL, not a general
+# improvement — a clear bottle may show what the brown one conceals.
+TRANSITION_STYLE = getattr(config, "TRANSITION_STYLE", "chase")  # or "crossfade"
+
+# Boot ceremony — see docs/contracts/startup-sequence.md. Runs once at power-on,
+# before the main loop starts; never recurs during normal operation.
+STARTUP_COLOR = getattr(config, "STARTUP_COLOR", (255, 255, 255))  # loading-
+#   circle + success-burst colour. All LEDs together, contract-agnostic — the
+#   startup sequence runs before any CONTRACT is "current".
+STARTUP_SPIN_HZ = getattr(config, "STARTUP_SPIN_HZ", 0.4)  # loading-circle
+#   revolutions/sec while connecting (WiFi + NTP)
+STARTUP_BURST_MS = getattr(config, "STARTUP_BURST_MS", 800)  # success burst:
+#   rise duration, ms
+STARTUP_FADE_MS = getattr(config, "STARTUP_FADE_MS", 1500)  # success burst:
+#   decay duration, ms, after which the main loop takes over
+ERROR_COLOR = getattr(config, "ERROR_COLOR", (255, 0, 0))  # persistent
+#   failure state — see run_startup_sequence(). All LEDs, forever, until reset.
+ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
+#   deliberately separate from BREATHE_PERIOD_MS — retuning a contract's
+#   breathing feel should never touch the failure state's.
+
+# Tap interaction — docs/contracts/gesture-envelope.md §11. OFF by default:
+# the display behaves exactly as before (always "awake", no countdown),
+# which is right for any unit with no IMU wired.
+#
+# **Turning this on is now SAFE and actually does something.** It used to be
+# neither: the gate fronted a loop whose tap detector was a stub returning
+# False, so enabling it slept the display after the timeout with no way to
+# wake it. That stub is gone (see the note above _StatusMessage) and this
+# now drives the real recognizer.
+#
+# Accepts GESTURE_ENABLED (preferred) or the older
+# WAKE_INTERACTION_ENABLED, so existing config.py files keep working —
+# design principle #12 ("backward-compatible configuration"). The old name is
+# kept only for compatibility; it describes a design that has been
+# superseded.
+# Taps are ignored for this long after the loop starts. Plugging a unit in
+# or setting it down IS handling, and the recognizer's 98.4% is measured
+# against POOLED handling noise — so a boot-time false trigger is expected
+# rather than surprising. Without this, connecting USB reliably woke the
+# display and played a wake wave nobody asked for.
+GESTURE_BOOT_IGNORE_MS = getattr(config, "GESTURE_BOOT_IGNORE_MS", 3000)
+WAKE_INTERACTION_ENABLED = getattr(
+    config, "GESTURE_ENABLED", getattr(config, "WAKE_INTERACTION_ENABLED", False)
+)
+WAKE_MINUTES = getattr(config, "WAKE_MINUTES", 30)  # active-display window
+#   after any wake/extend trigger
+DOUBLE_TAP_WINDOW_MS = getattr(config, "DOUBLE_TAP_WINDOW_MS", 400)  # max gap
+#   between two taps to count as a double-tap — GUESS, tune against real
+#   sensor data once the IMU is wired
+TAP_THRESHOLD = getattr(config, "TAP_THRESHOLD", 2.0)  # accelerometer
+#   magnitude delta for "a tap happened" — UNTESTED GUESS, no IMU wired yet;
+#   _imu_tap_detected() doesn't even use this yet (still stubbed), kept here
+#   so the real implementation has an obvious knob to read
+SECONDARY_ACTION = getattr(config, "SECONDARY_ACTION", "brightness_cycle")  #
+#   pluggable — what a single tap while AWAKE does (see _run_secondary_action)
+BRIGHTNESS_PRESETS = getattr(config, "BRIGHTNESS_PRESETS", (0.15, 0.35, 0.6))
+EXTEND_CONFIRM_COLOR = getattr(config, "EXTEND_CONFIRM_COLOR", STARTUP_COLOR)
+EXTEND_CONFIRM_MS = getattr(config, "EXTEND_CONFIRM_MS", 600)
+
+# LED status messages — docs/contracts/led-status-messages.md. Shared
+# "middle-ish" position for brief single-LED acknowledgments, deliberately
+# NOT ApproachContract's ANCHOR_INDEX (which defaults to 0, not the middle,
+# under every other CONTRACT) — this vocabulary works the same regardless of
+# which CONTRACT is active.
+STATUS_LED_INDEX = getattr(config, "STATUS_LED_INDEX", NUM_LEDS // 2)
+NO_CYCLE_COLOR = getattr(config, "NO_CYCLE_COLOR", (128, 0, 200))  # purple —
+#   "you asked to change station and there is none". Shares QUIET_TAP_COLOR's
+#   value but NOT its constant, deliberately: the two are mutually exclusive
+#   in time (a no-cycle tap only reaches the classifier OUTSIDE quiet hours),
+#   so reuse is safe — but tuning one must never silently move the other.
+QUIET_TAP_COLOR = getattr(config, "QUIET_TAP_COLOR", (128, 0, 200))  # purple
+QUIET_TAP_DURATION_MS = getattr(config, "QUIET_TAP_DURATION_MS", 2500)
+NO_DATA_COLOR = getattr(config, "NO_DATA_COLOR", (200, 160, 0))  # gold/amber
+NO_DATA_DURATION_MS = getattr(config, "NO_DATA_DURATION_MS", 2500)
+SCHEDULE_ERROR_COLOR = getattr(config, "SCHEDULE_ERROR_COLOR", (200, 0, 120))
+#   distinct from ERROR_COLOR (red, WiFi/NTP failure) — a different failure
+#   cause should look like a different failure, not the same red for anything
+TIME_SOURCE = getattr(config, "TIME_SOURCE", "wifi")
+#   "wifi" — connect + NTP at boot (V1 default, needs ~40KB of SRAM for
+#            esp_wifi; fine on the Pico 2W, does NOT fit on the XIAO
+#            ESP32-C3 alongside an app this size — docs/insights.md §11)
+#   "rtc"  — skip WiFi/NTP; trust the board's own RTC, set at provisioning
+#            time (`make set-time`). Survives soft reset, not power loss.
+#            The direction V2 goes permanently, via a DS3231.
+
+# NTP writes UTC to the RTC; `mpremote rtc --set` writes the HOST'S LOCAL
+# time. So UTC_OFFSET_HOURS must only be applied in the "wifi" case —
+# adding it to an already-local clock puts the display UTC_OFFSET_HOURS
+# ahead, which is exactly what happened on the first real "rtc" boot.
+# Derived here rather than making the user also remember to zero
+# UTC_OFFSET_HOURS: two knobs that must agree is a footgun, one that
+# follows from the other isn't.
+_UTC_OFFSET_APPLIED = 0 if TIME_SOURCE in ("rtc", "ds3231") else UTC_OFFSET_HOURS
+CONFIG_ERROR_COLOR = getattr(config, "CONFIG_ERROR_COLOR", (255, 140, 0))
+#   orange — a BAD CONFIG VALUE (e.g. HEARTBEAT_PIN="LED" on a board with no
+#   such alias, which raises ValueError: invalid pin). Previously this class
+#   of failure crashed before any LED code ran, so a misconfigured unit on a
+#   wall adapter looked identical to a dead one — no serial console, no
+#   indication, nothing. That's the worst possible failure mode for a device
+#   meant to be handed to someone else. Same persistent-breathe treatment as
+#   the other two, its own colour per led-status-messages.md.
+
+# Gesture envelope — docs/contracts/gesture-envelope.md. Evidence-based,
+# from real sandbox data (docs/insights.md §8-9), unlike WAKE_INTERACTION's
+# TAP_THRESHOLD/DOUBLE_TAP_WINDOW_MS above (both flagged guesses when
+# written, no IMU in hand yet). Every GESTURE_*_ENABLED flag is a hardware
+# capability, off by default until something concrete backs it up — same
+# safety-gate precedent WAKE_INTERACTION_ENABLED already set.
+IMU_I2C_ID = getattr(config, "IMU_I2C_ID", 0)
+IMU_SDA_PIN = getattr(config, "IMU_SDA_PIN", 0)  # Pico 2W default — see
+IMU_SCL_PIN = getattr(config, "IMU_SCL_PIN", 1)  #   pinouts/pico2w.md
+
+# DS3231 RTC. Defaults to the IMU's bus because on this hardware they ARE
+# the same physical bus — 0x68 and 0x6A/0x6B, no address conflict
+# (docs/hardware.md § DS3231). Overridable for a board that wires them apart.
+RTC_I2C_ID = getattr(config, "RTC_I2C_ID", IMU_I2C_ID)
+RTC_SDA_PIN = getattr(config, "RTC_SDA_PIN", IMU_SDA_PIN)
+RTC_SCL_PIN = getattr(config, "RTC_SCL_PIN", IMU_SCL_PIN)
+# Cyan, deliberately far from ERROR_COLOR (red), SCHEDULE_ERROR_COLOR
+# (magenta) and CONFIG_ERROR_COLOR (orange) — those three are all one hue
+# family, and docs/insights.md §12 found that through brown glass only
+# near-opposite hues stay distinguishable. A clock fault must be tellable
+# apart from a WiFi fault by someone holding a jar with no laptop.
+CLOCK_ERROR_COLOR = getattr(config, "CLOCK_ERROR_COLOR", (0, 160, 200))
+
+if TIME_SOURCE not in ("wifi", "rtc", "ds3231"):
+    # Fail loudly at import. A typo previously fell through to the WiFi
+    # path, which on a radio-less board is an unrecoverable hang.
+    raise ValueError(
+        "TIME_SOURCE=%r is not one of 'wifi', 'rtc', 'ds3231'" % (TIME_SOURCE,)
+    )
+
+GESTURE_FLIP_ENABLED = getattr(config, "GESTURE_FLIP_ENABLED", False)  #
+#   requires wired (USB) power — flipping a Qi-mounted jar breaks inductive
+#   coupling, see gesture-envelope.md §5
+GESTURE_POSITION_ENABLED = getattr(config, "GESTURE_POSITION_ENABLED", False)  #
+#   shoulder-vs-base disaggregation — ~78-81% even on a bottle it's tuned
+#   for (insights.md §8-9); off by default, opt-in per physical unit
+GESTURE_FLICK_ENABLED = getattr(config, "GESTURE_FLICK_ENABLED", True)  #
+#   best-validated signal after tap presence — on by default
+
+# Per-bottle calibrated thresholds — chianti-bottle values derived from the
+# sandbox tooling's pooled data (insights.md §8-9), NOT guesses, but also
+# NOT universal: amplitude features don't transfer across bottles (§9's
+# cross-bottle test: 0% for position). Re-derive per physical unit via
+# vibration_sandbox.py + scripts/analyze_taps.py before flashing a
+# different bottle.
+TAP_TRIGGER_THRESHOLD_MG = getattr(config, "TAP_TRIGGER_THRESHOLD_MG", 50)  #
+#   cheap first-pass gate only — deliberately permissive (real handling
+#   motion overlaps this range too, see insights.md §9's handling_test.py
+#   findings), the real discrimination happens in the recognizer layer
+#   below, not at this trigger
+FLICK_MAGNITUDE_THRESHOLD_MG = getattr(config, "FLICK_MAGNITUDE_THRESHOLD_MG", 328)  #
+#   RECALIBRATED against shoulder+base taps (95.2% separability) — the
+#   original 140 was calibrated against BODY taps only (median 50mg), which
+#   badly undershoots shoulder's own normal tap force (median 215mg) — real
+#   hardware testing found 79% of ordinary shoulder taps already exceeded
+#   140mg on their own. See gesture-envelope.md §10.
+FLICK_SPACING_STDEV_THRESHOLD_MS = getattr(config, "FLICK_SPACING_STDEV_THRESHOLD_MS", 5)
+#   flick vs. hard handling when spacing IS computable — magnitude alone
+#   caps ~80% (setdown_firm is just as hard as a deliberate flick); this
+#   shape feature helps when available, see insights.md §9. NOT available
+#   most of the time in practice (needs >=3 crossings; ~70% of real flicks
+#   and ~25% of hard handling events don't have that many) — see
+#   classify_tap_or_flick's own docstring for how the missing case is
+#   handled, and gesture-envelope.md §10 for why a classifier doesn't do
+#   any better here (~80% ceiling either way).
+POSITION_THRESHOLD_MG = getattr(config, "POSITION_THRESHOLD_MG", 151)  #
+#   only read if GESTURE_POSITION_ENABLED
+ORIENTATION_STABLE_MG = getattr(config, "ORIENTATION_STABLE_MG", 700)  #
+#   below this, treat orientation as "mid-motion", not a resting state —
+#   matches orientation_test.py's proven STABLE_READING_MG
+ORIENTATION_MAP = getattr(config, "ORIENTATION_MAP", (
+    # (state name, dominant axis, sign) — chianti-bottle mounting, from
+    # orientation_test.py's real readings (insights.md §9): Y+ ≈ 965mg
+    # upright, Z- ≈ 950mg horizontal, Y- ≈ 870mg upside-down. Per-bottle:
+    # the IMU's mounting orientation on the glass determines this mapping,
+    # not the gesture logic — re-derive with orientation_test.py per unit.
+    ("upright", "y", 1),
+    ("horizontal", "z", -1),
+    ("upside_down", "y", -1),
+))
+
+# Scrollwheel / menu — gesture-envelope.md §7. Sketch, not a spec: the real
+# option list is a product decision, not a hardware one (§9) — validating
+# the mechanism doesn't need real content, same as wake-interaction.md
+# shipped its state machine before settling SECONDARY_ACTION's content.
+GESTURE_MENU_OPTIONS = getattr(config, "GESTURE_MENU_OPTIONS", ("Item 1", "Item 2", "Item 3"))
+GESTURE_MODE_TIMEOUT_MS = getattr(config, "GESTURE_MODE_TIMEOUT_MS", 15_000)  #
+#   bounded return to ambient — same "must not be a state you can get stuck
+#   in" philosophy WAKE_MINUTES already established
+
+# Terminal-only validation loop — deliberately its OWN flag, not
+# WAKE_INTERACTION_ENABLED: this exercises a different, newer subsystem and
+# should stay fully isolated from the existing tested loop. OFF by default,
+# same safety-gate precedent as everything else opt-in here.
+GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
+
+# V1 minimal gesture contract — gesture-envelope.md §11. A deliberate
+# SPECIALIZATION of the recognizer/scrollwheel above (tap-vs-noise only,
+# GESTURE_POSITION_ENABLED/GESTURE_FLICK_ENABLED stay False), not a
+# replacement — see that section for why. TAP_ENERGY_THRESHOLD is the one
+# threshold this path needs; the timing knobs below drive the two-phase
+# ACK/CONFIRM state machine (_TapCycleState).
+TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 1_000_000)  #
+#   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
+#   (chianti bottle), see §11.
+#   ⚠ RAISED 138k -> 1M on 2026-10-04. Replay of the raw recordings found the
+#   old value rejecting real taps (10-14 of 62 when every impulse is judged,
+#   9 of 20 near the top of the bottle) once table knocks had their own check
+#   below. It is now a coarse guard against gross handling, not the tap test;
+#   the mid-window gyro check does that job. A config.py that sets 138000
+#   explicitly keeps the old behaviour — remove or raise it there.
+# Reject a contact whose first 150 ms of impulse is mostly ALONG GRAVITY: a
+# knock on the table (or on a cup standing on it) reaches the bottle through
+# its base, vertically, while a finger on the glass pushes sideways. Replay of
+# the 2026-10-04 recordings: knocks on the table/objects accepted 17/54 at the
+# production loop rate; with this at 0.5, 1 — and no true tap lost
+# (docs/imu-interaction-plan.md, Phase 1 results). Measured against the
+# gravity vector the capture settles to, NOT the sensor's z axis, so it does
+# not depend on how the IMU is mounted. None disables it.
+TAP_VERTICAL_SHARE_MAX = getattr(config, "TAP_VERTICAL_SHARE_MAX", 0.5)
+# Reject a contact if the bottle is still ROTATING 150-400 ms after the
+# trigger: after the impact has rung down, before the next thing a person
+# does. A finger on the glass leaves it still; a grab, a lift, a set-down or
+# a tilt keeps it turning. Replay, 2026-10-04: no real tap lost at any energy
+# setting, handling accepted 93 -> 31 of 169 with the energy guard off
+# (docs/imu-interaction-plan.md; the feature came from
+# docs/classifier-approach.md). Degrees/s with the gyro's zero-rate offset
+# removed by a running baseline (gestures.GyroBias). None disables the check
+# AND leaves the gyro powered down.
+TAP_GYRO_MID_MAX_DPS = getattr(config, "TAP_GYRO_MID_MAX_DPS", 1.15)
+# The window that rotation is measured over, ms after the trigger. Settings
+# rather than constants so replay can score the firmware's own path with a
+# different window (2026-10-25: a timing analysis put the tap-vs-grab
+# difference at 100-200 ms, while 200-400 showed none). The capture only
+# reads the gyro for its first 450 ms, so END must stay at or under that.
+TAP_GYRO_MID_START_MS = getattr(config, "TAP_GYRO_MID_START_MS", 150)
+TAP_GYRO_MID_END_MS = getattr(config, "TAP_GYRO_MID_END_MS", 400)
+GYRO_BIAS_TAU_MS = getattr(config, "GYRO_BIAS_TAU_MS", 2000)   # how fast the
+#   resting baseline follows (temperature drift is minutes; 2 s is plenty)
+GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn
+#   from samples within this of the current baseline — i.e. only at rest
+# The gyro check ABSTAINS until the baseline has spent this long learning at
+# rest. Added 2026-10-21 for the "once, asleep, it could not be woken" watch
+# item: the baseline seeds from the first sample it sees, and if that sample
+# was taken mid-handling it starts wrong — then every tap reads as rotation
+# and is rejected until the baseline recovers. Abstaining means "no
+# evidence", never a rejection, so taps still pass the other two checks.
+#
+# ⚠ 3 time constants, NOT the ~2 s the interaction plan first suggested. The
+# gate is per-axis 5 dps, so a seed can be off by up to sqrt(3) x 5 = 8.7 dps
+# and still be learned from. Error after t at rest is 8.7 x exp(-t/tau):
+#   t = 1 tau (2 s)  ->  3.2 dps   still above the 1.15 dps threshold
+#   t = 3 tau (6 s)  ->  0.43 dps  well clear of it
+# A 2 s guard would have left exactly the failure it was meant to remove.
+GYRO_BIAS_WARMUP_MS = getattr(config, "GYRO_BIAS_WARMUP_MS", 3 * GYRO_BIAS_TAU_MS)
+
+# ── the arbiter (micropython/arbiter.py): when a tap becomes real ──────────
+# A classified tap is provisional until the bottle proves it was left alone.
+# Every number below is a measurement from the guided session of 2026-10-26
+# (docs/imu-interaction-plan.md, "The arbiter"), not a guess. Off by default:
+# main.py doesn't drive it yet; scripts/sim.py does.
+ARBITER_ENABLED = getattr(config, "ARBITER_ENABLED", False)
+# Settled = still. A tapped bottle drops back to the sensor's noise floor
+# within ~250 ms (accel jitter median 1.04 mg, max 2.4); a held one carries
+# the hand's tremor (median 2.3 mg). RMS about the window's own mean, mg.
+ARBITER_QUIET_FROM_MS = getattr(config, "ARBITER_QUIET_FROM_MS", 250)
+ARBITER_QUIET_MS = getattr(config, "ARBITER_QUIET_MS", 350)
+ARBITER_QUIET_MG = getattr(config, "ARBITER_QUIET_MG", 1.6)
+# Handling = sustained rotation: above ROT_DPS (25 ms smoothing) for ROT_MS.
+# A tap's own rotation is over by ~170 ms, so nothing before RINGDOWN_MS
+# counts against it.
+ARBITER_ROT_DPS = getattr(config, "ARBITER_ROT_DPS", 10.0)
+ARBITER_ROT_MS = getattr(config, "ARBITER_ROT_MS", 100)
+ARBITER_RINGDOWN_MS = getattr(config, "ARBITER_RINGDOWN_MS", 200)
+# Look-back: handling that ended this recently makes a trigger the hand
+# leaving the bottle (set-down, release), not a tap.
+ARBITER_LOOKBACK_MS = getattr(config, "ARBITER_LOOKBACK_MS", 1500)
+# A tap that never settles is given up on here: a hand held it throughout.
+ARBITER_SETTLE_MAX_MS = getattr(config, "ARBITER_SETTLE_MAX_MS", 1800)
+ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
+#   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
+#   hardware allow
+WAKE_JOLT_MS = getattr(config, "WAKE_JOLT_MS", 500)  # confirmed-wake jolt
+#   duration, no input accepted — flagged too slow as-is (§11), timing is
+#   a feel question to iterate visually, not a logic one
+WAKE_JOLT_BRIGHTNESS_MULT = getattr(config, "WAKE_JOLT_BRIGHTNESS_MULT", 2.0)
+
+# Tap-strength → brightness, "hardware-defined software": a harder tap reads
+# brighter on both the ACK peak (the "up") and the shelf it settles onto (the
+# "down"). Every one of these defaults was tuned on real hardware across five
+# rounds — bare strip first, then IN-BOTTLE, which needed a wider range
+# because frosted glass compresses contrast. Full history:
+# gesture-envelope.md §11. Per-enclosure, like every amplitude number here.
+STRENGTH_MIN_DEV_MG = getattr(config, "STRENGTH_MIN_DEV_MG", TAP_TRIGGER_THRESHOLD_MG)
+STRENGTH_MAX_DEV_MG = getattr(config, "STRENGTH_MAX_DEV_MG", 460)
+ACK_PEAK_FLOOR = getattr(config, "ACK_PEAK_FLOOR", 0.35)  # lightest-tap ACK peak
+ACK_PEAK_CEIL = getattr(config, "ACK_PEAK_CEIL", 6.0)  # hardest-tap ACK peak.
+#   ⚠ Bounded by SATURATION, not taste: once BRIGHTNESS * mult * channel
+#   hits 255 every harder tap renders identically. 10.0 did exactly that
+#   past ~65% strength. tests/test_gesture_sandbox.py guards this.
+# ⚠ RAISED 0.08 → 0.20 on 2026-09-14. 0.08 had NEVER rendered: it is an
+# ANIMATED mult, so the output is BRIGHTNESS x shelf**GAMMA, and at
+# BRIGHTNESS 0.50 that is raw 0.49 — below a single output code. With
+# DITHER off it truncated to nothing; with DITHER on it lit roughly half
+# the frames, per-LED staggered, which reads as the whole strip sparkling
+# for the 1.2s capture window. Diagnosed as "thundering after the burst".
+#
+#   255 x 0.50 x 0.20**2.2 = raw 3.7   (clears the low-PWM floor of 3)
+#   255 x 0.50 x 0.25**2.2 = raw 6.0   (SHELF_CEIL)
+#
+# ⚠ The usable range is now narrow (0.20-0.25 → raw 3-6) and it MOVES with
+# BRIGHTNESS, the same coupling MARKER_BRIGHTNESS has. palette.py now
+# checks it, so a bad combination is reported at boot rather than
+# discovered as a rendering artefact. §12's durable fix — clamping any
+# nonzero channel up to LOW_PWM_FLOOR — remains the real answer and is
+# still unbuilt.
+SHELF_FLOOR = getattr(config, "SHELF_FLOOR", 0.20)  # dim, deliberately not dark
+SHELF_CEIL = getattr(config, "SHELF_CEIL", 0.25)  # stays under ACK_PEAK_FLOOR
+ACK_HOLD_MS = getattr(config, "ACK_HOLD_MS", 400)  # rise+dip duration. 150ms
+#   was too brief to perceive a strength difference before it settled.
+WAKE_SETTLE_MS = getattr(config, "WAKE_SETTLE_MS", 1500)  # post-jolt
+#   debounce, no input accepted — prevents the same physical contact that
+#   triggered WAKE from also registering as an immediate CYCLE
+# How long the display stays lit AFTER A TAP — a glance.
+AWAKE_MINUTES = getattr(config, "AWAKE_MINUTES", 15)  # bounded-window,
+#   same philosophy as WAKE_MINUTES — no EXTEND gesture, no runtime
+# How long it stays lit AT BOOT. Defaults to AWAKE_MINUTES, so nothing
+# changes unless you set it — but they are different jobs:
+#   boot  = a SELF-TEST window. You just plugged it in and want to see that
+#           it works; nobody is going to tap a unit they are still placing.
+#   tap   = a glance. Someone asked "when is the next train".
+# Separating them lets a Qi unit boot-verify briefly without burning a full
+# awake window, or lets a bench unit stay lit far longer than a gift would.
+BOOT_AWAKE_MINUTES = getattr(config, "BOOT_AWAKE_MINUTES", AWAKE_MINUTES)
+
+#   adjustment, deliberately simpler than the old wake-interaction design
+CYCLE_TRANSITION_MS = getattr(config, "CYCLE_TRANSITION_MS", 200)  # flash,
+#   then a hard cut to the next station — no crossfade, see §11
+
+# Status heartbeat LED — board-specific, unlike the WS2812B data line above.
+# "LED" is a Pico-2W-only alias (routed through the CYW43 WiFi chip, not a plain
+# GPIO). Other boards have no such alias: set this to a GPIO number for that
+# board's onboard LED (see pinouts/<board>.md), or None to disable the heartbeat
+# entirely — the console heartbeat (●/○) still prints either way.
+HEARTBEAT_PIN = getattr(config, "HEARTBEAT_PIN", "LED")
+
+# Quiet hours (strip dark). Stored as hours in config; minutes internally.
+QUIET_START = getattr(config, "QUIET_START_HOUR", 23) * 60
+QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
+
+# ── Day/night brightness profile ─────────────────────────────────────
+# NOT quiet hours, and the distinction is the point (insights.md §14):
+#
+#   quiet hours          → MAY the display light up at all?
+#   day/night (here)     → HOW BRIGHT when it does?
+#
+# One BRIGHTNESS cannot serve a room that swings two to three orders of
+# magnitude between noon and midnight. Raising it to fix daylight makes
+# night worse, and night's failure isn't "too bright" — it's glare
+# destroying the diffusion the whole aesthetic depends on (insights.md §3).
+# The two ends want different values, so it has to be a function of time.
+#
+# ⚠ DEFAULTS ARE DELIBERATELY NEUTRAL. Both values default to BRIGHTNESS,
+# so an existing device upgrading to this firmware behaves EXACTLY as
+# before until DAY_BRIGHTNESS is actually raised (design-principle #12,
+# "backward-compatible configuration").
+# The mechanism ships on; the profile ships flat. Raising DAY_BRIGHTNESS is
+# the whole point, and it is tuned on the real glass, not guessed here —
+# same rule the colour work established (insights.md §12).
+DAY_NIGHT_ENABLED = getattr(config, "DAY_NIGHT_ENABLED", True)
+DAY_START = getattr(config, "DAY_START_HOUR", 7) * 60
+DAY_END = getattr(config, "DAY_END_HOUR", 17) * 60
+DAY_BRIGHTNESS = getattr(config, "DAY_BRIGHTNESS", BRIGHTNESS)
+NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
+# Fixed hours only, on purpose. Seasonal drift needs day-of-year, which
+# local_time() currently discards — see insights.md §14 for why that makes
+# it a separate, larger step rather than a bigger number here.
+
+# ── Tilt-to-adjust ───────────────────────────────────────────────────
+# light-language.md §6; every constant below is a hardware finding, not a
+# preference — insights.md §15 has the measurements. Sliding a finger up
+# and down a bottle is the smartphone paradigm wearing a bottle; tilting
+# one is what bottles are FOR, and the IMU already provides it.
+#
+# ⚠ DEFAULT OFF. Shipping this on would change how an existing unit
+# behaves on upgrade (design-principle #12, "backward-compatible
+# configuration"), and brightness is the one setting a surprise change is
+# most visible in.
+TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
+
+# Record raw accel + gyro and the pipeline's decisions as a text stream on the
+# USB console (interlog.py). Phase 0 of docs/imu-interaction-plan.md. OFF: it
+# powers the gyro and prints continuously. Normally flipped by
+# interlog_run.py (make interaction-log), not by editing config.py.
+INTERACTION_LOG = getattr(config, "INTERACTION_LOG", False)
+INTERACTION_LOG_LEVEL = getattr(config, "INTERACTION_LOG_LEVEL", "full")  # or "rate"
+TILT_EXPO = getattr(config, "TILT_EXPO", 0.6)  # 0 = linear, 1 = pure cubic.
+#   0.6 chosen on hardware: linear acquired targets faster but landed an
+#   order of magnitude less precisely, and precision is what this control
+#   is for. Blended form, NOT a power curve — insights.md §15.
+TILT_RATE_PER_SEC = getattr(config, "TILT_RATE_PER_SEC", 0.20)  # at full tilt
+TILT_DEADZONE_DEG = getattr(config, "TILT_DEADZONE_DEG", 8.0)
+TILT_FULL_DEG = getattr(config, "TILT_FULL_DEG", 35.0)  # real sessions live
+#   in the 8-30° band; a bottle on a table is awkward past 35°, so full
+#   authority has to be reachable below it or the top of the curve is decor.
+TILT_FIRST_MEANS = getattr(config, "TILT_FIRST_MEANS", "up")  # or "down" —
+#   the first lean defines the axis AND this direction. "down" is the escape
+#   hatch if go-up-first ever produces a glare flash in a dark room.
+TILT_MIN_BRIGHT = getattr(config, "TILT_MIN_BRIGHT", 0.05)
+TILT_MAX_BRIGHT = getattr(config, "TILT_MAX_BRIGHT", 0.90)  # never fully off:
+#   a dark strip is indistinguishable from a fault, the same hazard quiet
+#   hours already prints a line about.
+# ── the gates. Do not loosen these without re-reading insights.md §15 ──
+TILT_G_TOLERANCE = getattr(config, "TILT_G_TOLERANCE", 0.25)  # accept |a|
+#   within ±25% of 1g. A hard tap spoofed a 30-40° tilt 1 time in 5 before
+#   this existed. Tilting preserves magnitude; accelerating does not.
+TILT_SMOOTH_ALPHA = getattr(config, "TILT_SMOOTH_ALPHA", 0.15)
+TILT_ENGAGE_SAMPLES = getattr(config, "TILT_ENGAGE_SAMPLES", 4)
+TILT_STILL_DEG = getattr(config, "TILT_STILL_DEG", 0.5)
+TILT_STILL_WINDOW = getattr(config, "TILT_STILL_WINDOW", 24)
+TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
+#   A table reads 0.11° of jitter and a very steady hand reads 0.12° — they
+#   OVERLAP, so no threshold on spread alone separates them. What separates
+#   them is duration: the longest hand-held quiet run measured was ~2.75s at
+#   0.5°, and a table is quiet for as long as you leave it. Releasing late
+#   is an annoyance; re-baselining onto a hand-held angle poisons every
+#   reading afterwards, so this errs long.
+TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
+# ── the same four, in MILLISECONDS — what tilt.py actually uses ──────
+# The four values above are PER SAMPLE: they advance once per update(), so
+# their meaning in time depended on how fast the loop happened to turn — and
+# the production loop turns at 4-139 Hz (insights / imu-interaction-plan).
+# Replay of real recordings (scripts/replay.py, 2026-10-04): deliberate tilts
+# engaged in 9/10 segments at 57 Hz and 2/10 at 240 Hz, same sensor data.
+# These replace them. None = derive from the per-sample value AS TUNED, i.e.
+# at the 25 ms tick tilt_freeform.py ran at, so an existing config.py keeps
+# meaning exactly what it meant when it was tuned. tilt.py does the maths.
+TILT_SMOOTH_TAU_MS = getattr(config, "TILT_SMOOTH_TAU_MS", None)      # ~154 ms
+TILT_ENGAGE_MS = getattr(config, "TILT_ENGAGE_MS", None)              # ~75 ms
+TILT_STILL_WINDOW_MS = getattr(config, "TILT_STILL_WINDOW_MS", None)  # ~575 ms
+TILT_BASELINE_TAU_MS = getattr(config, "TILT_BASELINE_TAU_MS", None)  # ~1.24 s
+
+# ── Hitting a brightness rail ────────────────────────────────────────
+# A rail is INVISIBLE: the display stops changing, and "already at maximum"
+# looks exactly like "not working" — which is how the first hardware
+# session read it (insights §15), and how 24h of real use read it again
+# (§18).
+#
+# What a bottle actually does when you tilt it past what the table allows
+# is stop, and you feel it stop — so the answer is a recoil, not a message.
+# A brightness DIP rather than a positional bounce: at a rail the whole
+# ring is lit, so a blob moving two LEDs is invisible against it, while the
+# object recoiling reads at any lit state.
+#
+# Symmetric at both ends. The top rail is the stronger metaphor (a bottle
+# bounces off a table), but both are the same fact — "no further" — and
+# giving only one of them an answer would be the more arbitrary choice.
+TILT_RAIL_BOUNCE_ENABLED = getattr(config, "TILT_RAIL_BOUNCE_ENABLED", True)
+TILT_RAIL_MS = getattr(config, "TILT_RAIL_MS", 140)  # brief. It is a
+#   reaction, not a statement — see motion.recoil's "not a sixth word".
+TILT_RAIL_DEPTH = getattr(config, "TILT_RAIL_DEPTH", 0.35)  # how deep the dip
+TILT_RAIL_REPEAT_MS = getattr(config, "TILT_RAIL_REPEAT_MS", 900)  # throttle.
+#   Holding a tilt past the rail is a CONTINUOUS request, so answering once
+#   and then going quiet is the same silence the recoil exists to break.
+
+# ── Horizon ceremonies: goodnight, and the morning flower ────────────
+# insights.md §17. A lit anchor is a PROMISE — "here is the station, here
+# is what's coming". Rendering it with nothing on the arms is a promise
+# with nothing behind it, and reads as a broken jar.
+#
+# ⚠ NOT `breathe`, and the reason is structural. light-language.md §3 is
+# explicit that breathe is the one word whose energy never decays, which
+# is exactly why it means UNRESOLVED. "The next train is at 05:37" is
+# completely resolved — spending the error verb on the most ordinary state
+# a timetable has would cost the vocabulary its only word for something
+# being genuinely wrong.
+#
+# Goodnight is `outward`, slowed: energy leaving the station and
+# dissipating. No sixth word needed.
+# ── The sleep unwind ─────────────────────────────────────────────────
+# What happens when AWAKE_MINUTES expires. Cutting straight to black is
+# indistinguishable from a power loss — the same hazard quiet hours has a
+# printed warning about, except nobody is reading a console.
+#
+# ⚠ ONE WAVE, not three, and the difference is the whole point. Three
+# waves are a ceremony: the day ending. One is a gesture: you stopped
+# looking. Reusing goodnight's sequence here would say something much
+# larger than what happened.
+#
+# `outward` already does exactly what "the station flickers out and
+# unwinds from in to out" describes, because its amplitude decays as it
+# travels (motion.py) — the anchor blob leaves AND dims. No new word.
+SLEEP_UNWIND_ENABLED = getattr(config, "SLEEP_UNWIND_ENABLED", False)
+SLEEP_UNWIND_MS = getattr(config, "SLEEP_UNWIND_MS", 2200)  # slow; nothing
+#   is waiting on it
+SLEEP_UNWIND_COLOR = getattr(config, "SLEEP_UNWIND_COLOR", (150, 70, 20))
+# The station fades FIRST, then the unwind travels out — "the station
+# flickers out, then the lights unwind from in to out". 3200ms, chosen on
+# glass: long enough to read as an object settling rather than a switch
+# being thrown, with `slow_out` as the curve that won (insights §19).
+# ⚠ WANTS DITHER = True. At the bottom of a fade there are few output codes
+# left, and without dithering the last second visibly steps.
+# How long ONE element takes to fade, and how wide the scatter window is.
+# Named for the SCENE rather than for sleep, because the same two numbers
+# govern the wake fade-in — they are one gesture run in two directions.
+MOTION_SCENE_FADE_MS = getattr(config, "MOTION_SCENE_FADE_MS", 3200)
+MOTION_SCENE_STAGGER_MS = getattr(config, "MOTION_SCENE_STAGGER_MS", 1000)
+# The display fades UP after a wake, instead of snapping on behind the
+# `outward` wave. Off by default — a visible behaviour change.
+WAKE_FADE_ENABLED = getattr(config, "WAKE_FADE_ENABLED", False)
+
+GOODNIGHT_ENABLED = getattr(config, "GOODNIGHT_ENABLED", False)
+
+# THREE waves, because one is a gesture and three are a ceremony. Each is
+# (color, duration_ms, peak), and the sequence is a SUNSET: slower, dimmer
+# and cooler each time.
+#
+# ⚠ THE COLOUR DRIFT IS THE PART THIS VESSEL WILL NOT SHOW. §12 measured
+# amber glass as a blue-cut filter, so the third wave's blue arrives deep
+# and dark rather than blue — which is, as it happens, exactly what a final
+# goodnight wave should look like. The winding-down is carried by DURATION
+# and DECAY, which diffusion passes through intact (§15), so the ceremony
+# degrades gracefully: a clear bottle gets a sunset, a brown one gets a
+# fade. Neither is wrong and neither depends on the other.
+GOODNIGHT_WAVES = getattr(config, "GOODNIGHT_WAVES", (
+    ((200, 90, 0), 1400, 1.00),    # amber, the ordinary evening
+    ((140, 60, 60), 2100, 0.70),   # dimmer, cooling
+    ((40, 40, 150), 3200, 0.45),   # deep blue, slow, nearly gone
+))
+GOODNIGHT_GAP_MS = getattr(config, "GOODNIGHT_GAP_MS", 260)  # breath between
+
+# The morning flower. ⚠ A SCHEDULING feature, not an animation one: the
+# flower already happens — a train crossing the horizon lights an arm's
+# outermost LED and works inward, which is the ordinary renderer doing its
+# job. It has never been seen because the display is asleep by then.
+#
+# ⚠ COSTS ONE EXTRA AWAKE WINDOW PER DAY. The power budget puts taps/day
+# at the largest single lever (roadmap.md), so this is not free on a
+# battery build — it is one more wake against the six that model assumes.
+MORNING_WAKE_ENABLED = getattr(config, "MORNING_WAKE_ENABLED", False)
+MORNING_LEAD_MINUTES = getattr(config, "MORNING_LEAD_MINUTES", 1)  # wake this
+#   long BEFORE the first train crosses the horizon, so the anchor is
+#   already lit when the first pixel arrives rather than appearing with it
+# The same ceremony run backwards: a SUNRISE. Faster, brighter and warmer
+# each time, ending on a yellow that amber glass keeps (it sits on the
+# red-green axis the vessel does not filter). The first wave is the one
+# that will barely show in brown glass, and that is the right one to lose —
+# pre-dawn is meant to be barely there.
+MORNING_WAVES = getattr(config, "MORNING_WAVES", (
+    ((60, 30, 90), 2400, 0.35),    # pre-dawn, cool and dim
+    ((220, 110, 10), 1700, 0.70),  # warming
+    ((255, 200, 0), 1200, 1.00),   # full daylight yellow
+))
+MORNING_GAP_MS = getattr(config, "MORNING_GAP_MS", 220)
+
+# ── The light language: motion words ─────────────────────────────────
+# light-language.md §3. Motion is the one expressive channel not already
+# carrying meaning — position is time-to-leave, hue is line identity (and
+# §12 measured that thick brown glass supports only 2-3 hues at all), and
+# brightness is urgency/anchor/marker/day-night. Motion also survives the
+# enclosure best: diffusion blurs position and filters hue, but
+# change-over-time passes through it intact.
+#
+# ⚠ DEFAULT OFF. With this on, a tap's CONFIRM stops being a flash and
+# becomes a motion — a visible behaviour change on an existing unit
+# (design-principle #12, "backward-compatible configuration").
+MOTION_ENABLED = getattr(config, "MOTION_ENABLED", False)
+MOTION_OUTWARD_MS = getattr(config, "MOTION_OUTWARD_MS", 900)   # the ACK
+MOTION_AROUND_MS = getattr(config, "MOTION_AROUND_MS", 1400)    # a transition
+MOTION_INWARD_MS = getattr(config, "MOTION_INWARD_MS", 1600)
+MOTION_SHAKE_MS = getattr(config, "MOTION_SHAKE_MS", 650)       # the "no"
+MOTION_SHAKE_BOUNCES = getattr(config, "MOTION_SHAKE_BOUNCES", 3)
+
+# ⚠ THE SHAKE HAS TWO CONSTRAINTS, AND THEY ARE NOT THE SAME KIND OF THING.
+# Measured on hardware 2026-09-14, and the decomposition IS the finding:
+#
+#   WIDTH is a property of the VOCABULARY, and it is universal.
+#     ±5 LEDs reads like a short lap of `around` — the "no" and the
+#     "transition" stop being distinguishable, which breaks the one thing a
+#     vocabulary has to do. ±4 is borderline. **±3 is clean**: unmistakably
+#     a bounce, and it lands as a head-shake rather than a stunted spin.
+#     This has nothing to do with any particular bottle.
+#
+#   CENTRE is a per-unit PHYSICAL fact, like ARC_ORIGIN and arm A/B.
+#     The bounce should sit against the LABEL EDGE, the one boundary the
+#     vessel actually has. A bottle with no label (the bench unit) has no
+#     such constraint and the middle is fine.
+#
+# Split into two constants so the universal half stops being re-derived per
+# unit and the per-unit half stops being buried in a tuple. SHAKE_BOUNDS
+# still wins if set explicitly — an asymmetric bounce is a legitimate thing
+# to want and this should not take the option away.
+SHAKE_HALF_WIDTH = getattr(config, "SHAKE_HALF_WIDTH", 3)  # vocabulary, not taste
+SHAKE_CENTER = getattr(config, "SHAKE_CENTER", NUM_LEDS // 2)  # the label edge
+SHAKE_BOUNDS = getattr(config, "SHAKE_BOUNDS", (
+    max(0, SHAKE_CENTER - SHAKE_HALF_WIDTH),
+    min(NUM_LEDS - 1, SHAKE_CENTER + SHAKE_HALF_WIDTH),
+))
+
+# ── Onboard indicators (the MCU's own LEDs, not the strip) ───────────
+# "off"  — driven dark at boot. Right for a finished object: a jar with a
+#          stray LED glowing inside it is not ambient, it is a gadget.
+# "keep" — don't touch them. For bring-up, or a future "debug" mode where
+#          they carry state (the XIAO RP2350's NEOPIXEL is a full-colour
+#          indicator that needs no external strip — pinouts/xiao_rp2350.md,
+#          and led-status-messages.md describes what it could say).
+ONBOARD_LED_MODE = getattr(config, "ONBOARD_LED_MODE", "off")
+# ⚠ POLARITY IS PER-BOARD. The XIAO RP2350's "LED" alias is ACTIVE-LOW
+# (verified at the REPL 2026-08-23): driving it HIGH extinguishes it. The
+# Pico 2W's is active-high and routed through the CYW43. Getting this
+# backwards turns the LED ON while trying to turn it off.
+ONBOARD_LED_ACTIVE_LOW = getattr(config, "ONBOARD_LED_ACTIVE_LOW", True)
+
+# Relocated here by the V1.6 split: it is a config read, and this
+# module owns those. diag.py imports it.
+MEM_DEBUG_ENABLED = getattr(config, "MEM_DEBUG_ENABLED", False)
+
+# Relocated by the V1.6 tightening: a config read belongs here,
+# not stranded inside gestures.py.
+GESTURE_POLL_MS = getattr(config, "GESTURE_POLL_MS", 4)

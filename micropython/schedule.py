@@ -1,0 +1,104 @@
+# micropython/schedule.py — eki-bin
+# Reading schedule.json and answering questions about it. Extracted from
+# main.py by the V1.6 split (docs/v1.6-refactor.md).
+#
+# Schema + the YAML → JSON pipeline: docs/contracts/schedule-json.md.
+#
+# schedule_lines() is the compatibility seam for multi-line stations: a file
+# with `lines` returns it directly, a file without one IS a single line. That
+# older shape is NOT deprecated, and normalizing here rather than at every
+# use site is what keeps every pre-existing schedule working untouched.
+#
+# Note next_departures() is NOT here — it lives in signals.py, because
+# leave_signal() calls it and it is really the first half of stage 1
+# (timetable → minutes-until → LeaveSignal).
+
+import json
+
+from settings import (QUIET_END, QUIET_START)
+
+def is_quiet(now):
+    """True during the configured quiet hours: the window [QUIET_START,
+    QUIET_END) in minutes since midnight (start inclusive, end exclusive).
+    Same rules as clock.py's day/night window:
+
+        start == end  → empty window → never quiet (a typo leaves the jar
+                        lit, not dark all day)
+        start <  end  → same-day window (e.g. 01:00 → 05:00): plain range
+        start >  end  → wraps past midnight (e.g. 23:00 → 06:00): OR test.
+                        Also covers the disable idiom 24 → 0, since
+                        `now >= 1440` and `now < 0` are both impossible.
+        0 → 24        → always quiet
+    """
+    if QUIET_START == QUIET_END:
+        return False
+    if QUIET_START < QUIET_END:
+        return QUIET_START <= now < QUIET_END
+    return now >= QUIET_START or now < QUIET_END
+
+
+
+
+# ─────────────────────────────────────────────────────────────
+# Schedule loading
+# [→ Rust] build.rs reads schedule.json at compile time and emits
+#          const arrays — zero runtime parsing cost on device.
+# ─────────────────────────────────────────────────────────────
+def load_schedule(filename):
+    """
+    Load schedule.json from device filesystem.
+    Returns the full parsed dict (station, weekday, weekend).
+    Raises (OSError: missing file; ValueError: malformed JSON) rather than
+    halting itself — the caller decides what "failed to load" looks like on
+    the LEDs (see main()'s call site and
+    docs/contracts/led-status-messages.md's schedule-load-failure entry).
+    """
+    try:
+        with open(filename) as f:
+            # ⚠ json.loads(f.read()), NOT json.load(f). MicroPython's
+            # json.load pulls the stream one byte at a time, which is free on
+            # local flash and a serial round trip PER BYTE under
+            # `make dev` / `mpremote mount` — a 17-70 KB schedule then holds
+            # the boot for a minute or more with no output, indistinguishable
+            # from a hang (found 2026-09-29). One read costs a transient
+            # string the size of the file (tens of KB) — fine on the RP2350's
+            # ~490 KB free, and the reason this used to stream was the ESP32-C3
+            # heap, which is no longer the target (insights.md §11).
+            return json.loads(f.read())
+    except OSError:
+        print(f"✗ Schedule file not found: {filename}")
+        print("  Upload it with: make upload")
+        raise
+    except ValueError:
+        print(f"✗ Schedule file malformed (bad JSON): {filename}")
+        print("  Regenerate it with: make schedule && make upload")
+        raise
+
+
+
+
+def schedule_lines(schedule_data):
+    """PURE: normalize EITHER schedule shape to a list of line dicts, so no
+    caller ever has to branch on which format it was handed.
+
+    Contract: docs/contracts/schedule-json.md § Multiple lines at one
+    station. A file with `lines` returns it directly. A file without one is
+    a single-line station, and the document itself IS that line — that shape
+    is not deprecated, and normalizing here rather than at every use site is
+    what keeps every pre-existing schedule working untouched (principle #12,
+    "backward-compatible configuration").
+
+    Returns at least one entry, so `lines[i % len(lines)]` is always safe.
+    Each entry may carry an optional "color" — the line's NOMINAL colour,
+    which is what makes a line identifiable at a glance rather than only at
+    the moment you cycle to it (gesture-envelope.md §11)."""
+    lines = schedule_data.get("lines")
+    if lines:
+        return lines
+    single = {"name": schedule_data.get("station", "line")}
+    for period in ("weekday", "weekend"):
+        if period in schedule_data:
+            single[period] = schedule_data[period]
+    return [single]
+
+
