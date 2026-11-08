@@ -46,4 +46,4 @@ __pycache__/
 .DS_Store
 
 # PR body drafted for scripts/pr.sh
-.pr-body.md
+.pr-body*.md

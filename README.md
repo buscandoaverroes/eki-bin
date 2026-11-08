@@ -37,7 +37,9 @@ upload (`make test`).
   has been analysed and is deliberately gated: it gets built only if the
   rule-based pipeline fails against recorded data.
 
-Current state in detail: [dev-status.md](dev-status.md).
+Current version: **v1.7**, running on the bottle; what changed and why:
+[docs/releases/v1.7.md](docs/releases/v1.7.md). Current state in detail:
+[dev-status.md](dev-status.md).
 
 ---
 
