@@ -150,3 +150,8 @@ trivial: *find the first entry greater than the current minute-of-day.*
 
 Full pipeline: edit YAML → `make schedule` → `schedules/<station>.json` →
 `make upload` (lands on the device as `schedule.json`).
+
+**Privacy:** a real timetable reveals where someone lives, so everything in
+`schedules/` is gitignored except the `*.example.yaml` template, and that
+template is **synthetic**: `make example-schedule` regenerates it, so it's
+never anyone's real station. See [`docs/security.md`](../security.md).
