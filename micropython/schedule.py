@@ -18,8 +18,22 @@ import json
 from settings import (QUIET_END, QUIET_START)
 
 def is_quiet(now):
-    """True during the configured quiet hours. The window can wrap past midnight
-    (e.g. 23:00 → 06:00), so we test the gap with OR, not a simple range."""
+    """True during the configured quiet hours: the window [QUIET_START,
+    QUIET_END) in minutes since midnight (start inclusive, end exclusive).
+    Same rules as clock.py's day/night window:
+
+        start == end  → empty window → never quiet (a typo leaves the jar
+                        lit, not dark all day)
+        start <  end  → same-day window (e.g. 01:00 → 05:00): plain range
+        start >  end  → wraps past midnight (e.g. 23:00 → 06:00): OR test.
+                        Also covers the disable idiom 24 → 0, since
+                        `now >= 1440` and `now < 0` are both impossible.
+        0 → 24        → always quiet
+    """
+    if QUIET_START == QUIET_END:
+        return False
+    if QUIET_START < QUIET_END:
+        return QUIET_START <= now < QUIET_END
     return now >= QUIET_START or now < QUIET_END
 
 
