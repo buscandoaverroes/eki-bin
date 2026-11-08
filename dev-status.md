@@ -13,7 +13,7 @@ powered over USB. Correct time from the RTC across power cycles; tap wakes and
 cycles **line**; tilt adjusts brightness; the display renders
 `ApproachContract` with per-line colour; day/night brightness; goodnight and
 morning ceremonies for "trains exist but none in reach". Firmware is split
-across eleven modules with no radio code. `make test` runs lint + 418 host
+across eleven modules with no radio code. `make test` runs lint + 600+ host
 tests before every `make upload`. Wiring: `pinouts/v1.6-rp2350-production-unit.md`.
 
 **Recent arc (Aug 22 → Sep 14):** DS3231 bring-up + integration → V1.6

@@ -110,7 +110,7 @@ correct time across power cycles, tap wakes/cycles **line**, tilt adjusts
 brightness, `ApproachContract` with per-line colour, day/night brightness,
 goodnight/morning ceremonies, and the motion vocabulary (`docs/contracts/
 light-language.md`). Firmware is eleven modules, no radio code. `make test`
-runs lint + 418 host tests before every `make upload`; keep it green.
+runs lint + 600+ host tests before every `make upload`; keep it green.
 `make doctor` before trusting a board — **a XIAO RP2350 needs firmware newer
 than 2026-04-06** (`docs/insights.md` §13). Wiring is self-contained in
 `pinouts/v1.6-rp2350-production-unit.md`.
