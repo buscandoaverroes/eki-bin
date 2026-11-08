@@ -552,7 +552,8 @@ hypothesis) forbids tuning against anecdotes.**
     event ~4 s earlier. Handling makes resets far more frequent (12 in
     11 min vs 1 in 33), but a marginal connection can drop out without it.
     The conclusion stands (wiring, harness), the "only at certain angles"
-    part doesn't.
+    part doesn't. Rest sessions 2–4 (Nov 8) added one more at rest, the
+    bottle still for 30 s before. At rest: 2 in 70 min. Handled: 12 in 11.
   - **Found while reading the gate, NOT today's cause:** `_TapCycleState`,
     `_StatusMessage` and `tilt._elapsed` compared `ticks_ms()` stamps with
     plain subtraction. `ticks_ms` wraps every ~12.4 days (2**30 ms) and the
@@ -909,6 +910,22 @@ tap, so classify passed them. But the table kept swaying for ~3 s afterwards
 (quiet-window RMS 8–10 mg), and the arbiter vetoed them as not still. So
 "not still" doesn't only mean a hand. It means anything other than a
 finger, which leaves the bottle quiet.
+
+**Rest sessions 2–4 (2026-11-08):** 21 min with the owner moving around
+the house, then 16 min with the house empty. One trigger between them (a
+vertical one, which classify rejects) and no false taps in any configuration.
+The bottle leaned 5.8° against 2.8° on Oct 26, so it was a slightly
+different spot or seating on the same table.
+
+| pooled rest, 70 min | triggers | false taps | 95% bound |
+|---|---|---|---|
+| magnitude + capture (ships) | 2 | 0 | < 2.6/h |
+| vector + capture | 6 | 3 | — |
+| **vector + settle** | 6 | **0** | **< 2.6/h** |
+
+About 1.8 h more of zero reaches the < 1/h target. So far every hard case
+(the sideways bumps) came from one evening, so the remaining time is worth
+spending on busier conditions, not quiet ones.
 
 **A consequence for wiring this in:** the firmware flashes an ACK on every
 *trigger*, before any verdict (`ACK_FLASH_MS`, on purpose for feel). Vector
