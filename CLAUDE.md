@@ -48,7 +48,9 @@ When writing Rust code in this repo, take a teaching role:
 
 | Looking for… | File |
 |---|---|
-| Overview, quick start, every `make` target, workflows | `README.md` |
+| The front door: what it is, why it exists, a menu of the docs | `README.md` |
+| Setup, the everyday loop, every `make` target, git flow | `docs/development.md` |
+| What changed per release, and what was learned | `docs/releases/` |
 | Building a unit from scratch: solder → flash → upload → bring-up → run | `docs/provisioning-runbook.md` |
 | What's true now / next / open decisions (current only) | `dev-status.md` |
 | Build-by-build history through V1.6 (frozen 2026-09-29) | `docs/archive/dev-status-history.md` |
