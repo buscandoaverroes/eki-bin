@@ -240,12 +240,17 @@ rtc-test: _check-mpremote
 # week. Appends to data/rtc-drift.jsonl (gitignored) -- run it once to set a
 # baseline, again later for a figure. Pass --mark-seed after re-setting the
 # chip, since that destroys the baseline.
-#   make rtc-drift                    (XIAO RP2350 defaults)
-#   make rtc-drift ARGS="--mark-seed"
-#   make rtc-drift ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+#   make rtc-drift UNIT=bottle-01                    (XIAO RP2350 defaults)
+#   make rtc-drift UNIT=bottle-01 ARGS="--mark-seed"
+#   make rtc-drift UNIT=bottle-01 ARGS="--sda 0 --scl 1 --i2c-id 0"   (Pico 2W)
+#   make rtc-drift ARGS="--history"                  every unit, no fit
+# ⚠ UNIT is REQUIRED to write, and has no default on purpose. A DS3231 has no
+# ID register, so the tool cannot tell two chips apart; a default would file
+# every chip under one name. That is how a second chip's sample landed in
+# bottle-01's fit (2026-09-29). Post-hoc fixes: data/rtc-drift-corrections.json.
 .PHONY: rtc-drift
 rtc-drift: _check-mpremote
-	$(PYTHON) scripts/rtc_drift.py $(ARGS)
+	$(PYTHON) scripts/rtc_drift.py $(if $(UNIT),--unit $(UNIT),) $(ARGS)
 
 # ⚠ WRITES the DS3231 — the only target that does. Seeding, verifying and
 # measuring are three different intents, and they used to share two scripts
@@ -344,6 +349,53 @@ hooks:
 .PHONY: pr
 pr:
 	@BASE="$(BASE)" TITLE="$(TITLE)" BODY="$(if $(BODY),$(BODY),.pr-body.md)" DRAFT="$(DRAFT)" YES="$(YES)" scripts/pr.sh
+
+# Phase 0 of docs/imu-interaction-plan.md: run the real firmware from the Mac
+# with recording on, and label failures with one keypress. Streams to
+# data/interaction-<unit>-<time>.jsonl — nothing is written to the board's
+# flash. UNIT is required: a recording of an unnamed bottle is unusable later.
+#   make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [LEVEL=full|rate] [NOTE="..."]
+.PHONY: interaction-log
+interaction-log: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make interaction-log UNIT=bottle-01 [MOUNT=base|lid] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/interaction_log.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(LEVEL),--level $(LEVEL),) $(if $(NOTE),--note "$(NOTE)",)
+
+# The raw-sensor sandbox: stream accel + gyro at the sensor's rate and label
+# what you DID (taps, knocks, lifts, rests, tilts). Runs none of the firmware;
+# everything the firmware would decide is replayed on the Mac afterwards.
+#   make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=wood] [NOTE="..."]
+#                   [PROTOCOL=tap-vs-grab [REST=4] [START_AT=n]]   ← guided: the script cues each trial
+.PHONY: imu-record
+imu-record: _check-mpremote
+	@test -n "$(UNIT)" || (echo "✗ usage: make imu-record UNIT=bottle-01 [MOUNT=base|lid] [ODR=240] [SURFACE=...] [NOTE=...]" && exit 1)
+	$(PYTHON) scripts/imu_record.py --unit "$(UNIT)" --mount "$(if $(MOUNT),$(MOUNT),base)" $(if $(ODR),--odr $(ODR),) $(if $(GYRO_FS),--gyro-fs $(GYRO_FS),) $(if $(SURFACE),--surface "$(SURFACE)",) $(if $(NOTE),--note "$(NOTE)",) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(REST),--rest $(REST),) $(if $(START_AT),--start-at $(START_AT),)
+
+# Where do the stream's missing samples go? Five 8 s phases of the same poll
+# loop (no output / gc off / no allocation / printing b64 / printing text),
+# one summary line each. Diagnostic only; nothing recorded or flashed.
+.PHONY: imu-bench
+imu-bench: _check-mpremote
+	$(MPREMOTE) mount $(SRC_DIR) run $(SRC_DIR)/imu_bench.py
+
+# Phase 1: replay raw recordings through the REAL tap/tilt code on the Mac and
+# score its decisions against the labels. Every data/imu-*.jsonl marked
+# use:true in data/imu-sessions.json, unless FILES= is given.
+#   make replay [LOOP_HZ=57,139,240] [CSV=features.csv] [FILES="data/imu-....jsonl ..."]
+.PHONY: replay
+replay:
+	$(PYTHON) scripts/replay.py $(FILES) --loop-hz $(if $(LOOP_HZ),$(LOOP_HZ),57) $(if $(CSV),--csv $(CSV),)
+
+# The IMU pipeline with swappable blocks (scripts/sim.py): what ships fills
+# every slot; swap one block at a time and re-score on the same recordings.
+# sim-live runs it on the recording `make imu-record` is making right now —
+# start the recording, then this in a second terminal.
+#   make sim [DETECT=magnitude,vector] [ARBITER=capture,settle] [CLASSIFY=firmware,accept] [LOOP_HZ=240,145] [IDEAL=1] [FILES=...]
+#   make sim-live [DETECT=vector] [ARBITER=settle] [LOOP_HZ=145]
+.PHONY: sim sim-live
+sim:
+	$(PYTHON) scripts/sim.py $(FILES) $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(IDEAL),--ideal,)
+sim-live:
+	$(PYTHON) -u scripts/sim.py --follow $(if $(DETECT),--detect $(DETECT),) $(if $(ARBITER),--arbiter $(ARBITER),) $(if $(CLASSIFY),--classify $(CLASSIFY),) $(if $(LOOP_HZ),--loop-hz $(LOOP_HZ),) $(if $(UNIT),--unit $(UNIT),)
 
 # Regenerate the committed, SYNTHETIC schedule template (public repo — the
 # example must not be anyone's real timetable). Deterministic.

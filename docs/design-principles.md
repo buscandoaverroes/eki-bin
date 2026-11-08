@@ -47,6 +47,15 @@ in `docs/insights.md`._
 8. 🔲 **Colour should feel native to the jar, not like a gadget.** _(stub: amber
    reads "natural" in brown glass, red reads "artificial" — formalise what this
    means for palette design per enclosure.)_
+18. **A tap is a distinct gesture; a tap while holding is noise.** _(Decided
+    2026-10-26, `imu-interaction-plan.md` "The arbiter". Numbered 18, out of
+    order, so that code and docs citing #1–17 by number stay right.)_ A
+    bottle in the hand is being held, and anything the fingers do then is
+    handling. So the arbiter commits a tap only once the bottle is proved
+    still, and taps on a held bottle don't count (3/62 on the Oct 4
+    session, by design). This is a rule about what the object listens to,
+    not a threshold to tune back: loosening `ARBITER_QUIET_MG` to let held
+    taps through brings grabs back with them.
 
 ## Architecture
 

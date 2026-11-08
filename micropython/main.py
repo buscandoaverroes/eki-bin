@@ -39,6 +39,7 @@ from diag import (_mem_checkpoint, _mem_report)
 from gestures import (_GESTURE_TRIGGER_BUFFER_LEN, _StatusMessage,
     _TapCycleState, _gesture_magnitude_mg, _gesture_median, _get_imu,
     _handle_tap, _run_gesture_debug_loop, _safe_read_accel)
+import gestures as _gestures  # GYRO_BIAS, gyro_check_enabled, _safe_read_gyro
 import leds
 from leds import (_heartbeat_pin, _write_frame, clear)
 from schedule import (is_quiet, load_schedule, schedule_lines)
@@ -196,6 +197,61 @@ def _apply_line_color(contract, line):
     color = line.get("color")
     if color and hasattr(contract, "set_line_color"):
         contract.set_line_color(tuple(color))
+
+
+def _recover_imu(i2c, addr, watch, now_ms, why, phase, ilog):
+    """Re-configure a sensor that reset itself, and say so — with what the
+    display was doing, because what made the sensor reset is still
+    unknown, and a supply dip from the strip would show up as recoveries
+    clustering while it is lit."""
+    ok = _gestures.imu_recover(i2c, addr)
+    watch.recovered(now_ms)
+    print("  [imu] sensor reset itself (%s) — %s (#%d since boot; %s, "
+          "brightness %.2f)" % (why, "reconfigured" if ok else "RECONFIGURE FAILED",
+                                watch.recoveries, phase, settings.BRIGHTNESS))
+    if ilog is not None:
+        ilog.event(now_ms, "imu_recover", why=why, ok=ok)
+
+
+def _imu_status_line(tap_state, tilt_ctl, counts, watch=None):
+    """One line per 30 s block saying what the IMU path actually did.
+
+    Added 2026-10-21, after the second "asleep and could not be woken"
+    episode. Taps and tilt sit behind ONE gate (phase accepts input, not
+    booting), so a single fault stops both — and the console printed
+    nothing about the IMU at all, so four different failures looked the
+    same from outside:
+
+      phase stuck waking/settling  →  reads 0, gated N   (gate shut)
+      I2C reads failing            →  failed N           (bus)
+      reads fine, nothing triggers →  taps 0             (trigger)
+      triggers, all rejected       →  taps N → 0 ok (…)  (a classifier)
+      the sensor reset itself      →  N ZERO, then "recovered" (ImuWatch)
+
+    A crashed loop is the fifth, and shows as these lines stopping.
+    Counts reset every block, so each line is the last ~30 s only."""
+    reads = "reads %d ok, %d failed, %d gated" % (counts["ok"], counts["failed"],
+                                                  counts["gated"])
+    if counts.get("zero"):
+        reads += ", %d ZERO" % counts["zero"]
+    parts = ["  imu: %s" % tap_state.phase, reads]
+    if counts["booting"]:
+        parts.append("%d in boot-ignore" % counts["booting"])
+    parts.append(_gestures.tap_stats_line())
+    if tilt_ctl is None:
+        parts.append("tilt off")
+    else:
+        parts.append("tilt %s %.1f°" % ("engaged" if tilt_ctl.engaged else "idle",
+                                        tilt_ctl.deg))
+    if _gestures.gyro_check_enabled():
+        parts.append("gyro " + _gestures.GYRO_BIAS.status())
+    else:
+        parts.append("gyro off")
+    if watch is not None and watch.recoveries:
+        parts.append("recovered %d since boot" % watch.recoveries)
+    for k in counts:
+        counts[k] = 0
+    return " · ".join(parts)
 
 
 def _apply_daylight(minutes, last_period):
@@ -415,6 +471,12 @@ def _run_interactive_loop(schedule_data, led):
 
     last_refresh = None
     loop_started = time.ticks_ms()
+    # Counted per 30 s block and printed by _imu_status_line. These are the
+    # numbers that tell "the IMU is not being read" from "it is read and
+    # nothing triggers" from "it triggers and everything is rejected" —
+    # which looked identical from outside, twice.
+    imu_counts = {"ok": 0, "failed": 0, "gated": 0, "booting": 0, "zero": 0}
+    imu_watch = _gestures.ImuWatch()
     now = 0
     daylight = None  # last applied day/night period; None = not yet applied
     morning_armed = False  # self-arming: set when we SEE everything out of
@@ -423,6 +485,20 @@ def _run_interactive_loop(schedule_data, led):
     #   the trains have gone out of reach again, which is once a night.
     tilt_ctl = TiltController() if TILT_ENABLED else None
     tilt_ms = time.ticks_ms()
+    gyro_ms = time.ticks_ms()
+
+    # Phase 0 recording (docs/imu-interaction-plan.md). Observes only: every
+    # call below is guarded, and with INTERACTION_LOG off none of it exists.
+    ilog = None
+    if settings.INTERACTION_LOG and imu_addr is not None:
+        import gestures
+        import interlog
+        ilog = interlog.Stream(i2c, imu_addr, settings.INTERACTION_LOG_LEVEL)
+        if settings.INTERACTION_LOG_LEVEL != "rate":
+            gestures.capture_observer = ilog
+        ilog.start(time.ticks_ms(), interlog.snapshot(settings))
+        print("  [interlog] recording on (%s) — streaming to the host"
+              % settings.INTERACTION_LOG_LEVEL)
     signal = LeaveSignal([])
     signal_b = None
 
@@ -487,6 +563,16 @@ def _run_interactive_loop(schedule_data, led):
                 else:
                     print(f"  ring B: {signal_b.urgency.name}  (no catchable trains)")
 
+            if imu_addr is not None:
+                # The slow check: a reset whose outputs froze at a non-zero
+                # value would never trip the zero detector. One register
+                # read every 30 s covers it.
+                if _gestures.imu_config_lost(i2c, imu_addr):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "settings lost", tap_state.phase, ilog)
+                    trigger_buffer = []
+                print(_imu_status_line(tap_state, tilt_ctl, imu_counts, imu_watch))
+
             # ── the morning flower ────────────────────────────────
             # Arms itself whenever everything is out of reach, and fires
             # when the soonest train is about to cross in. The flower is
@@ -517,6 +603,8 @@ def _run_interactive_loop(schedule_data, led):
         phase_change = tap_state.advance(tick_now)
         if phase_change == "asleep":
             print("  [SLEEP] awake window expired")
+            if ilog is not None:
+                ilog.event(tick_now, "asleep")
 
         # Plugging a unit in IS handling, and handling is what the
         # recognizer's 98.4% is measured against — so a false trigger in
@@ -524,11 +612,38 @@ def _run_interactive_loop(schedule_data, led):
         # the display and play a wake wave nobody asked for.
         _booting = time.ticks_diff(tick_now, loop_started) < GESTURE_BOOT_IGNORE_MS
 
+        if imu_addr is not None and _booting:
+            imu_counts["booting"] += 1
+        elif imu_addr is not None and not tap_state.accepts_input():
+            imu_counts["gated"] += 1
+
         if imu_addr is not None and tap_state.accepts_input() and not _booting:
             raw, last_error_print = _safe_read_accel(
                 i2c, imu_addr, tick_now, last_error_print
             )
+            imu_counts["ok" if raw is not None else "failed"] += 1
+            # A sensor that reset itself answers every read with (0,0,0) —
+            # no error, so this is the only place it shows. Never pass a
+            # zero sample on, and after ~0.2 s of them, re-configure.
+            if raw is not None and imu_watch.dead(raw):
+                imu_counts["zero"] += 1
+                if imu_watch.due(tick_now):
+                    _recover_imu(i2c, imu_addr, imu_watch, tick_now,
+                                 "reading zeros", tap_state.phase, ilog)
+                    trigger_buffer = []   # the next real sample would read
+                    #   as a 1 g step against whatever is left in here
+                raw = None
             if raw is not None:
+                if ilog is not None:
+                    ilog.sample(tick_now, raw)
+                if _gestures.gyro_check_enabled():
+                    # Keep the gyro's resting baseline current, so the tap
+                    # check can measure rotation against it (GyroBias).
+                    _g = _gestures._safe_read_gyro(i2c, imu_addr)
+                    if _g is not None:
+                        _gestures.GYRO_BIAS.update(
+                            _g, time.ticks_diff(tick_now, gyro_ms))
+                        gyro_ms = tick_now
                 # Tilt and taps share one sample, split by magnitude: taps
                 # want |a| >> 1g, tilt wants |a| ≈ 1g, and tilt.py's gate
                 # enforces its half. Neither needs to know about the other,
@@ -542,6 +657,8 @@ def _run_interactive_loop(schedule_data, led):
                     tilt_state = tilt_ctl.update(
                         raw, tick_now, time.ticks_diff(tick_now, tilt_ms))
                     tilt_ms = tick_now
+                    if ilog is not None:
+                        ilog.tilt(tick_now, tilt_state, tilt_ctl)
                     if tilt_state in ("up", "down"):
                         last_render = None   # repaint at the new brightness
                     if (tilt_ctl.rail_bounce is not None
@@ -560,6 +677,9 @@ def _run_interactive_loop(schedule_data, led):
 
                 if baseline is not None and abs(mag - baseline) >= TAP_TRIGGER_THRESHOLD_MG:
                     dev = abs(mag - baseline)
+                    if ilog is not None:
+                        ilog.event(tick_now, "trigger", dev=dev,
+                                   quiet=quiet_now)
                     # Quiet hours short-circuits BEFORE the ~1.2s capture —
                     # led-status-messages.md says quiet hours is checked
                     # first, and honouring that here also means quiet-hours
@@ -575,6 +695,9 @@ def _run_interactive_loop(schedule_data, led):
                             signal, signal_b, status_message,
                             can_cycle=len(lines) > 1,
                         )
+                        if ilog is not None:
+                            ilog.event(time.ticks_ms(), "tap_response",
+                                       response=response)
                         # No `len(lines) > 1` guard here any more: the
                         # response is now correct BY CONSTRUCTION, because
                         # _handle_tap was told whether the action exists
@@ -675,7 +798,12 @@ def _run_interactive_loop(schedule_data, led):
         elif quiet_now or not tap_state.awake:
             clear()
         else:
-            _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+            if ilog is not None:
+                _r0 = time.ticks_us()
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
+                ilog.render_cost(time.ticks_diff(time.ticks_us(), _r0))
+            else:
+                _render_dispatch(ACTIVE_CONTRACT, signal, signal_b)(tick_now)
 
         time.sleep_ms(GESTURE_POLL_MS)
 
@@ -783,6 +911,8 @@ def main():
         #   below only ever runs after a successful connect + burst.
 
         try:
+            print("  loading %s…" % SCHEDULE_FILE)   # a slow load must not
+            #   look like a hang — see schedule.load_schedule
             schedule_data = load_schedule(SCHEDULE_FILE)
             # The parked multi-line question in concrete terms: this delta
             # IS the schedule's real cost, object graph included, rather

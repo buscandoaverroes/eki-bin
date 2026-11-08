@@ -1381,7 +1381,7 @@ brown opaque bottle) sitting on the dev bench. Same genre as §5, and it
 Today: **not bright enough in daylight; fine at night.**
 
 Both observations are true; they were made through different glass and at
-different ambient light. This is the evidence design-principle #13
+different ambient light. This is the evidence design-principle #16
 ("brightness baseline is per-enclosure") was stubbed waiting for — and it
 needs a second clause: **per-enclosure *and* per-ambient.** A single
 `BRIGHTNESS` scalar cannot satisfy a room that changes by 2–3 orders of

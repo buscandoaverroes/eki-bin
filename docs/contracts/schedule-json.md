@@ -75,7 +75,7 @@ which **line** at that station. Lines and directions are orthogonal axes:
 
 | Key | Type | Notes |
 |---|---|---|
-| `lines` | array | **Optional.** Absent → the whole document is one unnamed line, so **every existing schedule keeps working untouched** (design principle #9) |
+| `lines` | array | **Optional.** Absent → the whole document is one unnamed line, so **every existing schedule keeps working untouched** (design principle #12, "backward-compatible configuration") |
 | `lines[].name` | str | Display/debug label |
 | `lines[].color` | `[r, g, b]` | The line's **nominal** colour — see the split below |
 | `lines[].weekday` / `weekend` | object | Same shape as the single-line form: direction keys → minute arrays |
@@ -87,7 +87,7 @@ which **line** at that station. Lines and directions are orthogonal axes:
 green — while how it must be driven to look green *through your particular
 bottle* is a fact about your hardware. Keeping them separate means one
 schedule file works across differently-tinted jars, and matches design
-principle #7 ("config is intent; firmware is logic").
+principle #10 ("config is intent; firmware is logic").
 
 ### ⚠ Tinted glass constrains the palette — pick colours that survive it
 

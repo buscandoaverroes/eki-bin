@@ -191,8 +191,9 @@ ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 #
 # Accepts GESTURE_ENABLED (preferred) or the older
 # WAKE_INTERACTION_ENABLED, so existing config.py files keep working —
-# design principle #9. The old name is kept only for compatibility; it
-# describes a design that has been superseded.
+# design principle #12 ("backward-compatible configuration"). The old name is
+# kept only for compatibility; it describes a design that has been
+# superseded.
 # Taps are ignored for this long after the loop starts. Plugging a unit in
 # or setting it down IS handling, and the recognizer's 98.4% is measured
 # against POOLED handling noise — so a boot-time false trigger is expected
@@ -362,9 +363,83 @@ GESTURE_DEBUG_ENABLED = getattr(config, "GESTURE_DEBUG_ENABLED", False)
 # replacement — see that section for why. TAP_ENERGY_THRESHOLD is the one
 # threshold this path needs; the timing knobs below drive the two-phase
 # ACK/CONFIRM state machine (_TapCycleState).
-TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 138000)  #
+TAP_ENERGY_THRESHOLD = getattr(config, "TAP_ENERGY_THRESHOLD", 1_000_000)  #
 #   per-bottle — 98.4% across pooled tap vs. pooled handling-noise sessions
-#   (chianti bottle), see §11
+#   (chianti bottle), see §11.
+#   ⚠ RAISED 138k -> 1M on 2026-10-04. Replay of the raw recordings found the
+#   old value rejecting real taps (10-14 of 62 when every impulse is judged,
+#   9 of 20 near the top of the bottle) once table knocks had their own check
+#   below. It is now a coarse guard against gross handling, not the tap test;
+#   the mid-window gyro check does that job. A config.py that sets 138000
+#   explicitly keeps the old behaviour — remove or raise it there.
+# Reject a contact whose first 150 ms of impulse is mostly ALONG GRAVITY: a
+# knock on the table (or on a cup standing on it) reaches the bottle through
+# its base, vertically, while a finger on the glass pushes sideways. Replay of
+# the 2026-10-04 recordings: knocks on the table/objects accepted 17/54 at the
+# production loop rate; with this at 0.5, 1 — and no true tap lost
+# (docs/imu-interaction-plan.md, Phase 1 results). Measured against the
+# gravity vector the capture settles to, NOT the sensor's z axis, so it does
+# not depend on how the IMU is mounted. None disables it.
+TAP_VERTICAL_SHARE_MAX = getattr(config, "TAP_VERTICAL_SHARE_MAX", 0.5)
+# Reject a contact if the bottle is still ROTATING 150-400 ms after the
+# trigger: after the impact has rung down, before the next thing a person
+# does. A finger on the glass leaves it still; a grab, a lift, a set-down or
+# a tilt keeps it turning. Replay, 2026-10-04: no real tap lost at any energy
+# setting, handling accepted 93 -> 31 of 169 with the energy guard off
+# (docs/imu-interaction-plan.md; the feature came from
+# docs/classifier-approach.md). Degrees/s with the gyro's zero-rate offset
+# removed by a running baseline (gestures.GyroBias). None disables the check
+# AND leaves the gyro powered down.
+TAP_GYRO_MID_MAX_DPS = getattr(config, "TAP_GYRO_MID_MAX_DPS", 1.15)
+# The window that rotation is measured over, ms after the trigger. Settings
+# rather than constants so replay can score the firmware's own path with a
+# different window (2026-10-25: a timing analysis put the tap-vs-grab
+# difference at 100-200 ms, while 200-400 showed none). The capture only
+# reads the gyro for its first 450 ms, so END must stay at or under that.
+TAP_GYRO_MID_START_MS = getattr(config, "TAP_GYRO_MID_START_MS", 150)
+TAP_GYRO_MID_END_MS = getattr(config, "TAP_GYRO_MID_END_MS", 400)
+GYRO_BIAS_TAU_MS = getattr(config, "GYRO_BIAS_TAU_MS", 2000)   # how fast the
+#   resting baseline follows (temperature drift is minutes; 2 s is plenty)
+GYRO_BIAS_GATE_DPS = getattr(config, "GYRO_BIAS_GATE_DPS", 5.0)  # only learn
+#   from samples within this of the current baseline — i.e. only at rest
+# The gyro check ABSTAINS until the baseline has spent this long learning at
+# rest. Added 2026-10-21 for the "once, asleep, it could not be woken" watch
+# item: the baseline seeds from the first sample it sees, and if that sample
+# was taken mid-handling it starts wrong — then every tap reads as rotation
+# and is rejected until the baseline recovers. Abstaining means "no
+# evidence", never a rejection, so taps still pass the other two checks.
+#
+# ⚠ 3 time constants, NOT the ~2 s the interaction plan first suggested. The
+# gate is per-axis 5 dps, so a seed can be off by up to sqrt(3) x 5 = 8.7 dps
+# and still be learned from. Error after t at rest is 8.7 x exp(-t/tau):
+#   t = 1 tau (2 s)  ->  3.2 dps   still above the 1.15 dps threshold
+#   t = 3 tau (6 s)  ->  0.43 dps  well clear of it
+# A 2 s guard would have left exactly the failure it was meant to remove.
+GYRO_BIAS_WARMUP_MS = getattr(config, "GYRO_BIAS_WARMUP_MS", 3 * GYRO_BIAS_TAU_MS)
+
+# ── the arbiter (micropython/arbiter.py): when a tap becomes real ──────────
+# A classified tap is provisional until the bottle proves it was left alone.
+# Every number below is a measurement from the guided session of 2026-10-26
+# (docs/imu-interaction-plan.md, "The arbiter"), not a guess. Off by default:
+# main.py doesn't drive it yet; scripts/sim.py does.
+ARBITER_ENABLED = getattr(config, "ARBITER_ENABLED", False)
+# Settled = still. A tapped bottle drops back to the sensor's noise floor
+# within ~250 ms (accel jitter median 1.04 mg, max 2.4); a held one carries
+# the hand's tremor (median 2.3 mg). RMS about the window's own mean, mg.
+ARBITER_QUIET_FROM_MS = getattr(config, "ARBITER_QUIET_FROM_MS", 250)
+ARBITER_QUIET_MS = getattr(config, "ARBITER_QUIET_MS", 350)
+ARBITER_QUIET_MG = getattr(config, "ARBITER_QUIET_MG", 1.6)
+# Handling = sustained rotation: above ROT_DPS (25 ms smoothing) for ROT_MS.
+# A tap's own rotation is over by ~170 ms, so nothing before RINGDOWN_MS
+# counts against it.
+ARBITER_ROT_DPS = getattr(config, "ARBITER_ROT_DPS", 10.0)
+ARBITER_ROT_MS = getattr(config, "ARBITER_ROT_MS", 100)
+ARBITER_RINGDOWN_MS = getattr(config, "ARBITER_RINGDOWN_MS", 200)
+# Look-back: handling that ended this recently makes a trigger the hand
+# leaving the bottle (set-down, release), not a tap.
+ARBITER_LOOKBACK_MS = getattr(config, "ARBITER_LOOKBACK_MS", 1500)
+# A tap that never settles is given up on here: a hand held it throughout.
+ARBITER_SETTLE_MAX_MS = getattr(config, "ARBITER_SETTLE_MAX_MS", 1800)
 ACK_FLASH_MS = getattr(config, "ACK_FLASH_MS", 50)  # instant acknowledgment
 #   on trigger, before the verdict is known — as close to 0 as FRAME_MS/
 #   hardware allow
@@ -450,7 +525,8 @@ QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 #
 # ⚠ DEFAULTS ARE DELIBERATELY NEUTRAL. Both values default to BRIGHTNESS,
 # so an existing device upgrading to this firmware behaves EXACTLY as
-# before until DAY_BRIGHTNESS is actually raised (design-principle #9).
+# before until DAY_BRIGHTNESS is actually raised (design-principle #12,
+# "backward-compatible configuration").
 # The mechanism ships on; the profile ships flat. Raising DAY_BRIGHTNESS is
 # the whole point, and it is tuned on the real glass, not guessed here —
 # same rule the colour work established (insights.md §12).
@@ -470,9 +546,17 @@ NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
 # one is what bottles are FOR, and the IMU already provides it.
 #
 # ⚠ DEFAULT OFF. Shipping this on would change how an existing unit
-# behaves on upgrade (design-principle #9), and brightness is the one
-# setting a surprise change is most visible in.
+# behaves on upgrade (design-principle #12, "backward-compatible
+# configuration"), and brightness is the one setting a surprise change is
+# most visible in.
 TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
+
+# Record raw accel + gyro and the pipeline's decisions as a text stream on the
+# USB console (interlog.py). Phase 0 of docs/imu-interaction-plan.md. OFF: it
+# powers the gyro and prints continuously. Normally flipped by
+# interlog_run.py (make interaction-log), not by editing config.py.
+INTERACTION_LOG = getattr(config, "INTERACTION_LOG", False)
+INTERACTION_LOG_LEVEL = getattr(config, "INTERACTION_LOG_LEVEL", "full")  # or "rate"
 TILT_EXPO = getattr(config, "TILT_EXPO", 0.6)  # 0 = linear, 1 = pure cubic.
 #   0.6 chosen on hardware: linear acquired targets faster but landed an
 #   order of magnitude less precisely, and precision is what this control
@@ -505,6 +589,19 @@ TILT_STILL_MS = getattr(config, "TILT_STILL_MS", 6000)  # ⚠ LONG ON PURPOSE.
 #   is an annoyance; re-baselining onto a hand-held angle poisons every
 #   reading afterwards, so this errs long.
 TILT_BASELINE_ALPHA = getattr(config, "TILT_BASELINE_ALPHA", 0.02)
+# ── the same four, in MILLISECONDS — what tilt.py actually uses ──────
+# The four values above are PER SAMPLE: they advance once per update(), so
+# their meaning in time depended on how fast the loop happened to turn — and
+# the production loop turns at 4-139 Hz (insights / imu-interaction-plan).
+# Replay of real recordings (scripts/replay.py, 2026-10-04): deliberate tilts
+# engaged in 9/10 segments at 57 Hz and 2/10 at 240 Hz, same sensor data.
+# These replace them. None = derive from the per-sample value AS TUNED, i.e.
+# at the 25 ms tick tilt_freeform.py ran at, so an existing config.py keeps
+# meaning exactly what it meant when it was tuned. tilt.py does the maths.
+TILT_SMOOTH_TAU_MS = getattr(config, "TILT_SMOOTH_TAU_MS", None)      # ~154 ms
+TILT_ENGAGE_MS = getattr(config, "TILT_ENGAGE_MS", None)              # ~75 ms
+TILT_STILL_WINDOW_MS = getattr(config, "TILT_STILL_WINDOW_MS", None)  # ~575 ms
+TILT_BASELINE_TAU_MS = getattr(config, "TILT_BASELINE_TAU_MS", None)  # ~1.24 s
 
 # ── Hitting a brightness rail ────────────────────────────────────────
 # A rail is INVISIBLE: the display stops changing, and "already at maximum"
@@ -629,7 +726,7 @@ MORNING_GAP_MS = getattr(config, "MORNING_GAP_MS", 220)
 #
 # ⚠ DEFAULT OFF. With this on, a tap's CONFIRM stops being a flash and
 # becomes a motion — a visible behaviour change on an existing unit
-# (design-principle #9).
+# (design-principle #12, "backward-compatible configuration").
 MOTION_ENABLED = getattr(config, "MOTION_ENABLED", False)
 MOTION_OUTWARD_MS = getattr(config, "MOTION_OUTWARD_MS", 900)   # the ACK
 MOTION_AROUND_MS = getattr(config, "MOTION_AROUND_MS", 1400)    # a transition

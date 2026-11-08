@@ -58,6 +58,7 @@ When writing Rust code in this repo, take a teaching role:
 | Form-factor proposal: "glass stone on a stand" (eki-ishi) — **a proposal, not a decision; nothing scheduled.** The JJY time-signal and surface-as-input research memos hang off it | `docs/glass-stone-concept.md` |
 | Guiding design principles (some stubs) | `docs/design-principles.md` |
 | **Palette checks** — `palette_problems()` / `safe_range()` / boot report; the usable BRIGHTNESS window and what binds each end | `micropython/palette.py` |
+| **Classifier approach** — which decision logic (rules shaped as a depth-2 tree + the arbiter's settlement window; no on-device model yet) and the testing ladder to get there. *Analysis, 2026-10-04* | `docs/classifier-approach.md` |
 | **On-board detection** — ESN vs the MLC, a piezo, and the gyro; why the mic wall is conceptual. *Analysis; nothing built* | `docs/on-board-detection.md` |
 | **Palette/brightness config — three proposals** to stop clipping and floor bugs being invisible. *A proposal; nothing built* | `docs/palette-model.md` |
 | Field notes + why-decisions + parked ideas | `docs/insights.md` |
@@ -93,6 +94,9 @@ When writing Rust code in this repo, take a teaching role:
 | DS3231 drift: the maths, and why offset ≠ drift | `docs/rtc-drift-theory.md` |
 | Live gesture recognizer + LED jolt sandbox (real IMU input, real LED output, no full main.py loop) | `micropython/gesture_sandbox.py` |
 | IMU bring-up + gesture data-collection tools (see `docs/insights.md` §8 for the field log these produced) | `micropython/imu_test.py`, `vibration_sandbox.py`, `handling_test.py`, `orientation_test.py` |
+| **The IMU simulator** — detect → arbiter → classify as swappable blocks, scored on recordings (`make sim`) or live beside `make imu-record` (`make sim-live`) | `scripts/sim.py` |
+| **The arbiter** — when a tap becomes real: commit on stillness, veto on handling before/after. Firmware module, driven by the sim; not yet wired into `main.py` | `micropython/arbiter.py` |
+| Guided recording — the script cues each trial (`PROTOCOL=tap-vs-grab`) | `scripts/imu_protocol.py` |
 | Host test suite (`make test`, runs before `make upload`) | `tests/` |
 | **Security posture** — public repo about a private commute; the local leak check (`make leakcheck`), open GitHub-side items | `docs/security.md` |
 
@@ -106,7 +110,7 @@ correct time across power cycles, tap wakes/cycles **line**, tilt adjusts
 brightness, `ApproachContract` with per-line colour, day/night brightness,
 goodnight/morning ceremonies, and the motion vocabulary (`docs/contracts/
 light-language.md`). Firmware is eleven modules, no radio code. `make test`
-runs lint + 418 host tests before every `make upload`; keep it green.
+runs lint + 600+ host tests before every `make upload`; keep it green.
 `make doctor` before trusting a board — **a XIAO RP2350 needs firmware newer
 than 2026-04-06** (`docs/insights.md` §13). Wiring is self-contained in
 `pinouts/v1.6-rp2350-production-unit.md`.
@@ -118,11 +122,13 @@ impossible in brown glass. `make low-pwm-test` runs **out** of the bottle,
 
 **Three walls from givable** (`dev-status.md`):
 1. **Tap + tilt fight each other.** A composition problem, not a
-   classification one — including the *approach* to a tilt firing a tap, where
-   the disambiguating evidence arrives after the false tap. Plan (draft):
-   `docs/imu-interaction-plan.md`. **No ML yet, no new sensor yet** — record
-   with the gyro on, build a replay harness, then one arbiter with a look-back
-   veto. Ranking of the ML options: `docs/on-board-detection.md`.
+   classification one — the evidence that a "tap" was a grab arrives after
+   it. **Built in simulation (2026-10-26):** a vector trigger (detect) and
+   `micropython/arbiter.py` (settle on stillness, veto on handling), scored
+   by `make sim` on a guided recording. Not yet on the bottle. Blocks are
+   named **detect → arbiter → classify**; "Stage 1/2" is the *display*
+   pipeline. Plan: `docs/imu-interaction-plan.md`. **No ML yet, no new
+   sensor yet.** Ranking of the ML options: `docs/on-board-detection.md`.
 2. **A wiring harness** — leaning to a lid-mounted unit assembled outside the
    vessel.
 3. **Power** — a battery needs a strip load switch; the chandelier/lamp form

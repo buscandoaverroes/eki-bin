@@ -88,7 +88,18 @@ LOG_PATH = REPO / "data" / "rtc-drift.jsonl"
 # Derived rollup, rewritten from the log on every run. The .jsonl is the
 # record (append-only, never edited); this is the answer (regenerable, safe
 # to delete). Both gitignored under data/.
-SUMMARY_PATH = REPO / "data" / "rtc-drift-summary.json"
+SUMMARY_PATH = REPO / "data" / "rtc-drift-summary.json"   # pre-unit; no
+#   longer written. Each unit now gets its own — see summary_path().
+# Post-hoc fixes to the log, applied at READ time — the log itself is never
+# edited, the same rule data/imu-sessions.json follows for recordings. See
+# apply_corrections() for the format.
+CORRECTIONS_PATH = REPO / "data" / "rtc-drift-corrections.json"
+
+
+def summary_path(unit):
+    """One summary per unit. A single unit-agnostic summary is what let a
+    sample from one chip's history land in another's fit unnoticed."""
+    return REPO / "data" / ("rtc-drift-summary-%s.json" % unit)
 SPEC_PPM = 2.0            # DS3231 datasheet, 0-40°C
 NTP_REFERENCE_ERROR_S = 0.020   # assumed round-trip asymmetry, ~20ms
 MPREMOTE = REPO / ".venv" / "bin" / "mpremote"
@@ -343,10 +354,82 @@ def append_log(path, entry):
         fh.write(json.dumps(entry) + "\n")
 
 
-def current_epoch(entries):
+def current_epoch(entries, unit=None):
     """Seeding the chip destroys the drift baseline, so samples are grouped
-    into epochs and a seed starts a new one."""
+    into epochs and a seed starts a new one. Per unit: one unit's re-seed
+    says nothing about another's baseline."""
+    if unit is not None:
+        entries = for_unit(entries, unit)
     return max((e.get("epoch", 0) for e in entries), default=0)
+
+
+def for_unit(entries, unit):
+    """Only this unit's entries. An entry with NO unit belongs to nobody —
+    it is excluded rather than guessed, because guessing is the bug this
+    exists to remove. Old entries get a unit through the corrections file."""
+    return [e for e in entries if e.get("unit") == unit]
+
+
+def renumber_epochs(entries):
+    """PURE: epochs derived from the SEED EVENTS, per unit, in time order —
+    not trusted from the stored field.
+
+    The stored `epoch` is a convenience written at sample time. It goes
+    wrong the moment a seed is discovered after the fact: on 2026-10-21 a
+    re-seed on 2026-09-13 was inferred, and the two samples after it were
+    still stored under the Sep 3 epoch. Deriving epochs from seeds means a
+    correction that adds (or voids) a seed re-groups everything downstream
+    of it, and removing the correction restores the original grouping
+    exactly. The seeds are the truth; the field is a cache.
+
+    For a log with no corrections this reproduces the stored epochs: the
+    first seed is epoch 1 and anything before it is epoch 0."""
+    out, counter = [], {}
+    for e in sorted(entries, key=lambda e: e["ts"]):
+        u = e.get("unit")
+        if e.get("event") == "seed":
+            counter[u] = counter.get(u, 0) + 1
+        out.append(dict(e, epoch=counter.get(u, 0)))
+    return out
+
+
+def load_corrections(path=None):
+    path = Path(path or CORRECTIONS_PATH)
+    if not path.exists():
+        return {}
+    with path.open() as fh:
+        return json.load(fh)
+
+
+def apply_corrections(entries, corr):
+    """PURE: the log as it should have been, WITHOUT touching it.
+
+    Same rule as data/imu-sessions.json for recordings: the raw record
+    stays exactly as captured, and every post-hoc fix lives beside it,
+    readable and removable. `corr` keys:
+
+      legacy_unit  unit for entries logged before --unit existed
+      void         timestamps of entries to drop (a sample from the wrong
+                   chip, say) — by `ts`, since log entries have no id
+      add          events written after the fact, e.g. a seed discovered
+                   later. Marked `corrected: true` so anything derived from
+                   them can say its baseline was inferred, not observed.
+
+    Epochs are re-derived afterwards (renumber_epochs), so an added seed
+    regroups the samples after it."""
+    corr = corr or {}
+    legacy = corr.get("legacy_unit")
+    void = set(corr.get("void", ()))
+    out = []
+    for e in entries:
+        if e.get("ts") in void:
+            continue
+        if e.get("unit") is None and legacy is not None:
+            e = dict(e, unit=legacy)
+        out.append(e)
+    for a in corr.get("add", ()):
+        out.append(dict(a, corrected=True))
+    return renumber_epochs(out)
 
 
 def build_summary(entries):
@@ -385,6 +468,18 @@ def build_summary(entries):
     ntp = [e for e in samples if e.get("ref") == "ntp" and e.get("epoch", 0) == epoch]
     out["excluded_host_referenced"] = sum(
         1 for e in samples if e.get("ref", "host") != "ntp")
+    # If the seed that STARTS this epoch was added after the fact, say so in
+    # the summary itself. A drift figure measured from an inferred baseline
+    # is a different claim from one measured from an observed one, and the
+    # number alone cannot tell you which you are looking at.
+    seed = [e for e in entries if e.get("event") == "seed"
+            and e.get("epoch") == epoch and e.get("corrected")]
+    if seed:
+        out["baseline_inferred"] = {
+            "seed_iso": seed[0].get("iso_host"),
+            "confidence": seed[0].get("confidence"),
+            "note": seed[0].get("note"),
+        }
 
     if len(ntp) < 2:
         out["current"] = {
@@ -433,9 +528,15 @@ def build_summary(entries):
     return out
 
 
-def write_summary(entries, path=None):
+def write_summary(entries, path=None, unit=None):
+    """Per unit when `unit` is given — the entries are filtered to it and
+    the summary goes to summary_path(unit)."""
+    if unit is not None:
+        entries = for_unit(entries, unit)
+        path = path or summary_path(unit)
     path = Path(path or SUMMARY_PATH)
     summary = build_summary(entries)
+    summary["unit"] = unit
     summary["generated"] = datetime.now().isoformat(timespec="seconds")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as fh:
@@ -444,23 +545,38 @@ def write_summary(entries, path=None):
     return summary
 
 
-def _print_history(entries, log_path):
-    """Every logged sample, with the running drift. The campaign view."""
+def _print_history(entries, log_path, drift=True):
+    """Every logged sample, with the running drift. The campaign view.
+    drift=False when entries span several units — a fit across them would
+    be the exact mixing this tool now refuses to do."""
     print("\n  log: %s" % log_path)
     samples = [e for e in entries if e.get("event") == "sample"]
     if not samples:
         print("  (no samples yet)")
         return 0
-    print("  %-20s %-6s %10s %9s %10s" % ("when", "ref", "offset s", "jitter", "Δ vs prev"))
+    print("  %-20s %-10s %2s %-6s %10s %9s %10s"
+          % ("when", "unit", "ep", "ref", "offset s", "jitter", "Δ vs prev"))
     prev = None
-    for e in samples:
+    for e in sorted(entries, key=lambda e: e["ts"]):
+        if e.get("event") == "seed":
+            print("  %-20s %-10s %2d  ── seed%s" % (
+                e.get("iso_host", "?"), e.get("unit") or "?", e.get("epoch", 0),
+                "  (INFERRED after the fact, confidence %s)" % e.get("confidence")
+                if e.get("corrected") else ""))
+            prev = None
+            continue
+        if e.get("event") != "sample":
+            continue
         ref = e.get("ref", "host")
         delta = "" if prev is None else "%+.4f" % (e["offset_s"] - prev["offset_s"])
-        print("  %-20s %-6s %10.4f %8.1fms %10s"
-              % (e["iso_host"], ref, e["offset_s"],
-                 e.get("jitter_ms") or 0, delta))
+        print("  %-20s %-10s %2d %-6s %10.4f %8.1fms %10s"
+              % (e["iso_host"], e.get("unit") or "?", e.get("epoch", 0), ref,
+                 e["offset_s"], e.get("jitter_ms") or 0, delta))
         prev = e
 
+    if not drift:
+        print("\n  (several units shown — pass --unit for a drift figure)")
+        return 0
     # Drift only over the trustworthy reference, and only within one epoch.
     ntp = [e for e in samples if e.get("ref") == "ntp"
            and e.get("epoch") == samples[-1].get("epoch")]
@@ -506,21 +622,50 @@ def main(argv=None):
                     help="print every logged sample and exit — the campaign "
                          "view for a long-running measurement.")
     ap.add_argument("--log", type=Path, default=LOG_PATH)
+    ap.add_argument("--unit", default=None,
+                    help="WHICH unit is connected, e.g. bottle-01. Required to "
+                         "write anything. There is no default on purpose: a "
+                         "DS3231 has no ID register, so the tool cannot tell "
+                         "two chips apart and a default would silently file "
+                         "every chip under one name — the bug this replaces.")
+    ap.add_argument("--corrections", type=Path, default=CORRECTIONS_PATH,
+                    help="post-hoc fixes applied at read time; the log itself "
+                         "is never edited. See apply_corrections().")
     args = ap.parse_args(argv)
 
-    entries = load_log(args.log)
-    epoch = current_epoch(entries)
+    raw = load_log(args.log)
+    view = apply_corrections(raw, load_corrections(args.corrections))
 
     if args.history:
-        write_summary(entries)
-        return _print_history(entries, args.log)
+        if args.unit is None:
+            return _print_history(view, args.log, drift=False)
+        mine = for_unit(view, args.unit)
+        write_summary(mine, unit=args.unit)
+        return _print_history(mine, args.log)
+
+    # ── REFUSE TO WRITE WITHOUT A UNIT — and before any I/O ──────────
+    # Added 2026-10-21. With one unit-agnostic log, a sample from a second
+    # DS3231 (seeded 2026-09-13, never labelled) very probably landed in
+    # bottle-01's history on 2026-09-29 and made its drift appear to double.
+    # Checked here, before NTP or the board are touched, so a refusal costs
+    # nothing and writes nothing.
+    if args.unit is None:
+        sys.exit(
+            "\n✗ REFUSING TO WRITE: which unit is connected?\n"
+            "    make rtc-drift UNIT=bottle-01\n"
+            "  A DS3231 has no ID register, so this tool cannot tell two chips\n"
+            "  apart. Saying which unit you plugged in is what keeps one chip's\n"
+            "  samples out of another's drift fit. (--history works without it.)")
+
+    epoch = current_epoch(view, args.unit)
 
     if args.mark_seed:
         epoch += 1
         append_log(args.log, {"ts": time.time(), "event": "seed", "epoch": epoch,
+                              "unit": args.unit,
                               "iso_host": datetime.now().isoformat(timespec="seconds")})
-        print("Recorded a seed. New epoch %d -- drift now measures from the "
-              "next sample onward." % epoch)
+        print("Recorded a seed for %s. New epoch %d -- drift now measures from "
+              "the next sample onward." % (args.unit, epoch))
         return 0
 
     clock_offset, ref = 0.0, "host"
@@ -559,13 +704,15 @@ def main(argv=None):
             "  The chip is reporting that it lost power, so whatever it now\n"
             "  reads is not a continuation of anything — drift is undefined.\n"
             "  Seed it first:  docs/provisioning-runbook.md §5b  (make rtc-seed)\n"
-            "  Then start a fresh epoch:  make rtc-drift ARGS=\"--mark-seed\"")
+            "  Then start a fresh epoch:  make rtc-drift UNIT=%s ARGS=\"--mark-seed\""
+            % args.unit)
     if not 2024 <= rtc_dt.year <= 2099:
         sys.exit(
             "\n✗ REFUSING TO SAMPLE: the chip reads %s.\n"
             "  A DS3231 that lost power with no working backup resets to\n"
             "  2000-01-01. Seed it: docs/provisioning-runbook.md §5b\n"
-            "  Then:  make rtc-drift ARGS=\"--mark-seed\"" % rtc_dt.isoformat())
+            "  Then:  make rtc-drift UNIT=%s ARGS=\"--mark-seed\""
+            % (rtc_dt.isoformat(), args.unit))
 
     # datetime.timestamp() interprets the naive value in the HOST's local
     # zone. If the chip holds UTC that makes the offset a constant ~-9h,
@@ -575,7 +722,7 @@ def main(argv=None):
     jitter_ms = (statistics.stdev(offsets) * 1000) if len(offsets) > 1 else float("nan")
     now = time.time()
 
-    entry = {"ts": now, "event": "sample", "epoch": epoch,
+    entry = {"ts": now, "event": "sample", "epoch": epoch, "unit": args.unit,
              "iso_host": datetime.now().isoformat(timespec="seconds"),
              "iso_rtc": edges[-1][0].isoformat(),
              "offset_s": round(offset, 4),
@@ -586,7 +733,7 @@ def main(argv=None):
     # Rewrite the derived rollup from the WHOLE log, not incrementally — it
     # is cheap, and a summary that can drift from its source is worse than no
     # summary. Delete it any time; the next run regenerates it.
-    summary = write_summary(entries + [entry])
+    summary = write_summary(view + [entry], unit=args.unit)
 
     print("\n  DS3231 : %s" % edges[-1][0].isoformat())
     print("  host   : %s" % datetime.now().isoformat(timespec="seconds"))
@@ -603,10 +750,11 @@ def main(argv=None):
     # and an NTP-referenced one differ by whatever the host clock was wrong
     # by at the time — mixing them would inject exactly the error the NTP
     # reference exists to remove.
-    prior = [e for e in entries
+    mine = for_unit(view, args.unit)
+    prior = [e for e in mine
              if e.get("event") == "sample" and e.get("epoch") == epoch
              and e.get("ref", "host") == ref]
-    dropped = [e for e in entries
+    dropped = [e for e in mine
                if e.get("event") == "sample" and e.get("epoch") == epoch
                and e.get("ref", "host") != ref]
     if dropped:
@@ -621,7 +769,15 @@ def main(argv=None):
     hours = (now - base["ts"]) / 3600
     series = [(e["ts"], e["offset_s"]) for e in prior] + [(now, offset)]
     ppm = drift_ppm_fit(series)
-    print("\n  key figures → %s" % SUMMARY_PATH.relative_to(REPO))
+    print("\n  key figures → %s" % summary_path(args.unit).relative_to(REPO))
+    inferred = summary.get("baseline_inferred")
+    if inferred:
+        print("\n  ⚠ This epoch's baseline is a seed INFERRED after the fact (%s,"
+              "\n    confidence %s). The figure below is only as good as that"
+              "\n    inference — see %s."
+              % (inferred.get("seed_iso"), inferred.get("confidence"),
+                 args.corrections.relative_to(REPO)
+                 if args.corrections.is_absolute() else args.corrections))
     print("\n  ── drift, over %.1f h since this epoch's baseline ──" % hours)
     if ppm is None:
         print("  baseline too recent to divide by.")

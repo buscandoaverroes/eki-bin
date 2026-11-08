@@ -41,7 +41,16 @@ def load_schedule(filename):
     """
     try:
         with open(filename) as f:
-            return json.load(f)
+            # ⚠ json.loads(f.read()), NOT json.load(f). MicroPython's
+            # json.load pulls the stream one byte at a time, which is free on
+            # local flash and a serial round trip PER BYTE under
+            # `make dev` / `mpremote mount` — a 17-70 KB schedule then holds
+            # the boot for a minute or more with no output, indistinguishable
+            # from a hang (found 2026-09-29). One read costs a transient
+            # string the size of the file (tens of KB) — fine on the RP2350's
+            # ~490 KB free, and the reason this used to stream was the ESP32-C3
+            # heap, which is no longer the target (insights.md §11).
+            return json.loads(f.read())
     except OSError:
         print(f"✗ Schedule file not found: {filename}")
         print("  Upload it with: make upload")
@@ -62,7 +71,8 @@ def schedule_lines(schedule_data):
     station. A file with `lines` returns it directly. A file without one is
     a single-line station, and the document itself IS that line — that shape
     is not deprecated, and normalizing here rather than at every use site is
-    what keeps every pre-existing schedule working untouched (principle #9).
+    what keeps every pre-existing schedule working untouched (principle #12,
+    "backward-compatible configuration").
 
     Returns at least one entry, so `lines[i % len(lines)]` is always safe.
     Each entry may carry an optional "color" — the line's NOMINAL colour,

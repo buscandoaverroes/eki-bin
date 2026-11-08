@@ -27,6 +27,7 @@ from machine import I2C, Pin
 
 from leds import (_write_frame, clear)
 import motion
+from primitives import ticks_since
 from settings import (MOTION_ENABLED, MOTION_OUTWARD_MS, MOTION_SHAKE_MS,
     NO_CYCLE_COLOR, QUIET_TAP_DURATION_MS)
 from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
@@ -38,6 +39,9 @@ from settings import (ACK_HOLD_MS, ACK_PEAK_CEIL, ACK_PEAK_FLOOR,
     NO_DATA_COLOR, NO_DATA_DURATION_MS, NUM_LEDS, ORIENTATION_MAP,
     ORIENTATION_STABLE_MG, POSITION_THRESHOLD_MG, SECONDARY_ACTION,
     SHELF_CEIL, SHELF_FLOOR, STARTUP_BURST_MS, STARTUP_COLOR,
+    TAP_VERTICAL_SHARE_MAX, TAP_GYRO_MID_MAX_DPS, GYRO_BIAS_TAU_MS,
+    GYRO_BIAS_WARMUP_MS, TAP_GYRO_MID_START_MS, TAP_GYRO_MID_END_MS,
+    GYRO_BIAS_GATE_DPS,
     STARTUP_FADE_MS, STRENGTH_MAX_DEV_MG, STRENGTH_MIN_DEV_MG,
     TAP_ENERGY_THRESHOLD, TAP_TRIGGER_THRESHOLD_MG,
     WAKE_JOLT_BRIGHTNESS_MULT, WAKE_JOLT_MS, WAKE_SETTLE_MS)
@@ -53,7 +57,19 @@ _IMU_CTRL1_REG = 0x10
 _IMU_CTRL1_240HZ_HIGH_PERF = 0x07
 _IMU_CTRL1_POWER_DOWN = 0x00
 _IMU_OUTX_L_A = 0x28
+_IMU_CTRL2_REG = 0x11            # gyro ODR / mode
+_IMU_CTRL6_REG = 0x15            # gyro full scale, FS_G in bits 3:0
+_IMU_GYRO_FS_1000 = 0x03         # ±1000 dps — verified on bottle-01 against the
+#                                  gravity vector: 33-35 mdps/LSB measured
+GYRO_MDPS_PER_LSB = 35.0
+_IMU_OUTX_L_G = 0x22
 _IMU_CANDIDATE_ADDRS = (0x6A, 0x6B)
+
+# Optional recording observer (interlog.Stream) — None unless
+# INTERACTION_LOG is on. The capture window is where a tap's signature lives
+# and the main loop is not sampling during it, so the recorder has to ride
+# along INSIDE it. See interlog.py.
+capture_observer = None
 
 
 # Lazy singletons — _get_imu() declares these `global` and READS them
@@ -107,9 +123,234 @@ def _get_imu():
         addr = _imu_find_device(i2c)
         if addr is None:
             return None, None
-        i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        imu_configure(i2c, addr)
         _imu_i2c, _imu_addr = i2c, addr
     return _imu_i2c, _imu_addr
+
+
+def imu_configure(i2c, addr):
+    """The sensor's settings — at boot, and again whenever ImuWatch finds
+    them gone. ONE function so recovery writes exactly what boot did."""
+    i2c.writeto_mem(addr, _IMU_CTRL1_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+    if gyro_check_enabled():
+        # The gyro is only powered when something reads it: the
+        # mid-window rotation check (TAP_GYRO_MID_MAX_DPS).
+        i2c.writeto_mem(addr, _IMU_CTRL2_REG, bytes([_IMU_CTRL1_240HZ_HIGH_PERF]))
+        i2c.writeto_mem(addr, _IMU_CTRL6_REG, bytes([_IMU_GYRO_FS_1000]))
+
+
+def imu_config_lost(i2c, addr):
+    """True if the sensor's settings are not what imu_configure wrote.
+    A bus error answers False: that is a failed read, which the console
+    already counts, not evidence the sensor reset."""
+    try:
+        if i2c.readfrom_mem(addr, _IMU_CTRL1_REG, 1)[0] != _IMU_CTRL1_240HZ_HIGH_PERF:
+            return True
+        if (gyro_check_enabled() and
+                i2c.readfrom_mem(addr, _IMU_CTRL2_REG, 1)[0] != _IMU_CTRL1_240HZ_HIGH_PERF):
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def imu_recover(i2c, addr):
+    """Put the sensor's settings back, and forget what was learned from it
+    while it was dead. True if the writes went through.
+
+    Verified by hand on bottle-01, 2026-10-25, with the sensor in exactly
+    this state (CTRL1 = CTRL2 = 0, outputs (0,0,0)): writing CTRL1 alone
+    brought back 0.99 g within 100 ms. No software reset was needed. Its
+    first sample takes a few ms to exist, which is why the caller must keep
+    discarding zeros for a moment rather than trust the next read."""
+    try:
+        imu_configure(i2c, addr)
+    except OSError:
+        return False
+    # Every gyro sample while it was dead was (0,0,0), and the baseline
+    # learned from them as if the bottle were at rest. Start over — the
+    # warm-up guard then keeps the rotation check out of it for 6 s.
+    GYRO_BIAS.reset()
+    return True
+
+
+# Consecutive all-zero accelerometer reads before the settings are declared
+# lost. A working accelerometer always reads ~1 g of gravity, and even in
+# free fall its noise is several LSB per axis, so an exact (0,0,0) on all
+# three axes, 30 times in a row (~0.2 s at the loop's ~145 Hz), cannot be a
+# measurement.
+_IMU_ZERO_RUN = 30
+_IMU_RECOVER_MIN_GAP_MS = 5000   # never retry faster than this, so a sensor
+#   that will not come back is a rising count, not a hot loop on the bus
+
+
+class ImuWatch:
+    """Notices the IMU has reset itself while the board kept running.
+
+    Found 2026-10-22/25. The sensor was configured once, at boot, and
+    nothing ever checked it again. When it reset — CTRL1 and CTRL2 back to
+    0, outputs (0,0,0), still ACKing every read — the firmware went on
+    reading zeros indefinitely: no I2C error, nothing triggered, tilt
+    pinned at 0.0°, and a jar that could not be woken until it was
+    unplugged. What made the sensor reset is still unknown; this makes the
+    jar recover from it, and counts how often, which is the next clue.
+
+    Detects on ZEROS, not on repeated readings: the loop can read faster
+    than the sensor's 240 Hz, and then two reads legitimately return the
+    same sample."""
+
+    def __init__(self, zero_run=_IMU_ZERO_RUN, min_gap_ms=_IMU_RECOVER_MIN_GAP_MS):
+        self.zero_run = zero_run
+        self.min_gap_ms = min_gap_ms
+        self._zeros = 0
+        self._last = None
+        self.recoveries = 0
+
+    def dead(self, raw):
+        """True for an all-zero sample. The caller must not pass one on —
+        to the trigger it is a 1 g step on recovery (a false tap), and to
+        the gyro baseline it is a bottle at rest that isn't."""
+        if raw[0] == 0 and raw[1] == 0 and raw[2] == 0:
+            self._zeros += 1
+            return True
+        self._zeros = 0
+        return False
+
+    def due(self, now_ms):
+        if self._zeros < self.zero_run:
+            return False
+        return self._last is None or ticks_since(now_ms, self._last) >= self.min_gap_ms
+
+    def recovered(self, now_ms):
+        self._last = now_ms
+        self._zeros = 0
+        self.recoveries += 1
+
+
+def gyro_check_enabled():
+    return TAP_GYRO_MID_MAX_DPS is not None
+
+
+def _imu_read_gyro_raw(i2c, addr):
+    """Signed int16 gyro LSB, same shape as _imu_read_accel_raw."""
+    data = i2c.readfrom_mem(addr, _IMU_OUTX_L_G, 6)
+    x = int.from_bytes(data[0:2], "little")
+    y = int.from_bytes(data[2:4], "little")
+    z = int.from_bytes(data[4:6], "little")
+    return tuple(v - 65536 if v > 32767 else v for v in (x, y, z))
+
+
+class GyroBias:
+    """The gyro's zero-rate offset, learned while the bottle is at rest.
+
+    A gyro reads a small non-zero rate when nothing is turning (on bottle-01
+    about (-0.3, 0, +0.2) dps) and that offset drifts with temperature. The
+    mid-window rotation check compares against ~1 dps, so the offset has to
+    be removed — and the firmware keeps no pre-trigger history to take it
+    from, so it is tracked continuously instead: an exponential follower that
+    learns ONLY from samples within GYRO_BIAS_GATE_DPS of the current
+    estimate (i.e. at rest), with a time constant, not a per-sample alpha
+    (the lesson tilt.py just learned).
+
+    If it is gated out for longer than _RESEED_MS — a first estimate taken
+    while the bottle was moving, say — it re-seeds from the current reading
+    rather than stay wrong forever.
+    """
+
+    _RESEED_MS = 10_000
+
+    def __init__(self, tau_ms=None, gate_dps=None, mdps=GYRO_MDPS_PER_LSB,
+                 warmup_ms=None):
+        self.tau_ms = float(GYRO_BIAS_TAU_MS if tau_ms is None else tau_ms)
+        gate = GYRO_BIAS_GATE_DPS if gate_dps is None else gate_dps
+        self.gate_lsb = gate * 1000.0 / mdps
+        self.warmup_ms = float(GYRO_BIAS_WARMUP_MS if warmup_ms is None
+                               else warmup_ms)
+        self.bias = None
+        self._gated_ms = 0
+        self._learned_ms = 0    # time spent learning at rest since the last
+        #   seed — see estimate()
+
+    def update(self, g, dt_ms):
+        if self.bias is None:
+            self.bias = [float(g[0]), float(g[1]), float(g[2])]
+            self._learned_ms = 0
+            return
+        dev = max(abs(g[0] - self.bias[0]), abs(g[1] - self.bias[1]),
+                  abs(g[2] - self.bias[2]))
+        if dev > self.gate_lsb:
+            self._gated_ms += max(0, dt_ms)
+            if self._gated_ms >= self._RESEED_MS:
+                self.bias = [float(g[0]), float(g[1]), float(g[2])]
+                self._gated_ms = 0
+                self._learned_ms = 0   # a fresh seed is unproven again
+            return
+        self._gated_ms = 0
+        if dt_ms <= 0:
+            return
+        step = min(dt_ms, 1000)     # same clamp as the alpha: one sample
+        #   after a long blocked gap is one sample, not seconds of learning
+        a = 1.0 - math.exp(-step / self.tau_ms)
+        for i in range(3):
+            self.bias[i] += (g[i] - self.bias[i]) * a
+        self._learned_ms += step
+
+    def reset(self):
+        """Forget everything — for when the samples it learned from were not
+        real (the sensor had reset and was reading zeros)."""
+        self.bias = None
+        self._gated_ms = 0
+        self._learned_ms = 0
+
+    def status(self):
+        """`ready`, `warming 3.1/6.0s`, or `no data` — for the console."""
+        if self.bias is None:
+            return "no data"
+        if self._learned_ms < self.warmup_ms:
+            out = "warming %.1f/%.1fs" % (self._learned_ms / 1000.0,
+                                          self.warmup_ms / 1000.0)
+            if self._gated_ms:
+                out += ", gated %.1fs" % (self._gated_ms / 1000.0)
+            return out
+        return "ready"
+
+    def estimate(self):
+        """The baseline, or None until it has learned for warmup_ms at rest.
+
+        None is what gyro_mid_dps already treats as "no evidence", so an
+        unproven baseline makes the gyro check ABSTAIN rather than reject.
+        That is the whole fix for the unwakeable case: a seed taken while
+        the bottle was being handled used to be trusted immediately, so for
+        up to _RESEED_MS every tap read as rotation and was thrown away.
+
+        Note what does NOT reset the count: being gated out. A good baseline
+        that sees the bottle picked up is still a good baseline — only a
+        re-seed (a new, unproven value) starts the warm-up again."""
+        if self.bias is None or self._learned_ms < self.warmup_ms:
+            return None
+        return self.bias
+
+
+GYRO_BIAS = GyroBias()      # the one the firmware loop feeds
+
+
+def gyro_mid_dps(gyro_rows, bias, mdps=GYRO_MDPS_PER_LSB, start_ms=150, end_ms=400):
+    """PURE: mean rotation rate, dps, between start_ms and end_ms after the
+    trigger, with `bias` removed. gyro_rows: (elapsed_ms, gx, gy, gz).
+    None when there is no bias yet or no row in the window — the caller treats
+    None as "no evidence", never as a rejection."""
+    if bias is None:
+        return None
+    total = 0.0
+    n = 0
+    for t, gx, gy, gz in gyro_rows:
+        if start_ms <= t < end_ms:
+            dx, dy, dz = gx - bias[0], gy - bias[1], gz - bias[2]
+            total += math.sqrt(dx * dx + dy * dy + dz * dz)
+            n += 1
+    if n == 0:
+        return None
+    return total / n * mdps / 1000.0
 
 
 def _imu_read_accel_raw(i2c, addr):
@@ -182,6 +423,43 @@ def _gesture_dominant_axis(sample):
     return axis
 
 
+_IMPULSE_MS = 150        # the impact itself, for impulse_vertical_share
+_SETTLED_FROM_MS = 500   # from here on the bottle is (normally) at rest again
+
+
+def impulse_vertical_share(samples):
+    """PURE: fraction of the impact's energy that lies ALONG GRAVITY.
+
+    Gravity is the direction the capture settles to (median of every axis
+    from _SETTLED_FROM_MS on); the impact is the deviation from that over the
+    first _IMPULSE_MS. A knock on the table arrives through the base,
+    vertically; a finger on the glass pushes sideways. Mount-independent by
+    construction — it never asks which sensor axis is "up".
+
+    Returns None when it cannot say (too few settled samples, or no impulse),
+    and the caller treats None as "no evidence", never as a rejection.
+    """
+    late = [s for s in samples if s[0] >= _SETTLED_FROM_MS]
+    if len(late) < 5:
+        return None
+    bx = _gesture_median([s[1] for s in late])
+    by = _gesture_median([s[2] for s in late])
+    bz = _gesture_median([s[3] for s in late])
+    n = math.sqrt(bx * bx + by * by + bz * bz)
+    if n == 0:
+        return None
+    ux, uy, uz = bx / n, by / n, bz / n
+    vert = total = 0.0
+    for t, x, y, z in samples:
+        if t > _IMPULSE_MS:
+            break
+        dx, dy, dz = x - bx, y - by, z - bz
+        p = dx * ux + dy * uy + dz * uz
+        vert += p * p
+        total += dx * dx + dy * dy + dz * dz
+    return vert / total if total > 0 else None
+
+
 def extract_gesture_features(samples):
     """PURE: raw (t_ms, x, y, z) samples → the same feature set
     prepare_tap_dataset.py validated (docs/insights.md §8-9). `samples`
@@ -231,6 +509,7 @@ def extract_gesture_features(samples):
         "num_crossings": len(crossing_times),
         "spacing_mean_ms": _gesture_mean(gaps) if gaps else None,
         "spacing_stdev_ms": _gesture_stdev(gaps) if len(gaps) > 1 else None,
+        "vert_share": impulse_vertical_share(samples),
     }
 
 
@@ -313,7 +592,51 @@ def classify_valid_input(features):
     describes, not a replacement for classify_tap_or_flick, which stays
     defined and tested for when GESTURE_FLICK_ENABLED/GESTURE_POSITION_
     ENABLED come back on."""
-    return features["energy"] < TAP_ENERGY_THRESHOLD
+    return reject_reason(features) is None
+
+
+def reject_reason(features):
+    """PURE: why a contact is NOT a tap — "energy", "vertical", "gyro" —
+    or None if it is one. classify_valid_input is defined as this being
+    None, so the two can never disagree.
+
+    Exists for the console. With only a bool, "every tap was rejected"
+    could not be told apart from "no tap ever triggered", and both looked
+    like a jar that will not wake."""
+    if features["energy"] >= TAP_ENERGY_THRESHOLD:
+        return "energy"
+    # Through the surface, not a touch (see impulse_vertical_share). Added
+    # 2026-10-04 from replay; None (no evidence) never rejects.
+    vs = features.get("vert_share")
+    if TAP_VERTICAL_SHARE_MAX is not None and vs is not None and vs >= TAP_VERTICAL_SHARE_MAX:
+        return "vertical"
+    # Still turning after the impact: handling, not a touch (see GyroBias,
+    # gyro_mid_dps). Added 2026-10-04 from replay; None never rejects.
+    gm = features.get("gyro_mid_dps")
+    if TAP_GYRO_MID_MAX_DPS is not None and gm is not None and gm >= TAP_GYRO_MID_MAX_DPS:
+        return "gyro"
+    return None
+
+
+# What happened to every trigger since the console last asked. Counted here
+# because _handle_tap is the only place that knows; main.py prints and
+# resets it in the 30 s block. "busy" is a valid tap that resolve() still
+# refused — the state machine was not accepting input.
+TAP_STATS = {"triggers": 0, "accepted": 0, "energy": 0, "vertical": 0,
+             "gyro": 0, "busy": 0}
+
+
+def tap_stats_line(reset=True):
+    """`taps 3 → 1 ok (gyro 2)`, then zero the counts."""
+    s = TAP_STATS
+    rejected = ["%s %d" % (k, s[k]) for k in ("energy", "vertical", "gyro", "busy")
+                if s[k]]
+    out = "taps %d → %d ok%s" % (s["triggers"], s["accepted"],
+                                 " (%s)" % ", ".join(rejected) if rejected else "")
+    if reset:
+        for k in s:
+            s[k] = 0
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -493,18 +816,28 @@ class _TapCycleState:
     def advance(self, now_ms):
         """Call every tick — advances WAKING->SETTLING->AWAKE on their own
         timers, and AWAKE->ASLEEP on AWAKE_MINUTES timeout. Returns the
-        phase just entered, or None if nothing changed this tick. Plain
-        subtraction, not time.ticks_diff — same choice _WakeState/
-        _TapClassifier/_GestureMenu already made for windows this short."""
-        if self.phase == "waking" and now_ms - self.phase_started_at >= WAKE_JOLT_MS:
+        phase just entered, or None if nothing changed this tick.
+
+        ⚠ WRAP-SAFE (ticks_since), and it was not. This said plain
+        subtraction was fine "for windows this short" — but the window's
+        LENGTH is not what matters, CROSSING the ticks_ms wrap is. A wake in
+        progress at the wrap left `now - started` near -2**30: the phase
+        never left "waking", accepts_input() stayed False, and taps and tilt
+        (one shared gate) stopped until power was cycled. The awake
+        deadline had the mirror bug: across the wrap it was never reached,
+        so the display would have stayed lit. ~12.4 days of uptime apart,
+        so rare — and a jar that cannot be woken is the worst failure a
+        gift can have."""
+        if self.phase == "waking" and ticks_since(now_ms, self.phase_started_at) >= WAKE_JOLT_MS:
             self.phase = "settling"
             self.phase_started_at = now_ms
             return "settling"
-        if self.phase == "settling" and now_ms - self.phase_started_at >= WAKE_SETTLE_MS:
+        if self.phase == "settling" and ticks_since(now_ms, self.phase_started_at) >= WAKE_SETTLE_MS:
             self.phase = "awake"
             self.awake_until = now_ms + AWAKE_MINUTES * 60_000
             return "awake"
-        if self.phase == "awake" and self.awake_until is not None and now_ms >= self.awake_until:
+        if (self.phase == "awake" and self.awake_until is not None
+                and ticks_since(now_ms, self.awake_until) >= 0):
             self.awake = False
             self.phase = "asleep"
             self.awake_until = None
@@ -527,6 +860,14 @@ _GESTURE_WINDOW_MS = 1200  # fixed capture duration once triggered — see
 #   super-loop, not a second loop.
 
 I2C_ERROR_PRINT_INTERVAL_MS = 1000
+
+
+def _safe_read_gyro(i2c, addr):
+    """One gyro sample, or None on a dropped read — never raises."""
+    try:
+        return _imu_read_gyro_raw(i2c, addr)
+    except OSError:
+        return None
 
 
 def _safe_read_accel(i2c, addr, now_ms, last_error_print):
@@ -726,7 +1067,10 @@ class _StatusMessage:
         self.expires_at = now_ms + duration_ms
 
     def active(self, now_ms):
-        return self.expires_at is not None and now_ms < self.expires_at
+        # ticks_since, not `now_ms < expires_at`: across the ticks_ms wrap
+        # the plain comparison stays True for ~12 days and pins one LED on.
+        return (self.expires_at is not None
+                and ticks_since(now_ms, self.expires_at) < 0)
 
 
 # NOTE: there is deliberately no _classify_tap_response() to mirror the old
@@ -757,6 +1101,8 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
     before it reaches the shelf's linear value, which was the real "dive
     underground to 0, then back up to a plateau" bug."""
     samples = []
+    gyro_rows = []
+    read_gyro = gyro_check_enabled()
     last_paint = start_ms
     shelf_written = False
     while True:
@@ -764,6 +1110,17 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
         elapsed = time.ticks_diff(now, start_ms)
         try:
             samples.append((elapsed,) + _imu_read_accel_raw(i2c, addr))
+            if read_gyro and elapsed < 450:
+                # Only the window the check reads (150-400 ms) and a margin:
+                # the rest of the capture stays the 240 Hz accel loop it was.
+                try:
+                    gyro_rows.append((elapsed,) + _imu_read_gyro_raw(i2c, addr))
+                except OSError:
+                    pass
+            if capture_observer is not None:
+                # Inside the try and AFTER the append, so the observer's rows
+                # stay in lockstep with `samples` when a read is dropped.
+                capture_observer.cap_sample(i2c, addr, elapsed)
         except OSError:
             pass  # one dropped sample of ~300 is negligible; see _safe_read_accel
         if elapsed < ACK_HOLD_MS:
@@ -777,7 +1134,7 @@ def _capture_with_ack(i2c, addr, start_ms, peak_mult, shelf_mult):
         if elapsed >= _GESTURE_WINDOW_MS:
             break
         time.sleep_ms(GESTURE_POLL_MS)
-    return samples
+    return samples, gyro_rows
 
 
 def _play_confirm_jolt(shelf_mult):
@@ -840,9 +1197,18 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
     shelf_mult = SHELF_FLOOR + strength * (SHELF_CEIL - SHELF_FLOOR)
 
     tap_state.acknowledge()
-    samples = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
+    samples, gyro_rows = _capture_with_ack(i2c, addr, trigger_ms, peak_mult, shelf_mult)
     features = extract_gesture_features(samples)
-    valid = classify_valid_input(features)
+    features["gyro_mid_dps"] = gyro_mid_dps(gyro_rows, GYRO_BIAS.estimate(),
+                                            start_ms=TAP_GYRO_MID_START_MS,
+                                            end_ms=TAP_GYRO_MID_END_MS)
+    why = reject_reason(features)
+    valid = why is None
+    TAP_STATS["triggers"] += 1
+    if why is not None:
+        TAP_STATS[why] += 1
+    if capture_observer is not None:
+        capture_observer.cap_done(trigger_ms, samples, features, valid)
     samples = None
     gc.collect()  # ~300 tuples, roughly 8-10KB. Reclaimed at a KNOWN point
     #   rather than whenever the allocator notices: transient spikes are what
@@ -851,6 +1217,10 @@ def _handle_tap(i2c, addr, trigger_ms, dev_mg, tap_state, signal, signal_b,
 
     now_ms = time.ticks_ms()  # stale after a ~1.2s blocking capture
     resolved = tap_state.resolve(now_ms, valid)
+    if valid and resolved is None:
+        TAP_STATS["busy"] += 1
+    elif resolved is not None:
+        TAP_STATS["accepted"] += 1
     if resolved == "wake":
         if MOTION_ENABLED:
             # outward, ∝ strike force: brighter AND faster for a harder

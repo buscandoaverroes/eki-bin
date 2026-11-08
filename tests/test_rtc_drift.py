@@ -300,3 +300,129 @@ class TestSummary:
         c = rtc_drift.build_summary(rows)["current"]
         assert c["within_spec"] is False
         assert c["trustworthy"] is True   # consistent, just bad
+
+
+# ── units, and corrections applied at read time ──────────────────────
+# Added 2026-10-21. One unit-agnostic log let a sample from a second
+# DS3231 (seeded 2026-09-13, never labelled) very probably land in
+# bottle-01's history on 2026-09-29, making its drift appear to double.
+
+def _s(ts, off, **kw):
+    return dict({"ts": ts, "event": "sample", "ref": "ntp", "offset_s": off,
+                 "jitter_ms": 3.0, "iso_host": "t%d" % ts}, **kw)
+
+
+def _seed(ts, **kw):
+    return dict({"ts": ts, "event": "seed", "iso_host": "seed%d" % ts}, **kw)
+
+
+# The real epoch-1 history, as logged (stored epoch 1, no unit field).
+_DAY = 86400.0
+_SEP3, _SEP13 = 1788432862.35, 1788432862.35 + 10.06 * _DAY
+_REAL = [
+    _seed(_SEP3, epoch=1),
+    _s(1788432872.75, -0.8517, epoch=1),          # Sep 3, just after seeding
+    _s(1790686025.85, -2.0139, epoch=1),          # Sep 29
+    _s(1792586000.00, -3.8680, epoch=1),          # Oct 21
+]
+_CORR = {
+    "legacy_unit": "bottle-01",
+    "add": [_seed(_SEP13, unit="bottle-01", confidence=0.7,
+                  note="re-seeded the night the IMU was rebuilt")],
+}
+
+
+class TestUnitsAndCorrections:
+    def test_legacy_entries_get_the_legacy_unit(self):
+        view = rtc_drift.apply_corrections(_REAL, {"legacy_unit": "bottle-01"})
+        assert {e["unit"] for e in view} == {"bottle-01"}
+
+    def test_unitless_entries_belong_to_nobody(self):
+        """Excluded rather than guessed — guessing is the bug."""
+        assert rtc_drift.for_unit(_REAL, "bottle-01") == []
+
+    def test_without_corrections_the_stored_epochs_are_reproduced(self):
+        """Renumbering from seeds must not change an honest log."""
+        log = [_s(1, 0.0, epoch=0), _s(2, 0.1, epoch=0), _seed(3, epoch=1),
+               _s(4, 0.0, epoch=1)]
+        view = rtc_drift.apply_corrections(log, {})
+        assert [e["epoch"] for e in view] == [0, 0, 1, 1]
+
+    def test_an_inferred_seed_regroups_the_samples_after_it(self):
+        """THE case. The stored field still says epoch 1 for Sep 29 and
+        Oct 21; deriving epochs from seeds moves them behind the Sep 13
+        seed, which is what an after-the-fact seed has to mean."""
+        view = rtc_drift.apply_corrections(_REAL, _CORR)
+        samples = [e for e in view if e["event"] == "sample"]
+        assert [e["epoch"] for e in samples] == [1, 2, 2]
+
+    def test_removing_the_correction_restores_the_original_grouping(self):
+        """The 30%: if the Sep 13 seed was another unit after all, deleting
+        one entry from the corrections file must put everything back."""
+        view = rtc_drift.apply_corrections(_REAL, {"legacy_unit": "bottle-01"})
+        assert [e["epoch"] for e in view if e["event"] == "sample"] == [1, 1, 1]
+
+    def test_the_log_itself_is_never_modified(self):
+        before = [dict(e) for e in _REAL]
+        rtc_drift.apply_corrections(_REAL, dict(_CORR, void=[_REAL[2]["ts"]]))
+        assert _REAL == before
+
+    def test_void_drops_a_sample(self):
+        view = rtc_drift.apply_corrections(_REAL, dict(_CORR, void=[_REAL[3]["ts"]]))
+        assert -3.868 not in [e["offset_s"] for e in view if e["event"] == "sample"]
+
+    def test_one_units_seed_does_not_move_anothers_epoch(self):
+        log = [_s(1, 0.0, unit="a"), _s(2, 0.0, unit="b"),
+               _seed(3, unit="b"), _s(4, 0.0, unit="a"), _s(5, 0.0, unit="b")]
+        view = rtc_drift.renumber_epochs(log)
+        assert [e["epoch"] for e in view if e.get("unit") == "a"] == [0, 0]
+        assert [e["epoch"] for e in view if e.get("unit") == "b"] == [0, 1, 1]
+
+    def test_the_real_samples_under_both_readings(self):
+        """Pins the 2026-10-21 analysis to the actual numbers. One history
+        needs the rate to nearly double; with the inferred seed the two
+        later samples sit on one rate — and are honestly UNtrusted, since
+        two samples admit no scatter check."""
+        h1 = rtc_drift.build_summary(rtc_drift.apply_corrections(
+            _REAL, {"legacy_unit": "bottle-01"}))
+        assert h1["current"]["samples"] == 3 and not h1["current"]["trustworthy"]
+        assert "baseline_inferred" not in h1
+
+        h2 = rtc_drift.build_summary(rtc_drift.apply_corrections(_REAL, _CORR))
+        cur = h2["current"]
+        assert cur["epoch"] == 2 and cur["samples"] == 2
+        assert -1.0 < cur["drift_ppm"] < -0.95
+        assert cur["trustworthy"] is False
+
+    def test_an_inferred_baseline_is_flagged_in_the_summary(self):
+        """A figure measured from an inferred seed is a different claim from
+        one measured from an observed one, and the number alone cannot say
+        which. The summary has to."""
+        out = rtc_drift.build_summary(rtc_drift.apply_corrections(_REAL, _CORR))
+        assert out["baseline_inferred"]["confidence"] == 0.7
+
+
+class TestRefusesToWriteWithoutAUnit:
+    def test_sampling_without_a_unit_writes_nothing(self, tmp_path):
+        """Checked before NTP or the board are touched — this test would
+        hang or fail on the network if it weren't."""
+        log = tmp_path / "log.jsonl"
+        with pytest.raises(SystemExit) as exc:
+            rtc_drift.main(["--log", str(log), "--corrections",
+                            str(tmp_path / "none.json")])
+        assert "which unit" in str(exc.value)
+        assert not log.exists()
+
+    def test_a_seed_without_a_unit_writes_nothing(self, tmp_path):
+        log = tmp_path / "log.jsonl"
+        with pytest.raises(SystemExit):
+            rtc_drift.main(["--mark-seed", "--log", str(log),
+                            "--corrections", str(tmp_path / "none.json")])
+        assert not log.exists()
+
+    def test_a_seed_records_its_unit(self, tmp_path):
+        log = tmp_path / "log.jsonl"
+        rtc_drift.main(["--mark-seed", "--unit", "bottle-02", "--log", str(log),
+                        "--corrections", str(tmp_path / "none.json")])
+        entry = rtc_drift.load_log(log)[0]
+        assert entry["event"] == "seed" and entry["unit"] == "bottle-02"

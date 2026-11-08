@@ -104,6 +104,7 @@ it with `getattr(config, "NAME", default)`, so
 | `MOTION_OUTWARD_MS` / `MOTION_AROUND_MS` / `MOTION_SHAKE_MS` | int | no | 900 / 1400 / 650 | Word durations |
 | `NO_CYCLE_COLOR` | (r,g,b) | no | `(128, 0, 200)` | "You asked to change line and there is none" |
 | `TILT_ENABLED` | bool | no | `False` | Tilt the bottle to adjust brightness |
+| `INTERACTION_LOG` | bool | no | `False` | Stream raw accel + gyro and the tap/tilt pipeline's decisions on the USB console (`interlog.py`). Normally set by `interlog_run.py` via `make interaction-log`, **not** by editing `config.py` |
 | `SLEEP_UNWIND_ENABLED` | bool | no | `False` | Unwind when `AWAKE_MINUTES` expires instead of cutting to black |
 | `TILT_RAIL_BOUNCE_ENABLED` | bool | no | `True` | Recoil when tilt hits a brightness rail — a rail is otherwise invisible |
 | `GOODNIGHT_ENABLED` | bool | no | `False` | A wake with no train in reach gets a farewell, then goes dark |

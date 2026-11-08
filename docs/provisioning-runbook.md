@@ -144,7 +144,7 @@ thresholds this is the right loop.
 > Harmless for a minute-granularity display, but check before seeding a unit
 > you care about:
 > ```bash
-> make rtc-drift        # first line reports the host's offset from NTP
+> make rtc-drift UNIT=bottle-01   # first line reports the host's offset from NTP
 > ```
 > If it is seconds rather than milliseconds, fix the Mac's time sync first
 > (System Settings → General → Date & Time → Set automatically).
@@ -186,7 +186,8 @@ means the CR1220 is not doing its job.
 
 ```bash
 # 0. Is the HOST clock actually right? It gets copied straight into the chip.
-make rtc-drift          # first line reports the host's NTP offset
+#    UNIT is required — the tool refuses before reporting anything without it.
+make rtc-drift UNIT=<this-unit>   # first line reports the host's NTP offset
 ```
 
 Seconds rather than milliseconds → fix the Mac first (System Settings →
@@ -237,9 +238,11 @@ make rtc-test           # OSF clear + correct time = battery works
 ```
 
 ```bash
-# 6. Re-seeding destroyed any drift baseline, so start a new epoch:
-make rtc-drift ARGS="--mark-seed"
-make rtc-drift          # lays down the first sample of the new epoch
+# 6. Re-seeding destroyed any drift baseline, so start a new epoch — for
+#    THIS unit. Skipping this step is what mixed two chips' histories once
+#    (rtc-drift-theory.md § "A seed you didn't record").
+make rtc-drift UNIT=<this-unit> ARGS="--mark-seed"
+make rtc-drift UNIT=<this-unit>   # lays down the first sample of the new epoch
 ```
 
 > **Why step 5 is the real test.** OSF staying clear across a *physical*
@@ -333,7 +336,7 @@ make run-file FILE=micropython/gesture_sandbox.py    # real taps → real LED jo
 | **Iterate with no flash writes** | `make dev` |
 | Push firmware | `make upload` |
 | Recover an unreachable board | `make flash-micropython BOARD=<b> WIPE=1` |
-| Measure DS3231 drift | `make rtc-drift` |
+| Measure DS3231 drift | `make rtc-drift UNIT=<unit>` |
 | Run live, don't persist | `make run` |
 | Run any one script | `make run-file FILE=<path>` |
 | Make a script auto-run on boot | `make upload-file FILE=<path>` |

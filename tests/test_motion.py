@@ -120,7 +120,7 @@ def test_a_cycle_with_nowhere_to_go_returns_none(load_main):
 
     played = []
     g.motion.play = lambda word, *a, **k: played.append(word)
-    g._capture_with_ack = lambda *a, **k: []
+    g._capture_with_ack = lambda *a, **k: ([], [])   # (accel samples, gyro rows)
     g.extract_gesture_features = lambda s: {"energy": 0}
     g.classify_valid_input = lambda f: True
 
@@ -145,7 +145,7 @@ def test_a_cycle_with_somewhere_to_go_renders_nothing_here(load_main):
 
     played = []
     g.motion.play = lambda word, *a, **k: played.append(word)
-    g._capture_with_ack = lambda *a, **k: []
+    g._capture_with_ack = lambda *a, **k: ([], [])   # (accel samples, gyro rows)
     g.extract_gesture_features = lambda s: {"energy": 0}
     g.classify_valid_input = lambda f: True
 

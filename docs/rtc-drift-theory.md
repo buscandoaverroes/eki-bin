@@ -193,6 +193,50 @@ evidence that they do.
 check, so a third is needed before this is trustworthy — but it is the first
 figure here not dominated by the reference.
 
+### Update — 2026-09-29, 26 days on
+
+```
+  baseline (epoch 1 seed)  2026-09-03 19:54  offset −0.8517 s  (ntp)
+  now                      2026-09-29 21:47  offset −2.0140 s  (ntp, host +0.197 s off true)
+  ────────────────────────────────────────────────────────────────────
+  Δoffset  −1.162 s   over  625.9 h  (2.253 × 10⁶ s)
+
+  drift = −1.162 / 2.253e6 × 10⁶  =  −0.52 ppm
+        = −0.045 s/day  ≈  −16 s/year          DS3231 spec: ±2 ppm
+```
+
+**Consistent with the first figure.** −0.52 ppm now against −0.61 ± 0.35 ppm
+from 22.7 h in August: same sign, same size, and the short measurement's error
+bar contains the long one. That agreement across an epoch boundary (a re-seed
+in between) is better evidence that this is the crystal, and not the reference,
+than either number alone. Over 26 days the spec allows about ±4.5 s of drift;
+the chip used about a quarter of that.
+
+**Still only two samples** in the epoch, so no scatter check yet (the tool says
+so). The reference is now much smaller than the signal: a ~20 ms NTP error over
+626 h is ±0.01 ppm, against 0.52.
+
+**Practical:** a minute of accumulated error is about **3.6 years** away
+(60 s ÷ 0.045 s/day = 1,333 days), on top of the ~2 s the display already
+carries from the seed. The display resolves to 2 minutes per LED, so nothing is
+visible. The tool suggests an aging-register trim of about −5 LSB. It is not
+worth doing: it means writing the chip, for a gain measured in seconds a year,
+and the sign convention is the kind of thing this project has been wrong about.
+Reseed at the next battery change instead, which resets the error for free.
+
+### Guarantee over correction (2026-09-29)
+
+A stable, linear drift is best used as a **guarantee interval, not a
+correction.** Correcting it in firmware would be open loop — with no radio
+there is no reference to notice a wrong ppm — and the gain is seconds a year
+against a 2-minute-per-LED display. What linearity buys is being able to *say
+something true about each unit*: 60 s of error at −0.045 s/day is ~3.6 years
+out, so a unit can carry a **"reseed by" date**. That belongs in the per-unit
+record (`docs/gift-registry.md`), where a `make units` check can flag a unit
+whose age or measured drift has left its budget. Linearity itself is only
+established once three or more samples spread over weeks fit a line within the
+tool's scatter check; two samples always fit perfectly and prove nothing.
+
 For a one-minute-granularity display, −19 s/year is invisible. The chip would
 take **roughly three years** to accumulate a single minute of error, which is
 comparable to the CR1220's own life.
@@ -206,7 +250,12 @@ comparable to the CR1220's own life.
   logs, each too short to yield a figure. The script resolves the *main*
   worktree deliberately. (This happened, and cost a day's sample.)
 - **`--history`** prints every sample with running deltas: the campaign view.
-- **`data/rtc-drift-summary.json`** is rewritten from the whole log on every
+- **`--unit` is required to write**, and has no default on purpose — see
+  "A seed you didn't record" below.
+- **`data/rtc-drift-corrections.json`** holds post-hoc fixes (a unit for old
+  entries, voided samples, seeds discovered later), applied at read time. The
+  log is never edited — the same rule the IMU recordings follow.
+- **`data/rtc-drift-summary-<unit>.json`** is rewritten from the whole log on every
   run — the key figures in machine-readable form, for plotting or for pulling
   a number into a doc without re-deriving it. The `.jsonl` is the *record*
   (append-only, never edited); the summary is the *answer* (regenerable, safe
@@ -223,3 +272,54 @@ comparable to the CR1220's own life.
 - **Check the host before seeding a unit you care about.** `rtc-drift`'s first
   line reports the host's NTP offset. Seconds rather than milliseconds means
   fix the Mac first — that error becomes permanent in the unit.
+
+
+---
+
+## A seed you didn't record looks like the rate changing (2026-10-21)
+
+The third sample of bottle-01's epoch 1 came back at **−3.868 s**, against a
+constant-rate prediction of −3.00 s. The script flagged 223 ms of scatter and
+blamed the host clock. **That diagnosis was wrong here:** every sample is
+measured against NTP, not the Mac (`arrived = time.time() + clock_offset`), and
+the Mac's logged offset only moved 0.16 s across all three. The departure was
+real.
+
+Two readings of the same three numbers:
+
+| | requires |
+|---|---|
+| one chip, seeded Sep 3, undisturbed | the rate to nearly **double**: −0.52, then −0.97 ppm |
+| a re-seed on Sep 13 nobody logged | **one rate**, −0.97 ppm, through both later samples, and a −0.67 s seed offset — in line with the −0.85 s seen just after the Sep 3 seed |
+
+On 2026-09-13 the bottle's setup read `2000-01-01` with OSF set and *was*
+seeded — the "second chip" the manifest discussion was about — and no seed
+event was ever written. The owner is ~70% sure that chip is the one now in the
+bottle. The second reading is simpler; the first isn't impossible (a TCXO's
+residual moves with temperature, both rates are in spec, and September to
+October is a real cooling).
+
+**The general shape, worth recognising next time: an unrecorded re-seed is
+indistinguishable from a drift-rate change.** Both appear as a kink in an
+otherwise straight line. The scatter check sees a kink and has only one
+explanation available — the reference — so it will reach for that even when
+the reference is already corrected out.
+
+What changed as a result:
+
+- **`--unit` is required to write**, checked before NTP or the board are
+  touched. No default: a DS3231 has no ID, so a default would file every
+  chip under one name. The flag makes the unit *asserted*, not *verified*.
+- **The fix lives beside the log.** `data/rtc-drift-corrections.json` assigns
+  `bottle-01` to the pre-unit entries and adds the Sep 13 seed with
+  `confidence: 0.7`. Epochs are now **derived from seed events**, not trusted
+  from the stored field, so adding that one seed regrouped the two samples
+  after it — and deleting it restores the original grouping exactly.
+- **A figure from an inferred baseline says so.** The summary carries
+  `baseline_inferred`, and the run prints a warning, because −0.97 ppm
+  measured from an observed seed and from a guessed one are different claims
+  that look identical as numbers.
+
+Current state: bottle-01 epoch 2, two samples over 22 days, −0.97 ppm,
+`trustworthy: false` — two samples admit no scatter check. The next sample
+decides it.

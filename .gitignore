@@ -46,4 +46,7 @@ __pycache__/
 .DS_Store
 
 # PR body drafted for scripts/pr.sh
-.pr-body.md
+.pr-body*.md
+
+# Draft media (unpicked GIFs, phone exports). Only the chosen file goes in docs/media/.
+docs/media/ignored/

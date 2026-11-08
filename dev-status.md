@@ -13,7 +13,7 @@ powered over USB. Correct time from the RTC across power cycles; tap wakes and
 cycles **line**; tilt adjusts brightness; the display renders
 `ApproachContract` with per-line colour; day/night brightness; goodnight and
 morning ceremonies for "trains exist but none in reach". Firmware is split
-across eleven modules with no radio code. `make test` runs lint + 418 host
+across eleven modules with no radio code. `make test` runs lint + 600+ host
 tests before every `make upload`. Wiring: `pinouts/v1.6-rp2350-production-unit.md`.
 
 **Recent arc (Aug 22 → Sep 14):** DS3231 bring-up + integration → V1.6
@@ -29,9 +29,19 @@ givable" and "is this the right costume". Two things follow.
 
 | wall | state | doc |
 |---|---|---|
-| **Interaction: tap and tilt fight** | Each works in isolation; together they are unreliable. Diagnosed as a *composition* problem, not a classification one. **Plan drafted, iterate before building.** | `docs/imu-interaction-plan.md` |
+| **Interaction: tap and tilt fight** | **Built in simulation, not yet on the bottle (2026-10-26).** Vector detect + the arbiter (`micropython/arbiter.py`), scored on the guided session by `make sim`: natural taps 15/30 → 28/30, grab trials with a false tap 16/30 → 6/30. Decided: a tap with a hand on the bottle doesn't count (design principle 18). Rest so far, 70 min over two days: **0 false taps** with the arbiter (3 without it, all sideways table bumps), so < 2.6/h. **Next: ~1.8 h more rest, in busier conditions**, then wire into `main.py`, deciding the ACK flash (vector detect makes it fire ~9/h at rest). | `docs/imu-interaction-plan.md` |
 | **Wiring harness** | Mounting the IMU took ~20 min of chopsticks through the mouth. Decision leaning to a **lid-mounted unit** assembled outside the vessel. Needs a conversation before code. | § below |
 | **Power** | Battery build needs a strip load switch (4 → 55 days). **May be dissolved rather than solved** if the lamp/chandelier form (USB from the top, always on) is chosen. | `docs/shopping-battery-power.md`, `docs/chandelier-concept.md` |
+
+**The IMU resets itself — it's the wiring (2026-10-26).** The "asleep and
+cannot be woken" episodes were the LSM6DSV16X dropping back to power-on
+defaults while the board ran on, reading `(0,0,0)` with no error. `ImuWatch`
+now notices and re-configures. The guided session pinned the cause: 12
+resets in 11 minutes, all while the bottle was being handled, none during
+taps, 8 of 12 with the bottle leaning one way. A loose wire, fixed by the
+harness. The first rest session then reset once with the bottle untouched,
+so handling makes it frequent but isn't required.
+`docs/imu-interaction-plan.md` has the trail.
 
 And one *process* item that is not a wall but bites at the second unit:
 **a provisioning manifest** (§ below).
@@ -62,9 +72,12 @@ givability**: NFC / sticker-book input (`docs/nfc-provisioning.md`).
 ## Next up
 
 **1. The interaction plan** — `docs/imu-interaction-plan.md`. Firmware only, no
-new hardware. Instrument and record → replay harness → one arbiter for tap +
-tilt with look-back → gyro. ML (MLC / ESN) is gated on the arbiter failing
-against recorded data, not scheduled.
+new hardware. Recorded ✓ (guided, `PROTOCOL=tap-vs-grab`) → simulator ✓
+(`make sim`, `make sim-live`) → vector detect + arbiter ✓ in simulation →
+hand-on-bottle decided ✓ → **rest-heavy sessions (~3 h in total) → wire
+into `main.py` behind `ARBITER_ENABLED` → a session in the bottle.** ML
+(MLC / ESN) is gated on the arbiter failing against recorded data, not
+scheduled.
 
 **2. Small, independent, cheap**
 - Re-test whether the RP2350's third onboard indicator can be turned off in
@@ -95,11 +108,16 @@ tap signal; expect to re-collect.
 
 ### A provisioning manifest
 Multiple DS3231s exist and nothing distinguishes them (no unique-ID register,
-no user SRAM). **Concrete hazard:** `data/rtc-drift.jsonl` has `epoch` but no
-unit field, so one `make rtc-drift` against the wrong chip silently pollutes
-bottle-01's fit. A `--unit` flag closes that hole; the larger answer is a record
-per physical unit — see `docs/gift-registry.md` (proposal, not built; forcing
-function is the unit-agnostic `data/rtc-drift-summary.json`). It must also
+no user SRAM). **The hazard happened, probably on 2026-09-29:** a chip seeded
+2026-09-13 (never recorded) was sampled into bottle-01's history, which made
+its drift appear to double (−0.52 → −0.97 ppm). Caught 2026-10-21 by a
+reading 0.87 s off the constant-rate prediction. **`--unit` is now required
+to write** (`make rtc-drift UNIT=bottle-01`), summaries are per unit, and the
+inferred seed lives in `data/rtc-drift-corrections.json` at confidence 0.7 —
+the log itself untouched. Write-up: `docs/rtc-drift-theory.md` § "A seed you
+didn't record". The flag makes the unit *asserted*, not *verified*: the tool
+still cannot tell two chips apart. The larger answer is still a record per
+physical unit — `docs/gift-registry.md` (proposal, not built). It must also
 hold `ARC_ORIGIN`, arm A/B orientation, `SHAKE_BOUNDS`, IMU mount location,
 `TAP_ENERGY_THRESHOLD` — per-unit facts established by hand, not derivable
 from code.
