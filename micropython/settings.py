@@ -191,8 +191,9 @@ ERROR_BREATHE_PERIOD_MS = getattr(config, "ERROR_BREATHE_PERIOD_MS", 4000)  #
 #
 # Accepts GESTURE_ENABLED (preferred) or the older
 # WAKE_INTERACTION_ENABLED, so existing config.py files keep working —
-# design principle #9. The old name is kept only for compatibility; it
-# describes a design that has been superseded.
+# design principle #12 ("backward-compatible configuration"). The old name is
+# kept only for compatibility; it describes a design that has been
+# superseded.
 # Taps are ignored for this long after the loop starts. Plugging a unit in
 # or setting it down IS handling, and the recognizer's 98.4% is measured
 # against POOLED handling noise — so a boot-time false trigger is expected
@@ -524,7 +525,8 @@ QUIET_END = getattr(config, "QUIET_END_HOUR", 6) * 60
 #
 # ⚠ DEFAULTS ARE DELIBERATELY NEUTRAL. Both values default to BRIGHTNESS,
 # so an existing device upgrading to this firmware behaves EXACTLY as
-# before until DAY_BRIGHTNESS is actually raised (design-principle #9).
+# before until DAY_BRIGHTNESS is actually raised (design-principle #12,
+# "backward-compatible configuration").
 # The mechanism ships on; the profile ships flat. Raising DAY_BRIGHTNESS is
 # the whole point, and it is tuned on the real glass, not guessed here —
 # same rule the colour work established (insights.md §12).
@@ -544,8 +546,9 @@ NIGHT_BRIGHTNESS = getattr(config, "NIGHT_BRIGHTNESS", BRIGHTNESS)
 # one is what bottles are FOR, and the IMU already provides it.
 #
 # ⚠ DEFAULT OFF. Shipping this on would change how an existing unit
-# behaves on upgrade (design-principle #9), and brightness is the one
-# setting a surprise change is most visible in.
+# behaves on upgrade (design-principle #12, "backward-compatible
+# configuration"), and brightness is the one setting a surprise change is
+# most visible in.
 TILT_ENABLED = getattr(config, "TILT_ENABLED", False)
 
 # Record raw accel + gyro and the pipeline's decisions as a text stream on the
@@ -723,7 +726,7 @@ MORNING_GAP_MS = getattr(config, "MORNING_GAP_MS", 220)
 #
 # ⚠ DEFAULT OFF. With this on, a tap's CONFIRM stops being a flash and
 # becomes a motion — a visible behaviour change on an existing unit
-# (design-principle #9).
+# (design-principle #12, "backward-compatible configuration").
 MOTION_ENABLED = getattr(config, "MOTION_ENABLED", False)
 MOTION_OUTWARD_MS = getattr(config, "MOTION_OUTWARD_MS", 900)   # the ACK
 MOTION_AROUND_MS = getattr(config, "MOTION_AROUND_MS", 1400)    # a transition

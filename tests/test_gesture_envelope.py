@@ -519,7 +519,7 @@ def test_gesture_poll_is_faster_than_the_render_frame(load_main):
 def test_gesture_enabled_accepts_either_config_name(load_main):
     # GESTURE_ENABLED is the name that matches the shipped contract;
     # WAKE_INTERACTION_ENABLED still works so existing config.py files
-    # aren't broken (design principle #9).
+    # aren't broken (design principle #12, "backward-compatible configuration").
     assert load_main(GESTURE_ENABLED=True).WAKE_INTERACTION_ENABLED is True
     assert load_main(WAKE_INTERACTION_ENABLED=True).WAKE_INTERACTION_ENABLED is True
     assert load_main().WAKE_INTERACTION_ENABLED is False

@@ -305,4 +305,4 @@ What carries over **unchanged**:
   (`docs/contracts/gesture-envelope.md`), modulo re-calibration.
 - The host test suite.
 - `docs/design-principles.md` #1 (ambient not demanding), #2 (lean into the
-  physical medium — arguably *more* true here), #6–#10 (architecture).
+  physical medium — arguably *more* true here), #9–#13 (architecture).

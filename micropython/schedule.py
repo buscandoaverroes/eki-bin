@@ -71,7 +71,8 @@ def schedule_lines(schedule_data):
     station. A file with `lines` returns it directly. A file without one is
     a single-line station, and the document itself IS that line — that shape
     is not deprecated, and normalizing here rather than at every use site is
-    what keeps every pre-existing schedule working untouched (principle #9).
+    what keeps every pre-existing schedule working untouched (principle #12,
+    "backward-compatible configuration").
 
     Returns at least one entry, so `lines[i % len(lines)]` is always safe.
     Each entry may carry an optional "color" — the line's NOMINAL colour,

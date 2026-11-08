@@ -72,8 +72,9 @@ def main():
     # Two accepted shapes, and the single-line one is NOT deprecated: a station
     # with one line should not be forced to nest it under `lines:`. Absent
     # `lines` = the document itself is that one line. Existing files keep
-    # working untouched — design principle #9, the same getattr-style
-    # backward compatibility config.py has always used.
+    # working untouched — design principle #12 ("backward-compatible
+    # configuration"), the same getattr-style backward compatibility
+    # config.py has always used.
     # Contract: docs/contracts/schedule-json.md § Multiple lines at one station.
     if "lines" in data:
         lines_out = []

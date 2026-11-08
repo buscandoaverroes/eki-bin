@@ -103,8 +103,9 @@ def test_disabled_never_touches_brightness(load_main):
 
 
 def test_defaults_are_neutral(load_main):
-    """design-principle #9: an existing device upgrading to this firmware
-    behaves exactly as before until DAY_BRIGHTNESS is actually set."""
+    """design-principle #12 ("backward-compatible configuration"): an
+    existing device upgrading to this firmware behaves exactly as before
+    until DAY_BRIGHTNESS is actually set."""
     m = load_main(BRIGHTNESS=0.18)
     assert m.DAY_BRIGHTNESS == 0.18
     assert m.NIGHT_BRIGHTNESS == 0.18

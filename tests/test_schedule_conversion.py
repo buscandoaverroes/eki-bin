@@ -3,7 +3,8 @@
 Covers the multi-line extension (docs/contracts/schedule-json.md § Multiple
 lines) and, just as importantly, that adding it did NOT change the
 single-line shape. Every existing schedule predates `lines:` and must keep
-converting byte-identically — design principle #9.
+converting byte-identically — design principle #12
+("backward-compatible configuration").
 
 Host-side only; this script never runs on the device.
 """
