@@ -98,8 +98,8 @@ what you did.
   trigger measured the *length* of the acceleration vector, and a sideways
   tap barely changes it). A vector trigger plus an arbiter that commits on
   stillness: natural taps detected 15/30 → 28/30, grab trials producing a
-  false tap 16/30 → 6/30, and no false taps in a 33-minute rest
-  recording. One bottle, one table, in simulation; the bottle comes next.
+  false tap 16/30 → 6/30, and no false taps in 70 minutes of rest
+  recordings. One bottle, one table, in simulation; the bottle comes next.
 - **Power: USB, honestly.** A battery build needs a load switch for the LED
   strip: left powered, its idle draw empties 3×AA in about 4 days; switched
   off between uses, with shorter wake periods, about 55. A lamp-like form
