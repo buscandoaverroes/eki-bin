@@ -47,3 +47,6 @@ __pycache__/
 
 # PR body drafted for scripts/pr.sh
 .pr-body*.md
+
+# Draft media (unpicked GIFs, phone exports). Only the chosen file goes in docs/media/.
+docs/media/ignored/

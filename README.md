@@ -11,7 +11,10 @@ bottle makes that fact part of the room: information present in the
 environment, not pushed at you. The glass does the hiding; the technology is
 only acceptable if you can't see it.
 
-<!-- A photo or short GIF of the bottle goes here: docs/media/eki-bin.gif -->
+<p align="center">
+  <img src="docs/media/eki-bin.gif" width="282"
+       alt="The brown glass bottle on a wooden table. Amber light rises from its base and folds into a bright triangle through the glass, then fades.">
+</p>
 
 Design rationale: [docs/concept.md](docs/concept.md) · principles:
 [docs/design-principles.md](docs/design-principles.md).
