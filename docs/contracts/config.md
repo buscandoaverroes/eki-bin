@@ -93,7 +93,7 @@ it with `getattr(config, "NAME", default)`, so
 | `NO_DATA_DURATION_MS` | int | no | `2500` | Duration of the no-data acknowledgment |
 | `SCHEDULE_ERROR_COLOR` | tuple | no | `(200, 0, 120)` | Persistent failure colour for a missing/corrupt `schedule.json` — distinct from `ERROR_COLOR` (WiFi/NTP failure) |
 | `QUIET_START_HOUR` | int | no | `23` | Hour the strip goes dark |
-| `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight) |
+| `QUIET_END_HOUR` | int | no | `6` | Hour the strip wakes (window may wrap past midnight). `QUIET_START_HOUR = 24` with `QUIET_END_HOUR = 0` disables quiet hours, handy for testing at night |
 | `DAY_NIGHT_ENABLED` | bool | no | `True` | Apply a brightness profile by time of day. Distinct from quiet hours: that decides *whether* the strip lights, this decides *how bright* |
 | `DAY_START_HOUR` | int | no | `7` | Start of "day" (inclusive). Equal start/end = always night; `0`/`24` = always day |
 | `DAY_END_HOUR` | int | no | `17` | End of "day" (exclusive); window may wrap past midnight |

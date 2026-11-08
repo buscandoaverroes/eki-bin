@@ -52,6 +52,9 @@ Only 3 connections needed:
 
 DOUT on the stick is unused (no chaining).
 
+No level shifter needed: the stick reads DIN as high above 2.7 V, which the
+Pico's 3.3 V GPIO clears.
+
 ```
 Pico 2W                AE-WS2812B-STICK8
 ─────────                ─────────────────
