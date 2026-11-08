@@ -78,11 +78,11 @@ What changed, and why: [release notes](docs/releases/v1.7.md).
 ## What we've learned
 
 - **The glass decides the design.** Thick glass makes beautiful refractions
-  and hides the inside; thinner, more common bottles are what people actually
-  want, and they show it. That moved the project from hidden LEDs toward
-  light that's visible and dressed to be seen.
-- **Everything goes in through a 22 mm neck.** The build is shaped by the
-  opening as much as by the parts.
+  and hides the inside, but the bottles people bring, wanting it in *theirs*,
+  are mostly lighter and thinner, and they show it. That moved the project
+  from hidden LEDs toward light that's visible and dressed to be seen.
+- **Everything goes in through a 22 mm neck.** The bottle was, literally,
+  the bottleneck: every part and every iteration had to fit through it.
 - **A bottle in a hand is hard physics.** The first moment of a grab can
   look just like a tap; what tells them apart arrives later.
 - **Battery, or a lamp?** Battery power is possible, but if the object
